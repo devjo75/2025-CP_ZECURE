@@ -1,1 +1,1 @@
-# Zecure-A-Web-Based-Crime-Hotspot-Mapping-and-Reporting-System-for-Public-Safety-in-Zamboanga-City
+Zecure-Cross-Platform-Crime-Hotspot-Mapping-and-Public-Safety-System
