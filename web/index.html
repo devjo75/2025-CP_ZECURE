@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+    <title>Zecure</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+        #flutter_splash_screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #ffffff;
+        }
+        #flutter_splash_screen img {
+            width: 150px;
+            height: 150px;
+        }
+    </style>
+</head>
+<body>
+    <div id="flutter_splash_screen">
+        <img src="assets/images/zecure.png" alt="Loading">
+    </div>
+    <script src="main.dart.js" type="application/javascript"></script>
+    <script>
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                var splash = document.getElementById('flutter_splash_screen');
+                if (splash) {
+                    splash.remove();
+                }
+            }, 3000);
+        });
+    </script>
+</body>
+</html>
