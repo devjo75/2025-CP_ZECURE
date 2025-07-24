@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:zecure/services/auth_service.dart';
+import 'package:zecure/screens/auth/login_screen.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -35,9 +38,15 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLiveLocationActive = false;
   bool _showClearButton = false;
 
+  // User state
+  Map<String, dynamic>? _userProfile;
+  bool _isAdmin = false;
+  final _authService = AuthService(Supabase.instance.client);
+
   @override
   void initState() {
     super.initState();
+    _loadUserProfile();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _getCurrentLocation();
     });
@@ -50,10 +59,36 @@ class _MapScreenState extends State<MapScreen> {
     super.dispose();
   }
 
-  // Location Methods
+  Future<void> _loadUserProfile() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select()
+          .eq('email', user.email as Object)
+          .single();
+      
+      if (mounted) {
+        setState(() {
+          _userProfile = response;
+          _isAdmin = response['role'] == 'admin';
+        });
+      }
+    }
+  }
+
+  Future<void> _logout() async {
+    await _authService.signOut();
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+      );
+    }
+  }
+
   Future<void> _getCurrentLocation() async {
-    // ignore: unnecessary_null_comparison
-    if (!mounted || context == null) return;
+    if (!mounted) return;
 
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -95,19 +130,18 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // Live Tracking Methods
   void _startLiveLocation() {
     _positionStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 10, // Update every 10 meters
+        distanceFilter: 10,
       ),
     ).listen((Position position) {
       if (mounted) {
         setState(() {
           _currentPosition = LatLng(position.latitude, position.longitude);
           if (_isLiveLocationActive) {
-            _polylinePoints.add(_currentPosition!); // Record path
+            _polylinePoints.add(_currentPosition!);
           }
         });
         _mapController.move(_currentPosition!, _mapController.zoom);
@@ -137,7 +171,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // Directions Methods
   void _clearDirections() {
     setState(() {
       _polylinePoints.clear();
@@ -191,7 +224,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // UI Helpers
   void _showSnackBar(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -232,6 +264,12 @@ class _MapScreenState extends State<MapScreen> {
               title: const Text('Share Location'),
               onTap: () => _shareLocation(position),
             ),
+            if (_isAdmin)
+              ListTile(
+                leading: const Icon(Icons.add_location_alt),
+                title: const Text('Save as Point of Interest'),
+                onTap: () => _savePointOfInterest(position),
+              ),
             if (_distance > 0)
               Padding(
                 padding: const EdgeInsets.all(8.0),
@@ -246,62 +284,222 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Future<void> _savePointOfInterest(LatLng position) async {
+    _showSnackBar('Point of interest saved (Admin feature)');
+    Navigator.pop(context);
+  }
+
   Future<void> _shareLocation(LatLng position) async {
     final url = 'https://www.google.com/maps/search/?api=1&query=${position.latitude},${position.longitude}';
     if (await canLaunchUrl(Uri.parse(url))) {
       await launchUrl(Uri.parse(url));
-      Navigator.pop(context); // Close bottom sheet
+      Navigator.pop(context);
     } else {
       _showSnackBar('Could not launch maps');
     }
   }
 
-  // Widget Builders
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          _buildMap(),
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 10,
-            left: 10,
-            right: 10,
-            child: _buildSearchBar(),
+@override
+Widget build(BuildContext context) {
+  final isWeb = MediaQuery.of(context).size.width > 600;
+  
+  return Scaffold(
+    appBar: AppBar(
+      title: _buildSearchBar(isWeb: isWeb),
+      leading: _userProfile == null 
+          ? IconButton(
+              icon: const Icon(Icons.login),
+              onPressed: () {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                );
+              },
+            )
+          : null,
+      actions: [
+        if (_userProfile != null && _isAdmin)
+          IconButton(
+            icon: const Icon(Icons.admin_panel_settings),
+            onPressed: () => _showSnackBar('Admin features enabled'),
           ),
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator()),
-        ],
-      ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FloatingActionButton(
-            heroTag: 'liveLocation',
-            onPressed: _toggleLiveLocation,
-            backgroundColor: _isLiveLocationActive ? Colors.blue : Colors.grey,
-            mini: true,
-            child: Icon(
-              _isLiveLocationActive ? Icons.gps_fixed : Icons.gps_not_fixed,
-              color: Colors.white,
-            ),
+      ],
+    ),
+    body: Stack(
+      children: [
+        _buildMap(),
+        if (_isLoading)
+          const Center(child: CircularProgressIndicator()),
+      ],
+    ),
+    floatingActionButton: _buildFloatingActionButtons(),
+    drawer: _userProfile != null ? _buildDrawer() : null,
+  );
+}
+
+  Widget _buildFloatingActionButtons() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FloatingActionButton(
+          heroTag: 'liveLocation',
+          onPressed: _toggleLiveLocation,
+          backgroundColor: _isLiveLocationActive ? Colors.blue : Colors.grey,
+          mini: true,
+          child: Icon(
+            _isLiveLocationActive ? Icons.gps_fixed : Icons.gps_not_fixed,
+            color: Colors.white,
           ),
+        ),
+        const SizedBox(height: 10),
+        FloatingActionButton(
+          heroTag: 'myLocation',
+          onPressed: _getCurrentLocation,
+          child: const Icon(Icons.my_location),
+        ),
+        if (_showClearButton) ...[
           const SizedBox(height: 10),
           FloatingActionButton(
-            heroTag: 'myLocation',
-            onPressed: _getCurrentLocation,
-            child: const Icon(Icons.my_location),
+            heroTag: 'clearRoute',
+            onPressed: _clearDirections,
+            backgroundColor: Colors.red,
+            mini: true,
+            child: const Icon(Icons.close),
           ),
-          if (_showClearButton) ...[
-            const SizedBox(height: 10),
-            FloatingActionButton(
-              heroTag: 'clearRoute',
-              onPressed: _clearDirections,
-              backgroundColor: Colors.red,
-              mini: true,
-              child: const Icon(Icons.close),
+        ],
+      ],
+    );
+  }
+
+Widget _buildDrawer() {
+  return Drawer(
+    child: ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        UserAccountsDrawerHeader(
+          accountName: Text(
+            '${_userProfile?['first_name'] ?? ''} ${_userProfile?['last_name'] ?? ''}',
+            style: const TextStyle(fontSize: 18),
+          ),
+          accountEmail: Text(_userProfile?['email'] ?? ''),
+          currentAccountPicture: CircleAvatar(
+            backgroundColor: Colors.blue,
+            child: Text(
+              _userProfile?['first_name']?.toString().substring(0, 1) ?? 'U',
+              style: const TextStyle(fontSize: 24),
             ),
-          ],
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.person),
+          title: const Text('Profile'),
+          onTap: () {
+            Navigator.pop(context);
+            _showProfileDialog();
+          },
+        ),
+        if (_isAdmin) ...[
+          const Divider(),
+          const ListTile(
+            leading: Icon(Icons.admin_panel_settings, color: Colors.blue),
+            title: Text('Admin Tools', style: TextStyle(color: Colors.blue)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.place),
+            title: const Text('Manage Points of Interest'),
+            onTap: () => _showSnackBar('POI Management (Admin)'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.people),
+            title: const Text('User Management'),
+            onTap: () => _showSnackBar('User Management (Admin)'),
+          ),
+        ],
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.logout, color: Colors.red),
+          title: const Text('Logout', style: TextStyle(color: Colors.red)),
+          onTap: _showLogoutConfirmation,
+        ),
+      ],
+    ),
+  );
+}
+
+Future<void> _showLogoutConfirmation() async {
+  final shouldLogout = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Confirm Logout'),
+      content: const Text('Are you sure you want to logout?'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text(
+            'Logout',
+            style: TextStyle(color: Colors.red),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  if (shouldLogout == true && mounted) {
+    _logout();
+  }
+}
+
+  void _showProfileDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('User Profile'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildProfileItem('Name', 
+                '${_userProfile?['first_name']} ${_userProfile?['middle_name'] ?? ''} ${_userProfile?['last_name']} ${_userProfile?['ext_name'] ?? ''}'),
+              _buildProfileItem('Email', _userProfile?['email']),
+              _buildProfileItem('Username', _userProfile?['username']),
+              _buildProfileItem('Birthday', 
+                _userProfile?['bday'] != null 
+                  ? DateFormat('MMM d, y').format(DateTime.parse(_userProfile?['bday'])) 
+                  : 'Not specified'),
+              _buildProfileItem('Gender', _userProfile?['gender'] ?? 'Not specified'),
+              _buildProfileItem('Role', _userProfile?['role'] ?? 'user'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileItem(String label, String? value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+          Text(
+            value ?? 'Not available',
+            style: const TextStyle(fontSize: 16),
+          ),
         ],
       ),
     );
@@ -363,42 +561,61 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget _buildSearchBar() {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: TypeAheadField<LocationSuggestion>(
-          controller: _searchController,
-          suggestionsCallback: _searchLocations,
-          itemBuilder: (context, suggestion) => ListTile(
-            leading: const Icon(Icons.location_on),
-            title: Text(suggestion.displayName, maxLines: 2, overflow: TextOverflow.ellipsis),
-          ),
-          onSelected: _onSuggestionSelected,
-          builder: (context, controller, focusNode) => TextField(
-            controller: controller,
-            focusNode: focusNode,
-            decoration: InputDecoration(
-              hintText: 'Search location...',
-              border: InputBorder.none,
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        FocusScope.of(context).unfocus();
-                      },
-                    )
-                  : null,
+Widget _buildSearchBar({bool isWeb = false}) {
+  return Container(
+    width: isWeb ? MediaQuery.of(context).size.width * 0.5 : double.infinity,
+    height: 40, // Explicit height to control the container size
+    margin: const EdgeInsets.symmetric(vertical: 4), // Reduced vertical margin
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.1),
+          blurRadius: 6,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: TypeAheadField<LocationSuggestion>(
+      controller: _searchController,
+      suggestionsCallback: _searchLocations,
+      itemBuilder: (context, suggestion) => ListTile(
+        leading: const Icon(Icons.location_on),
+        title: Text(suggestion.displayName, maxLines: 2, overflow: TextOverflow.ellipsis),
+      ),
+      onSelected: _onSuggestionSelected,
+      builder: (context, controller, focusNode) => SizedBox(
+        height: 38, // Slightly less than container height
+        child: TextField(
+          controller: controller,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            hintText: 'Search location...',
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), // Reduced vertical padding
+            isDense: true,
+            prefixIcon: const Padding(
+              padding: EdgeInsets.only(left: 8, right: 8), // Adjusted icon padding
+              child: Icon(Icons.search, size: 20), // Smaller icon
             ),
+            suffixIcon: _searchController.text.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear, size: 20), // Smaller clear icon
+                    padding: EdgeInsets.zero, // Remove default padding
+                    constraints: const BoxConstraints(), // Remove default constraints
+                    onPressed: () {
+                      _searchController.clear();
+                      FocusScope.of(context).unfocus();
+                    },
+                  )
+                : null,
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Future<List<LocationSuggestion>> _searchLocations(String query) async {
     if (query.isEmpty) return [];
@@ -452,7 +669,6 @@ class LocationSuggestion {
     required this.lon,
   });
 
-  // Add a factory constructor for safe parsing
   factory LocationSuggestion.fromJson(Map<String, dynamic> json) {
     return LocationSuggestion(
       displayName: json['display_name']?.toString() ?? 'Unknown location',
