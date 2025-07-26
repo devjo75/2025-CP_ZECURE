@@ -49,7 +49,7 @@ class _LoginScreenState extends State<LoginScreen> {
             password: _passwordController.text.trim(),
           );
         } else {
-          throw AuthException('Username not found');
+          throw const AuthException('Username not found');
         }
       }
 

@@ -54,6 +54,26 @@ class AuthService {
     );
   }
 
+  Future<void> updatePassword({
+  required String currentPassword,
+  required String newPassword,
+}) async {
+  // First verify the current password by signing in again
+  final email = _supabase.auth.currentUser?.email;
+  if (email == null) throw Exception('No user logged in');
+  
+  // Reauthenticate
+  await _supabase.auth.signInWithPassword(
+    email: email,
+    password: currentPassword,
+  );
+  
+  // Then update password
+  await _supabase.auth.updateUser(
+    UserAttributes(password: newPassword),
+  );
+}
+
   Future<void> signOut() async {
     await _supabase.auth.signOut();
   }
@@ -62,3 +82,4 @@ class AuthService {
 
   Stream<AuthState> get authStateChanges => _supabase.auth.onAuthStateChange;
 }
+
