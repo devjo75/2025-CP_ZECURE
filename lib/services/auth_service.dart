@@ -15,6 +15,7 @@ class AuthService {
     String? extName,
     DateTime? bday,
     String? gender,
+    String? contactNumber, // Add this parameter
   }) async {
     final response = await _supabase.auth.signUp(
       email: email,
@@ -27,7 +28,6 @@ class AuthService {
     );
 
     if (response.user != null) {
-      // Insert additional user data into the public.users table
       await _supabase.from('users').insert({
         'email': email,
         'username': username,
@@ -37,6 +37,7 @@ class AuthService {
         'ext_name': extName,
         'bday': bday?.toIso8601String(),
         'gender': gender,
+        'contact_number': contactNumber, // Add this field
         'role': 'user',
       });
     }
