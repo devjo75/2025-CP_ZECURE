@@ -53,6 +53,7 @@ class _MapScreenState extends State<MapScreen> {
 
   // Hotspot state
   List<Map<String, dynamic>> _hotspots = [];
+  // ignore: unused_field
   Map<String, dynamic>? _selectedHotspot;
 
   @override
@@ -248,12 +249,6 @@ class _MapScreenState extends State<MapScreen> {
   }
 
 void _showLocationOptions(LatLng position) async {
-  setState(() {
-    _currentTab = MainTab.map;
-    _destination = position;
-  });
-
-  // Get location name using reverse geocoding
   String locationName = "Loading location...";
   try {
     final response = await http.get(
@@ -271,77 +266,107 @@ void _showLocationOptions(LatLng position) async {
 
   showModalBottomSheet(
     context: context,
-    builder: (context) => Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Display the location name
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
-            child: Text(
-              locationName,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-          const Divider(),
-          if (_polylinePoints.isNotEmpty)
-            ListTile(
-              leading: const Icon(Icons.close, color: Colors.red),
-              title: const Text('Cancel Route', style: TextStyle(color: Colors.red)),
-              onTap: () {
-                Navigator.pop(context);
-                _clearDirections();
-              },
-            ),
-          ListTile(
-            leading: const Icon(Icons.directions),
-            title: const Text('Get Regular Route'),
-            onTap: () {
-              Navigator.pop(context);
-              _getDirections(position);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.safety_check, color: Colors.green),
-            title: const Text('Get Safe Route'),
-            subtitle: const Text('Avoids reported hotspots'),
-            onTap: () {
-              Navigator.pop(context);
-              _getSafeRoute(position);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.share),
-            title: const Text('Share Location'),
-            onTap: () => _shareLocation(position),
-          ),
-          if (_isAdmin)
-            ListTile(
-              leading: const Icon(Icons.add_location_alt),
-              title: const Text('Add Hotspot'),
-              onTap: () {
-                Navigator.pop(context);
-                _showAddHotspotForm(position);
-              },
-            ),
-          if (_distance > 0)
+    isScrollControlled: true,
+    builder: (context) => SingleChildScrollView(
+      child: Container(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
             Padding(
-              padding: const EdgeInsets.all(8.0),
+              padding: const EdgeInsets.symmetric(vertical: 8.0),
               child: Text(
-                'Distance: ${_distance.toStringAsFixed(2)} km | Duration: $_duration',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+                locationName,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 3,
               ),
             ),
-        ],
+            const Divider(),
+            
+            if (_polylinePoints.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.close, color: Colors.red),
+                title: const Text('Cancel Current Route', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _clearDirections();
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.directions),
+              title: const Text('Get Regular Route'),
+              onTap: () {
+                Navigator.pop(context);
+                _getDirections(position);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.safety_check, color: Colors.green),
+              title: const Text('Get Safe Route'),
+              subtitle: const Text('Avoids reported hotspots'),
+              onTap: () {
+                Navigator.pop(context);
+                _getSafeRoute(position);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.share),
+              title: const Text('Share Location'),
+              onTap: () => _shareLocation(position),
+            ),
+            
+            // Show Report Hotspot for regular users
+            if (!_isAdmin && _userProfile != null)
+              ListTile(
+                leading: const Icon(Icons.report, color: Colors.orange),
+                title: const Text('Report Hotspot'),
+                subtitle: const Text('Submit for admin approval'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showReportHotspotForm(position);
+                },
+              ),
+            
+            // Show Add Hotspot for admins
+            if (_isAdmin)
+              ListTile(
+                leading: const Icon(Icons.add_location_alt),
+                title: const Text('Add Hotspot'),
+                subtitle: const Text('Immediately published'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddHotspotForm(position);
+                },
+              ),
+            
+            if (_distance > 0)
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  'Distance: ${_distance.toStringAsFixed(2)} km | Duration: $_duration',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+          ],
+        ),
       ),
     ),
   );
 }
+
+
 
 // Helper methods for safe route calculation
 double _calculateDistance(LatLng point1, LatLng point2) {
@@ -498,12 +523,11 @@ double _estimateRouteDuration(double distanceMeters) {
 }
 
 void _showAddHotspotForm(LatLng position) {
-  final _formKey = GlobalKey<FormState>();
-  final _descriptionController = TextEditingController();
-  final _dateController = TextEditingController();
-  final _timeController = TextEditingController();
+  final formKey = GlobalKey<FormState>();
+  final descriptionController = TextEditingController();
+  final dateController = TextEditingController();
+  final timeController = TextEditingController();
 
-  // Sample list of crime types - this should ideally come from your database
   List<Map<String, dynamic>> crimeTypes = [
     {'id': 1, 'name': 'Theft', 'level': 'medium'},
     {'id': 2, 'name': 'Assault', 'level': 'high'},
@@ -512,7 +536,6 @@ void _showAddHotspotForm(LatLng position) {
     {'id': 5, 'name': 'Homicide', 'level': 'critical'},
   ];
 
-  // Ensure crimeTypes is not empty
   if (crimeTypes.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('No crime types available.')),
@@ -520,146 +543,361 @@ void _showAddHotspotForm(LatLng position) {
     return;
   }
 
-  // Track both the selected name and ID
   String selectedCrimeType = crimeTypes[0]['name'];
   int selectedCrimeId = crimeTypes[0]['id'];
 
   final now = DateTime.now();
-  _dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-  _timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+  dateController.text =
+      "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+  timeController.text =
+      "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
 
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
-    builder: (context) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-        left: 16.0,
-        right: 16.0,
-        top: 16.0,
-      ),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<String>(
-              value: selectedCrimeType,
-              decoration: const InputDecoration(labelText: 'Crime Type'),
-              items: crimeTypes.map((crimeType) {
-                return DropdownMenuItem<String>(
-                  value: crimeType['name'],
-                  child: Text(crimeType['name']),
-                );
-              }).toList(),
-              onChanged: (newValue) {
-                if (newValue != null) {
-                  setState(() {
-                    selectedCrimeType = newValue;
-                    // Update the ID when name changes
-                    selectedCrimeId = crimeTypes.firstWhere(
-                      (crime) => crime['name'] == newValue)['id'];
-                  });
-                }
-              },
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please select a crime type';
-                }
-                return null;
-              },
-            ),
-            TextFormField(
-              controller: _descriptionController,
-              decoration: const InputDecoration(labelText: 'Description (optional)'),
-            ),
-            TextFormField(
-              controller: _dateController,
-              decoration: const InputDecoration(labelText: 'Date'),
-              readOnly: true,
-              onTap: () async {
-                DateTime? pickedDate = await showDatePicker(
-                  context: context,
-                  initialDate: now,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2101),
-                );
-                if (pickedDate != null) {
-                  _dateController.text = "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                }
-              },
-            ),
-            TextFormField(
-              controller: _timeController,
-              decoration: const InputDecoration(labelText: 'Time'),
-              readOnly: true,
-              onTap: () async {
-                TimeOfDay? pickedTime = await showTimePicker(
-                  context: context,
-                  initialTime: TimeOfDay.now(),
-                );
-                if (pickedTime != null) {
-                  _timeController.text = "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: () async {
-                if (_formKey.currentState!.validate()) {
-                  try {
-                    final dateTime = DateTime(
-                      int.parse(_dateController.text.split('-')[0]),
-                      int.parse(_dateController.text.split('-')[1]),
-                      int.parse(_dateController.text.split('-')[2]),
-                      int.parse(_timeController.text.split(':')[0]),
-                      int.parse(_timeController.text.split(':')[1]),
+    builder: (context) {
+      return SingleChildScrollView(
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20, // Add extra padding here
+            left: 16.0,
+            right: 16.0,
+            top: 16.0,
+          ),
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: selectedCrimeType,
+                  decoration: const InputDecoration(
+                    labelText: 'Crime Type',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: crimeTypes.map((crimeType) {
+                    return DropdownMenuItem<String>(
+                      value: crimeType['name'],
+                      child: Text(crimeType['name']),
                     );
-
-                    print('Attempting to save hotspot with:');
-                    print('Type ID: $selectedCrimeId');
-                    print('Description: ${_descriptionController.text}');
-                    print('Position: $position');
-                    print('DateTime: $dateTime');
-                    print('Created by: ${_userProfile?['id']}');
-
-                    await _saveHotspot(
-                      selectedCrimeId.toString(),
-                      _descriptionController.text,
-                      position,
-                      dateTime,
+                  }).toList(),
+                  onChanged: (newValue) {
+                    if (newValue != null) {
+                      selectedCrimeType = newValue;
+                      selectedCrimeId = crimeTypes.firstWhere(
+                        (crime) => crime['name'] == newValue,
+                      )['id'];
+                    }
+                  },
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please select a crime type';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: descriptionController,
+                  decoration: const InputDecoration(
+                    labelText: 'Description (optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: dateController,
+                  decoration: const InputDecoration(
+                    labelText: 'Date',
+                    border: OutlineInputBorder(),
+                  ),
+                  readOnly: true,
+                  onTap: () async {
+                    DateTime? pickedDate = await showDatePicker(
+                      context: context,
+                      initialDate: now,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime(2101),
                     );
+                    if (pickedDate != null) {
+                      dateController.text =
+                          "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: timeController,
+                  decoration: const InputDecoration(
+                    labelText: 'Time',
+                    border: OutlineInputBorder(),
+                  ),
+                  readOnly: true,
+                  onTap: () async {
+                    TimeOfDay? pickedTime = await showTimePicker(
+                      context: context,
+                      initialTime: TimeOfDay.now(),
+                    );
+                    if (pickedTime != null) {
+                      timeController.text =
+                          "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                    }
+                  },
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      if (formKey.currentState!.validate()) {
+                        try {
+                          final dateTime = DateTime(
+                            int.parse(dateController.text.split('-')[0]),
+                            int.parse(dateController.text.split('-')[1]),
+                            int.parse(dateController.text.split('-')[2]),
+                            int.parse(timeController.text.split(':')[0]),
+                            int.parse(timeController.text.split(':')[1]),
+                          );
 
-                    print('Hotspot saved successfully');
-                    
-                    // Refresh the hotspots list
-                    await _loadHotspots();
-                    
-                    if (mounted) {
-                      Navigator.pop(context);
-                      _showSnackBar('Hotspot added successfully');
-                    }
-                  } catch (e) {
-                    print('Error saving hotspot: $e');
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Failed to save hotspot: ${e.toString()}'),
-                          duration: const Duration(seconds: 5),
-                        ),
-                      );
-                    }
-                  }
-                }
-              },
-              child: const Text('Submit'),
+                          await _saveHotspot(
+                            selectedCrimeId.toString(),
+                            descriptionController.text,
+                            position,
+                            dateTime,
+                          );
+
+                          await _loadHotspots();
+
+                          if (mounted) {
+                            Navigator.pop(context);
+                            _showSnackBar('Hotspot added successfully');
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    'Failed to save hotspot: ${e.toString()}'),
+                                duration: const Duration(seconds: 5),
+                              ),
+                            );
+                          }
+                        }
+                      }
+                    },
+                    child: const Text('Submit'),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
-    ),
+      );
+    },
   );
 }
+
+
+
+
+void _showReportHotspotForm(LatLng position) async {
+  final formKey = GlobalKey<FormState>();
+  final descriptionController = TextEditingController();
+  final dateController = TextEditingController();
+  final timeController = TextEditingController();
+
+  try {
+    final crimeTypesResponse = await Supabase.instance.client
+        .from('crime_type')
+        .select('*')
+        .order('name');
+
+    if (crimeTypesResponse.isEmpty) {
+      _showSnackBar('No crime types available');
+      return;
+    }
+
+    final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
+    String selectedCrimeType = crimeTypes[0]['name'];
+    int selectedCrimeId = crimeTypes[0]['id'];
+
+    final now = DateTime.now();
+    dateController.text = DateFormat('yyyy-MM-dd').format(now);
+    timeController.text = DateFormat('HH:mm').format(now);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return SingleChildScrollView(
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom + 20, // Add extra padding here
+              left: 16.0,
+              right: 16.0,
+              top: 16.0,
+            ),
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: selectedCrimeType,
+                    decoration: const InputDecoration(
+                      labelText: 'Crime Type',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: crimeTypes.map((crimeType) {
+                      return DropdownMenuItem<String>(
+                        value: crimeType['name'],
+                        child: Text(crimeType['name']),
+                      );
+                    }).toList(),
+                    onChanged: (newValue) {
+                      if (newValue != null) {
+                        selectedCrimeType = newValue;
+                        selectedCrimeId = crimeTypes.firstWhere(
+                          (crime) => crime['name'] == newValue,
+                        )['id'];
+                      }
+                    },
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please select a crime type';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Description (optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 3,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: dateController,
+                    decoration: const InputDecoration(
+                      labelText: 'Date',
+                      border: OutlineInputBorder(),
+                    ),
+                    readOnly: true,
+                    onTap: () async {
+                      DateTime? pickedDate = await showDatePicker(
+                        context: context,
+                        initialDate: now,
+                        firstDate: DateTime(2000),
+                        lastDate: DateTime(2101),
+                      );
+                      if (pickedDate != null) {
+                        dateController.text =
+                            DateFormat('yyyy-MM-dd').format(pickedDate);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: timeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Time',
+                      border: OutlineInputBorder(),
+                    ),
+                    readOnly: true,
+                    onTap: () async {
+                      TimeOfDay? pickedTime = await showTimePicker(
+                        context: context,
+                        initialTime: TimeOfDay.now(),
+                      );
+                      if (pickedTime != null) {
+                        timeController.text =
+                            '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        if (formKey.currentState!.validate()) {
+                          try {
+                            final dateTime = DateTime.parse(
+                                '${dateController.text} ${timeController.text}');
+
+                            await _reportHotspot(
+                              selectedCrimeId,
+                              descriptionController.text,
+                              position,
+                              dateTime,
+                            );
+
+                            if (mounted) {
+                              Navigator.pop(context);
+                              _showSnackBar(
+                                  'Hotspot reported successfully. Waiting for admin approval.');
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              _showSnackBar(
+                                  'Failed to report hotspot: ${e.toString()}');
+                            }
+                          }
+                        }
+                      },
+                      child: const Text('Submit Report'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  } catch (e) {
+    if (mounted) {
+      _showSnackBar('Error loading crime types: ${e.toString()}');
+    }
+  }
+}
+
+
+// Add this method to handle user reports
+Future<void> _reportHotspot(
+  int typeId, 
+  String description, 
+  LatLng position, 
+  DateTime dateTime
+) async {
+  final response = await Supabase.instance.client
+      .from('hotspot')
+      .insert({
+        'type_id': typeId,
+        'description': description,
+        'location': 'POINT(${position.longitude} ${position.latitude})',
+        'time': dateTime.toIso8601String(),
+        'status': 'pending',
+        'created_by': _userProfile?['id'],
+        'reported_by': _userProfile?['id'],
+      })
+      .select('''
+        *,
+        crime_type: type_id (id, name, level)
+      ''');
+
+  if (mounted) {
+    setState(() {
+      _hotspots.add(response[0]);
+    });
+  }
+}
+
+
 
 
 
@@ -970,7 +1208,6 @@ Widget _buildMap() {
       maxZoom: 19.0,
       minZoom: 3.0,
       onTap: (tapPosition, latLng) {
-        // Handle map taps to show location options
         FocusScope.of(context).unfocus();
         _showLocationOptions(latLng);
       },
@@ -1024,54 +1261,67 @@ Widget _buildMap() {
             ),
           ],
         ),
-      // Hotspot markers layer - placed on top of everything else
       MarkerLayer(
-        markers: _hotspots.map((hotspot) {
-          final lat = hotspot['location']['coordinates'][1];
-          final lng = hotspot['location']['coordinates'][0];
+        markers: _hotspots.where(_shouldShowHotspot).map((hotspot) {
+          final coords = hotspot['location']['coordinates'];
+          final point = LatLng(coords[1], coords[0]);
+          final status = hotspot['status'] ?? 'approved';
           final crimeLevel = hotspot['crime_type']['level'];
+
           Color markerColor;
-          switch (crimeLevel) {
-            case 'critical':
-              markerColor = Colors.red;
-              break;
-            case 'high':
-              markerColor = Colors.orange;
-              break;
-            case 'medium':
-              markerColor = Colors.yellow;
-              break;
-            case 'low':
-              markerColor = Colors.green;
-              break;
-            default:
-              markerColor = Colors.grey;
+          IconData markerIcon;
+
+          // Set color and icon based on status
+          if (status == 'pending') {
+            markerColor = Colors.orange;
+            markerIcon = Icons.question_mark;
+          } else if (status == 'rejected') {
+            markerColor = Colors.grey;
+            markerIcon = Icons.block;
+          } else {
+            // Approved hotspots
+            switch (crimeLevel) {
+              case 'critical':
+                markerColor = Colors.red;
+                markerIcon = Icons.warning;
+                break;
+              case 'high':
+                markerColor = Colors.orange;
+                markerIcon = Icons.error;
+                break;
+              case 'medium':
+                markerColor = Colors.yellow;
+                markerIcon = Icons.info;
+                break;
+              case 'low':
+                markerColor = Colors.green;
+                markerIcon = Icons.check_circle;
+                break;
+              default:
+                markerColor = Colors.blue;
+                markerIcon = Icons.location_pin;
+            }
           }
+
           return Marker(
-            point: LatLng(lat, lng),
+            point: point,
             width: 40,
             height: 40,
             builder: (ctx) => GestureDetector(
-              onTap: () {
-                _showHotspotDetails(hotspot);
-              },
+              onTap: () => _showHotspotDetails(hotspot),
               child: Container(
-                width: 32,
-                height: 32,
                 decoration: BoxDecoration(
-                  color: markerColor,
+                  color: markerColor.withOpacity(0.8),
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
-                child: const Center(
-                  child: Text(
-                    '!',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 2,
                   ),
+                ),
+                child: Icon(
+                  markerIcon,
+                  color: Colors.white,
+                  size: 20,
                 ),
               ),
             ),
@@ -1082,114 +1332,279 @@ Widget _buildMap() {
   );
 }
 
+bool _shouldShowHotspot(Map<String, dynamic> hotspot) {
+  final currentUserId = _userProfile?['id'];
+  final isAdmin = _isAdmin;
+  final status = hotspot['status'] ?? 'approved';
+  final createdBy = hotspot['created_by'];
+  final reportedBy = hotspot['reported_by'];
+
+  // Always show approved hotspots
+  if (status == 'approved') return true;
+  
+  // Show all hotspots to admins
+  if (isAdmin) return true;
+  
+  // Show user's own pending/rejected hotspots
+  if (currentUserId != null && 
+      (currentUserId == createdBy || currentUserId == reportedBy)) {
+    return true;
+  }
+  
+  return false;
+}
+
 
 
 void _showHotspotDetails(Map<String, dynamic> hotspot) async {
-  // Get coordinates from hotspot
   final lat = hotspot['location']['coordinates'][1];
   final lng = hotspot['location']['coordinates'][0];
   final coordinates = "(${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)})";
-  
-  // Initialize location info
+
   String address = "Loading address...";
   String fullLocation = coordinates;
 
-  // Format the time with AM/PM
-  final DateTime time = DateTime.parse(hotspot['time']).toLocal();
-  final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
-
-  // Try to get human-readable address
   try {
     final response = await http.get(
-      Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1')
+      Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1'),
     );
-    
+
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
       address = data['display_name'] ?? "Unknown location";
       fullLocation = "$address\n$coordinates";
     }
   } catch (e) {
-    print('Error getting location name: $e');
     address = "Could not load address";
     fullLocation = "$address\n$coordinates";
   }
 
+  final DateTime time = DateTime.parse(hotspot['time']).toLocal();
+  final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
+  final status = hotspot['status'] ?? 'approved';
+
   showModalBottomSheet(
     context: context,
-    builder: (context) => Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            title: Text('Type: ${hotspot['crime_type']['name']}'),
-            subtitle: Text('Level: ${hotspot['crime_type']['level']}'),
-          ),
-          ListTile(
-            title: const Text('Description:'),
-            subtitle: Text(hotspot['description'] ?? 'No description'),
-          ),
-          ListTile(
-            title: const Text('Location:'),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(address),
-                const SizedBox(height: 4),
-                Text(
-                  coordinates,
+    isScrollControlled: true,
+    builder: (context) => SingleChildScrollView(
+      child: Container(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text('Type: ${hotspot['crime_type']['name']}'),
+              subtitle: Text('Level: ${hotspot['crime_type']['level']}'),
+            ),
+            ListTile(
+              title: const Text('Description:'),
+              subtitle: Text(hotspot['description'] ?? 'No description'),
+            ),
+            ListTile(
+              title: const Text('Location:'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(address),
+                  const SizedBox(height: 4),
+                  Text(
+                    coordinates,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.copy),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: fullLocation));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Location copied to clipboard')),
+                  );
+                },
+              ),
+            ),
+            ListTile(
+              title: const Text('Time:'),
+              subtitle: Text(formattedTime),
+            ),
+            
+            // Show status if not approved
+            if (status != 'approved')
+              ListTile(
+                title: Text(
+                  'Status: ${status.toUpperCase()}',
                   style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
+                    color: status == 'pending' ? Colors.orange : Colors.red,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-              ],
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.copy),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: fullLocation));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Location copied to clipboard')),
-                );
-              },
-            ),
-          ),
-          ListTile(
-            title: const Text('Time:'),
-            subtitle: Text(formattedTime), // Now shows formatted time with AM/PM
-          ),
-          if (_isAdmin)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _showEditHotspotForm(hotspot);
-                  },
-                  child: const Text('Edit'),
+                subtitle: status == 'rejected' && hotspot['rejection_reason'] != null
+                    ? Text('Reason: ${hotspot['rejection_reason']}')
+                    : null,
+              ),
+            
+            // Admin actions for pending hotspots
+            if (_isAdmin && status == 'pending')
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: () => _reviewHotspot(hotspot['id'], true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Approve'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => _showRejectDialog(hotspot['id']),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Reject'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => _deleteHotspot(hotspot['id']),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Delete'),
+                    ),
+                  ],
                 ),
-                TextButton(
-                  onPressed: () => _deleteHotspot(hotspot['id']),
-                  child: const Text('Delete', style: TextStyle(color: Colors.red)),
+              ),
+            
+            // User actions for their own pending hotspots
+            if (!_isAdmin && 
+                status == 'pending' && 
+                (hotspot['created_by'] == _userProfile?['id'] || 
+                 hotspot['reported_by'] == _userProfile?['id']))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showEditHotspotForm(hotspot);
+                      },
+                      child: const Text('Edit'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => _deleteHotspot(hotspot['id']),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Delete'),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-        ],
+              ),
+            
+            // Admin actions for all hotspots
+            if (_isAdmin && status != 'pending')
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showEditHotspotForm(hotspot);
+                      },
+                      child: const Text('Edit'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => _deleteHotspot(hotspot['id']),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     ),
   );
 }
 
-void _showEditHotspotForm(Map<String, dynamic> hotspot) {
-  final _formKey = GlobalKey<FormState>();
-  final _descriptionController = TextEditingController(text: hotspot['description'] ?? '');
-  final _dateController = TextEditingController(text: DateTime.parse(hotspot['time']).toString().split(' ')[0]);
-  final _timeController = TextEditingController(text: DateTime.parse(hotspot['time']).toString().split(' ')[1].substring(0, 5));
+// Add these methods for admin review
+void _showRejectDialog(int hotspotId) {
+  final reasonController = TextEditingController();
 
-  // Sample list of crime types - should match your add form
+  showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Reject Hotspot'),
+      content: TextField(
+        controller: reasonController,
+        decoration: const InputDecoration(
+          labelText: 'Reason for rejection',
+          hintText: 'Optional feedback for the user',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            Navigator.pop(context);
+            _reviewHotspot(hotspotId, false, reasonController.text);
+          },
+          child: const Text('Reject'),
+        ),
+      ],
+    ),
+  );
+}
+
+Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
+  try {
+    await Supabase.instance.client
+        .from('hotspot')
+        .update({
+          'status': approve ? 'approved' : 'rejected',
+          'rejection_reason': reason,
+          'updated_at': DateTime.now().toIso8601String(),
+          // If approved, transfer ownership to admin
+          if (approve) 'created_by': _userProfile?['id'],
+        })
+        .eq('id', id);
+
+    await _loadHotspots();
+    if (mounted) {
+      Navigator.pop(context); // Close details sheet
+      _showSnackBar(approve ? 'Hotspot approved' : 'Hotspot rejected');
+    }
+  } catch (e) {
+    if (mounted) {
+      _showSnackBar('Failed to review hotspot: ${e.toString()}');
+    }
+  }
+}
+
+void _showEditHotspotForm(Map<String, dynamic> hotspot) {
+  final formKey = GlobalKey<FormState>();
+  final descriptionController = TextEditingController(text: hotspot['description'] ?? '');
+  final dateController = TextEditingController(text: DateTime.parse(hotspot['time']).toLocal().toString().split(' ')[0]);
+  final timeController = TextEditingController(text: DateFormat('HH:mm').format(DateTime.parse(hotspot['time']).toLocal()));
+
   List<Map<String, dynamic>> crimeTypes = [
     {'id': 1, 'name': 'Theft', 'level': 'medium'},
     {'id': 2, 'name': 'Assault', 'level': 'high'},
@@ -1198,7 +1613,6 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
     {'id': 5, 'name': 'Homicide', 'level': 'critical'},
   ];
 
-  // Set initial selected crime type based on the hotspot's current type
   String selectedCrimeType = hotspot['crime_type']['name'];
   int selectedCrimeId = hotspot['type_id'];
 
@@ -1207,122 +1621,144 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
     isScrollControlled: true,
     builder: (context) => Padding(
       padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
         left: 16.0,
         right: 16.0,
         top: 16.0,
       ),
       child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<String>(
-              value: selectedCrimeType,
-              decoration: const InputDecoration(labelText: 'Crime Type'),
-              items: crimeTypes.map((crimeType) {
-                return DropdownMenuItem<String>(
-                  value: crimeType['name'],
-                  child: Text(crimeType['name']),
-                );
-              }).toList(),
-              onChanged: (newValue) {
-                if (newValue != null) {
-                  setState(() {
-                    selectedCrimeType = newValue;
-                    selectedCrimeId = crimeTypes.firstWhere(
-                      (crime) => crime['name'] == newValue)['id'];
-                  });
-                }
-              },
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please select a crime type';
-                }
-                return null;
-              },
-            ),
-            TextFormField(
-              controller: _descriptionController,
-              decoration: const InputDecoration(labelText: 'Description (optional)'),
-            ),
-            TextFormField(
-              controller: _dateController,
-              decoration: const InputDecoration(labelText: 'Date'),
-              readOnly: true,
-              onTap: () async {
-                DateTime? pickedDate = await showDatePicker(
-                  context: context,
-                  initialDate: DateTime.parse(hotspot['time']),
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2101),
-                );
-                if (pickedDate != null) {
-                  _dateController.text = pickedDate.toString().split(' ')[0];
-                }
-              },
-            ),
-            TextFormField(
-              controller: _timeController,
-              decoration: const InputDecoration(labelText: 'Time'),
-              readOnly: true,
-              onTap: () async {
-                TimeOfDay? pickedTime = await showTimePicker(
-                  context: context,
-                  initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
-                );
-                if (pickedTime != null) {
-                  _timeController.text = pickedTime.format(context);
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: () async {
-                if (_formKey.currentState!.validate()) {
-                  try {
-                    final dateTime = DateTime.parse('${_dateController.text} ${_timeController.text}');
-                    
-                    print('Updating hotspot with:');
-                    print('Type ID: $selectedCrimeId');
-                    print('Description: ${_descriptionController.text}');
-                    print('DateTime: $dateTime');
-
-                    await _updateHotspot(
-                      hotspot['id'],
-                      selectedCrimeId,
-                      _descriptionController.text,
-                      dateTime,
-                    );
-                    
-                    // Refresh the hotspots list
-                    await _loadHotspots();
-                    
-                    if (mounted) {
-                      Navigator.pop(context);
-                      _showSnackBar('Hotspot updated successfully');
-                    }
-                  } catch (e) {
-                    print('Error updating hotspot: $e');
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Failed to update hotspot: ${e.toString()}'),
-                          duration: const Duration(seconds: 5),
-                        ),
-                      );
-                    }
+        key: formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: selectedCrimeType,
+                decoration: const InputDecoration(labelText: 'Crime Type'),
+                items: crimeTypes.map((crimeType) {
+                  return DropdownMenuItem<String>(
+                    value: crimeType['name'],
+                    child: Text(crimeType['name']),
+                  );
+                }).toList(),
+                onChanged: (newValue) {
+                  if (newValue != null) {
+                    setState(() {
+                      selectedCrimeType = newValue;
+                      selectedCrimeId = crimeTypes.firstWhere(
+                        (crime) => crime['name'] == newValue)['id'];
+                    });
                   }
-                }
-              },
-              child: const Text('Update'),
-            ),
-          ],
+                },
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please select a crime type';
+                  }
+                  return null;
+                },
+              ),
+              TextFormField(
+                controller: descriptionController,
+                decoration: const InputDecoration(labelText: 'Description (optional)'),
+              ),
+              TextFormField(
+                controller: dateController,
+                decoration: const InputDecoration(labelText: 'Date'),
+                readOnly: true,
+                onTap: () async {
+                  DateTime? pickedDate = await showDatePicker(
+                    context: context,
+                    initialDate: DateTime.parse(hotspot['time']),
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2101),
+                  );
+                  if (pickedDate != null) {
+                    dateController.text = pickedDate.toString().split(' ')[0];
+                  }
+                },
+              ),
+              TextFormField(
+                controller: timeController,
+                decoration: const InputDecoration(labelText: 'Time'),
+                readOnly: true,
+                onTap: () async {
+                  TimeOfDay? pickedTime = await showTimePicker(
+                    context: context,
+                    initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
+                  );
+                  if (pickedTime != null) {
+                    final now = DateTime.now();
+                    final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
+                    timeController.text = DateFormat('HH:mm').format(formatted);
+                  }
+                },
+              ),
+              const SizedBox(height: 24),
+             Row(
+  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+  children: [
+    // Update button on the left
+    ElevatedButton(
+      onPressed: () async {
+        if (formKey.currentState!.validate()) {
+          try {
+            final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
+            await _updateHotspot(
+              hotspot['id'],
+              selectedCrimeId,
+              descriptionController.text,
+              dateTime,
+            );
+            await _loadHotspots();
+            if (mounted) {
+              Navigator.pop(context);
+              _showSnackBar('Hotspot updated successfully');
+            }
+          } catch (e) {
+            print('Error updating hotspot: $e');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Failed to update hotspot: ${e.toString()}'),
+                  duration: const Duration(seconds: 5),
+                ),
+              );
+            }
+          }
+        }
+      },
+      child: const Text('Update'),
+    ),
+
+    // Cancel button on the right
+    ElevatedButton(
+      onPressed: () {
+        Navigator.pop(context); // Close the edit form
+
+        // Reopen details sheet right after frame completes — smoother!
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _showHotspotDetails(hotspot);
+        });
+      },
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.grey[500],
+        foregroundColor: Colors.white,
+      ),
+      child: const Text('Cancel'),
+    ),
+  ],
+),
+
+              const SizedBox(height: 12),
+            ],
+          ),
         ),
       ),
     ),
   );
 }
+
+
 
 Future<void> _updateHotspot(int id, int typeId, String description, DateTime dateTime) async {
   try {
