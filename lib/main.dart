@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:provider/provider.dart'; // Add this import
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
 import 'package:zecure/screens/map_screen.dart';
+import 'package:zecure/services/hotspot_filter_service.dart'; // Add this import
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,17 +23,20 @@ class ZecureApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Zecure',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Brightness.light,
+    return ChangeNotifierProvider( // Wrap MaterialApp with ChangeNotifierProvider
+      create: (context) => HotspotFilterService(),
+      child: MaterialApp(
+        title: 'Zecure',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.blue,
+            brightness: Brightness.light,
+          ),
+          useMaterial3: true,
         ),
-        useMaterial3: true,
+        home: const AuthWrapper(),
       ),
-      home: const AuthWrapper(),
     );
   }
 }
