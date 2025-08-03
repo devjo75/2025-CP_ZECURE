@@ -10,7 +10,7 @@ class HotspotDetailsDesktop extends StatelessWidget {
   final Function(Map<String, dynamic> hotspot) onEdit;
 
   const HotspotDetailsDesktop({
-    Key? key,
+    super.key,
     required this.hotspot,
     required this.userProfile,
     required this.isAdmin,
@@ -18,7 +18,7 @@ class HotspotDetailsDesktop extends StatelessWidget {
     required this.onReject,
     required this.onDelete,
     required this.onEdit,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -30,6 +30,7 @@ class HotspotDetailsDesktop extends StatelessWidget {
     final formattedTime = '${time.month}/${time.day}/${time.year} ${time.hour}:${time.minute.toString().padLeft(2, '0')}';
 
     final status = hotspot['status'] ?? 'approved';
+    final activeStatus = hotspot['active_status'] ?? 'active'; // Add active status
     final rejectionReason = hotspot['rejection_reason'];
     final isOwner = hotspot['created_by'] == userProfile?['id'] || hotspot['reported_by'] == userProfile?['id'];
 
@@ -60,6 +61,17 @@ class HotspotDetailsDesktop extends StatelessWidget {
                     _infoRow('Description', hotspot['description'] ?? 'No description'),
                     _infoRow('Coordinates', coordinates),
                     _infoRow('Time', formattedTime),
+                    // Add active status row for admins only
+                    if (isAdmin)
+                      _infoRow(
+                        'Active Status',
+                        activeStatus.toUpperCase(),
+                        color: activeStatus == 'active' ? Colors.green : Colors.grey,
+                        icon: activeStatus == 'active' 
+                          ? Icons.check_circle 
+                          : Icons.cancel,
+                        iconColor: activeStatus == 'active' ? Colors.green : Colors.grey,
+                      ),
                     if (status != 'approved')
                       _infoRow(
                         'Status',
@@ -151,7 +163,7 @@ class HotspotDetailsDesktop extends StatelessWidget {
     return buttons;
   }
 
-  Widget _infoRow(String label, String value, {Color? color}) {
+  Widget _infoRow(String label, String value, {Color? color, IconData? icon, Color? iconColor}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Row(
@@ -162,9 +174,17 @@ class HotspotDetailsDesktop extends StatelessWidget {
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           Expanded(
-            child: Text(
-              value,
-              style: TextStyle(color: color ?? Colors.black87),
+            child: Row(
+              children: [
+                Text(
+                  value,
+                  style: TextStyle(color: color ?? Colors.black87),
+                ),
+                if (icon != null) ...[
+                  const SizedBox(width: 8),
+                  Icon(icon, color: iconColor, size: 20),
+                ],
+              ],
             ),
           ),
         ],

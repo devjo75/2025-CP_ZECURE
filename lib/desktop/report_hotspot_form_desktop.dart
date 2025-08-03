@@ -11,12 +11,12 @@ class ReportHotspotFormDesktop extends StatefulWidget {
   final VoidCallback onCancel;
 
   const ReportHotspotFormDesktop({
-    Key? key,
+    super.key,
     required this.position,
     required this.crimeTypes,
     required this.onSubmit,
     required this.onCancel,
-  }) : super(key: key);
+  });
 
   @override
   State<ReportHotspotFormDesktop> createState() => _ReportHotspotFormDesktopState();
@@ -29,6 +29,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
   late TextEditingController _descriptionController;
   late TextEditingController _dateController;
   late TextEditingController _timeController;
+  bool _isSubmitting = false;
 
   @override
   void initState() {
@@ -58,20 +59,57 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
     );
-    if (pickedDate != null) {
-      _dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
+    if (pickedDate != null && mounted) {
+      setState(() {
+        _dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
+      });
     }
   }
 
   Future<void> _pickTime() async {
-    TimeOfDay initialTime = TimeOfDay.fromDateTime(DateTime.tryParse('${_dateController.text} ${_timeController.text}') ?? DateTime.now());
+    TimeOfDay initialTime = TimeOfDay.fromDateTime(
+      DateTime.tryParse('${_dateController.text} ${_timeController.text}') ?? DateTime.now()
+    );
     final pickedTime = await showTimePicker(
       context: context,
       initialTime: initialTime,
     );
-    if (pickedTime != null) {
-      _timeController.text =
-          '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
+    if (pickedTime != null && mounted) {
+      setState(() {
+        _timeController.text =
+            '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
+      });
+    }
+  }
+
+  Future<void> _submitForm() async {
+    if (!_formKey.currentState!.validate() || _isSubmitting) return;
+
+    setState(() => _isSubmitting = true);
+    try {
+      final dateTime = DateTime.parse('${_dateController.text} ${_timeController.text}');
+      await widget.onSubmit(_selectedCrimeId, _descriptionController.text, widget.position, dateTime);
+      
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Hotspot reported successfully. Waiting for admin approval.')),
+        );
+      }
+    } on FormatException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid date or time format')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to report hotspot: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -98,7 +136,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                 );
               }).toList(),
               onChanged: (newValue) {
-                if (newValue != null) {
+                if (newValue != null && mounted) {
                   setState(() {
                     _selectedCrimeType = newValue;
                     _selectedCrimeId = widget.crimeTypes.firstWhere((c) => c['name'] == newValue)['id'];
@@ -145,20 +183,17 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: () async {
-                  if (_formKey.currentState!.validate()) {
-                    try {
-                      final dateTime = DateTime.parse('${_dateController.text} ${_timeController.text}');
-                      await widget.onSubmit(_selectedCrimeId, _descriptionController.text, widget.position, dateTime);
-                      if (mounted) Navigator.pop(context);
-                    } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Failed to report hotspot: $e')),
-                      );
-                    }
-                  }
-                },
-                child: const Text('Submit Report'),
+                onPressed: _submitForm,
+                child: _isSubmitting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(Colors.white),
+                        ),
+                      )
+                    : const Text('Submit Report'),
               ),
             ),
             const SizedBox(height: 12),
@@ -166,8 +201,10 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
               width: double.infinity,
               child: OutlinedButton(
                 onPressed: () {
-                  Navigator.pop(context);
-                  widget.onCancel();
+                  if (!_isSubmitting && mounted) {
+                    Navigator.pop(context);
+                    widget.onCancel();
+                  }
                 },
                 child: const Text('Cancel'),
               ),

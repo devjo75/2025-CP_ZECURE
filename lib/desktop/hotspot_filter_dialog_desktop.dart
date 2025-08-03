@@ -5,7 +5,7 @@ import 'package:zecure/services/hotspot_filter_service.dart';
 class HotspotFilterDialogDesktop extends StatelessWidget {
   final Map<String, dynamic>? userProfile;
 
-  const HotspotFilterDialogDesktop({Key? key, required this.userProfile, required Widget Function(BuildContext context, String label, IconData icon, Color color, bool value, Function(bool p1) onChanged) buildFilterToggle}) : super(key: key);
+  const HotspotFilterDialogDesktop({super.key, required this.userProfile, required Widget Function(BuildContext context, String label, IconData icon, Color color, bool value, Function(bool p1) onChanged) buildFilterToggle});
 
   @override
   Widget build(BuildContext context) {

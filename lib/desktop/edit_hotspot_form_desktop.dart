@@ -3,15 +3,17 @@ import 'package:intl/intl.dart';
 
 class EditHotspotFormDesktop extends StatefulWidget {
   final Map<String, dynamic> hotspot;
-  final Future<void> Function(int id, int crimeId, String description, DateTime time) onUpdate;
+  final Future<void> Function(int id, int crimeId, String description, DateTime time, String activeStatus) onUpdate;
   final VoidCallback onCancel;
+  final bool isAdmin; // Add this parameter
 
   const EditHotspotFormDesktop({
-    Key? key,
+    super.key,
     required this.hotspot,
     required this.onUpdate,
     required this.onCancel,
-  }) : super(key: key);
+    required this.isAdmin, // Add this parameter
+  });
 
   @override
   State<EditHotspotFormDesktop> createState() => _EditHotspotFormDesktopState();
@@ -26,6 +28,10 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
   late List<Map<String, dynamic>> _crimeTypes;
   late String _selectedCrimeType;
   late int _selectedCrimeId;
+
+  // Add active status variables
+  late String _selectedActiveStatus;
+  late bool _isActiveStatus;
 
   @override
   void initState() {
@@ -46,6 +52,10 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
 
     _selectedCrimeType = widget.hotspot['crime_type']['name'];
     _selectedCrimeId = widget.hotspot['type_id'];
+    
+    // Initialize active status
+    _selectedActiveStatus = widget.hotspot['active_status'] ?? 'active';
+    _isActiveStatus = _selectedActiveStatus == 'active';
   }
 
   @override
@@ -116,22 +126,69 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
                 return null;
               },
             ),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _descriptionController,
               decoration: const InputDecoration(labelText: 'Description (optional)'),
             ),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _dateController,
               decoration: const InputDecoration(labelText: 'Date'),
               readOnly: true,
               onTap: _pickDate,
             ),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _timeController,
               decoration: const InputDecoration(labelText: 'Time'),
               readOnly: true,
               onTap: _pickTime,
             ),
+            // Add active status toggle for admins only
+            if (widget.isAdmin)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Active Status:',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                      ),
+                      Row(
+                        children: [
+                          Switch(
+                            value: _isActiveStatus,
+                            onChanged: (value) {
+                              setState(() {
+                                _isActiveStatus = value;
+                                _selectedActiveStatus = value ? 'active' : 'inactive';
+                              });
+                            },
+                            activeColor: Colors.green,
+                            inactiveThumbColor: Colors.grey,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _isActiveStatus ? 'Active' : 'Inactive',
+                            style: TextStyle(
+                              color: _isActiveStatus ? Colors.green : Colors.grey,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             const SizedBox(height: 24),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -141,7 +198,13 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
                     if (_formKey.currentState!.validate()) {
                       try {
                         final dateTime = DateTime.parse('${_dateController.text} ${_timeController.text}');
-                        await widget.onUpdate(widget.hotspot['id'], _selectedCrimeId, _descriptionController.text, dateTime);
+                        await widget.onUpdate(
+                          widget.hotspot['id'],
+                          _selectedCrimeId,
+                          _descriptionController.text,
+                          dateTime,
+                          _selectedActiveStatus, // Pass the active status
+                        );
                         if (mounted) Navigator.pop(context);
                       } catch (e) {
                         ScaffoldMessenger.of(context).showSnackBar(

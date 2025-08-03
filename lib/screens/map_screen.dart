@@ -23,6 +23,8 @@ import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/add_hotspot_form_desktop.dart';
 import 'package:zecure/desktop/hotspot_details_desktop.dart';
 import 'package:zecure/desktop/edit_hotspot_form_desktop.dart';
+import 'package:zecure/services/pulsing_hotspot_marker.dart';
+
 
 
 
@@ -70,28 +72,47 @@ class _MapScreenState extends State<MapScreen> {
   List<Map<String, dynamic>> _hotspots = [];
   // ignore: unused_field
   Map<String, dynamic>? _selectedHotspot;
+  RealtimeChannel? _hotspotsChannel;
 
-  @override
-  void initState() {
-    super.initState();
-    _loadUserProfile();
-    _loadHotspots();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _getCurrentLocation();
-    });
-  }
+@override
+void initState() {
+  super.initState();
+  
+  // Add auth state listener
+  Supabase.instance.client.auth.onAuthStateChange.listen((event) {
+    if (event.session != null && mounted) {
+      // Reload user profile and hotspots when auth state changes
+      _loadUserProfile();
+    } else if (mounted) {
+      setState(() {
+        _userProfile = null;
+        _isAdmin = false;
+        _hotspots = [];
+      });
+    }
+  });
+
+  _loadUserProfile();
+  _loadHotspots();
+  _setupRealtimeSubscription();
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _getCurrentLocation();
+  });
+}
 
   @override
   void dispose() {
     _positionStream?.cancel();
     _searchController.dispose();
     _profileScreen.disposeControllers();
+    _hotspotsChannel?.unsubscribe(); // Add this line
     super.dispose();
   }
 
-  Future<void> _loadUserProfile() async {
-    final user = _authService.currentUser;
-    if (user != null) {
+Future<void> _loadUserProfile() async {
+  final user = _authService.currentUser;
+  if (user != null) {
+    try {
       final response = await Supabase.instance.client
           .from('users')
           .select()
@@ -105,9 +126,18 @@ class _MapScreenState extends State<MapScreen> {
           _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
           _profileScreen.initControllers();
         });
+        
+        // Load hotspots only after admin status is set
+        await _loadHotspots();
+      }
+    } catch (e) {
+      print('Error loading user profile: $e');
+      if (mounted) {
+        _showSnackBar('Error loading profile: ${e.toString()}');
       }
     }
   }
+}
 
   void _toggleAdditionalButtons() {
   setState(() {
@@ -115,21 +145,181 @@ class _MapScreenState extends State<MapScreen> {
   });
 }
 
+  // Add this new method for setting up real-time subscription
+  void _setupRealtimeSubscription() {
+    _hotspotsChannel = Supabase.instance.client
+        .channel('hotspots_realtime')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'hotspot',
+          callback: _handleHotspotInsert,
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'hotspot',
+          callback: _handleHotspotUpdate,
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'hotspot',
+          callback: _handleHotspotDelete,
+        )
+        .subscribe();
+  }
 
-  Future<void> _loadHotspots() async {
+// Handle real-time hotspot insertions
+void _handleHotspotInsert(PostgresChangePayload payload) async {
+  if (!mounted) return;
+  
+  try {
+    // Fetch the complete hotspot data with crime_type relation
     final response = await Supabase.instance.client
+        .from('hotspot')
+        .select('''
+          *,
+          crime_type: type_id (id, name, level)
+        ''')
+        .eq('id', payload.newRecord['id'])
+        .single();
+
+    if (mounted) {
+      setState(() {
+        _hotspots.add(response);
+      });
+      
+      // Only show notification for new hotspots if user is admin
+      if (_isAdmin) {
+        final crimeType = response['crime_type']['name'];
+        _showSnackBar('New hotspot reported: $crimeType');
+      }
+    }
+  } catch (e) {
+    print('Error fetching new hotspot: $e');
+  }
+}
+
+void _handleHotspotUpdate(PostgresChangePayload payload) async {
+  if (!mounted) return;
+  
+  try {
+    // Get the previous hotspot data
+    final previousHotspot = _hotspots.firstWhere(
+      (h) => h['id'] == payload.newRecord['id'],
+      orElse: () => {},
+    );
+
+    // Fetch the updated hotspot data
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .select('''
+          *,
+          crime_type: type_id (id, name, level)
+        ''')
+        .eq('id', payload.newRecord['id'])
+        .single();
+
+    if (mounted) {
+      setState(() {
+        final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
+        if (index != -1) {
+          _hotspots[index] = response;
+        } else {
+          // If not found and it's now active, add it
+          if (response['active_status'] == 'active') {
+            _hotspots.add(response);
+          }
+        }
+      });
+
+      // Only show messages if status actually changed
+      final previousStatus = previousHotspot['status'] ?? 'approved';
+      final newStatus = response['status'] ?? 'approved';
+      final previousActiveStatus = previousHotspot['active_status'] ?? 'active';
+      final newActiveStatus = response['active_status'] ?? 'active';
+      final crimeType = response['crime_type']['name'];
+
+      if (newStatus != previousStatus) {
+        if (newStatus == 'approved') {
+          _showSnackBar('Hotspot approved: $crimeType');
+        } else if (newStatus == 'rejected') {
+          _showSnackBar('Hotspot rejected: $crimeType');
+        }
+      }
+      
+      // Show message for active status changes
+      if (newActiveStatus != previousActiveStatus) {
+        if (newActiveStatus == 'active') {
+          _showSnackBar('Hotspot activated: $crimeType');
+        } else {
+          _showSnackBar('Hotspot deactivated: $crimeType');
+        }
+      }
+    }
+  } catch (e) {
+    print('Error fetching updated hotspot: $e');
+  }
+}
+
+  // Handle real-time hotspot deletions
+  void _handleHotspotDelete(PostgresChangePayload payload) {
+    if (!mounted) return;
+    
+    setState(() {
+      _hotspots.removeWhere((hotspot) => hotspot['id'] == payload.oldRecord['id']);
+    });
+    
+    
+  }
+
+Future<void> _loadHotspots() async {
+  try {
+    // Start building the query
+    final query = Supabase.instance.client
         .from('hotspot')
         .select('''
           *,
           crime_type: type_id (id, name, level)
         ''');
 
+    // Apply filters based on admin status
+    PostgrestFilterBuilder filteredQuery;
+    if (!_isAdmin) {
+      print('Filtering for active hotspots only');
+      filteredQuery = query.eq('active_status', 'active');
+    } else {
+      print('Admin user - loading all hotspots');
+      filteredQuery = query;
+    }
+
+    // Add ordering after filtering
+    final orderedQuery = filteredQuery.order('time', ascending: false);
+
+    // Execute the query
+    final response = await orderedQuery;
+
     if (mounted) {
       setState(() {
         _hotspots = List<Map<String, dynamic>>.from(response);
+        print('Loaded ${_hotspots.length} hotspots');
+        if (_isAdmin) {
+          final inactiveCount = _hotspots.where((h) => h['active_status'] == 'inactive').length;
+          print('Inactive hotspots count: $inactiveCount');
+        }
       });
     }
+  } catch (e) {
+    print('Error loading hotspots: $e');
+    if (mounted) {
+      _showSnackBar('Error loading hotspots: ${e.toString()}');
+    }
   }
+}
+
+
+
 
   Future<void> _getCurrentLocation() async {
     if (!mounted) return;
@@ -896,11 +1086,6 @@ void _showAddHotspotForm(LatLng position) {
 
 
 void _showReportHotspotForm(LatLng position) async {
-  final formKey = GlobalKey<FormState>();
-  final descriptionController = TextEditingController();
-  final dateController = TextEditingController();
-  final timeController = TextEditingController();
-
   try {
     final crimeTypesResponse = await Supabase.instance.client
         .from('crime_type')
@@ -908,183 +1093,32 @@ void _showReportHotspotForm(LatLng position) async {
         .order('name');
 
     if (crimeTypesResponse.isEmpty) {
-      _showSnackBar('No crime types available');
+      if (mounted) _showSnackBar('No crime types available');
       return;
     }
 
     final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
-    String selectedCrimeType = crimeTypes[0]['name'];
-    int selectedCrimeId = crimeTypes[0]['id'];
-
     final now = DateTime.now();
-    dateController.text = DateFormat('yyyy-MM-dd').format(now);
-    timeController.text = DateFormat('HH:mm').format(now);
 
     if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
       // Desktop dialog view
-      showDialog(
+      if (!mounted) return;
+      await showDialog(
         context: context,
         builder: (context) => Dialog(
           child: ReportHotspotFormDesktop(
             position: position,
             crimeTypes: crimeTypes,
-            onSubmit: (crimeId, description, pos, dateTime) async {
-              try {
-                await _reportHotspot(crimeId, description, pos, dateTime);
-                if (mounted) {
-                  Navigator.pop(context);
-                  _showSnackBar('Hotspot reported successfully. Waiting for admin approval.');
-                }
-              } catch (e) {
-                if (mounted) _showSnackBar('Failed to report hotspot: $e');
-              }
-            },
-            onCancel: () {},
+            onSubmit: _reportHotspot,
+            onCancel: () => Navigator.of(context).pop(),
           ),
         ),
       );
-      return;
+    } else {
+      // Mobile bottom sheet view
+      if (!mounted) return;
+      await _showMobileReportForm(position, crimeTypes, now);
     }
-
-    // Mobile bottom sheet view
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return SingleChildScrollView(
-          child: Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              left: 16.0,
-              right: 16.0,
-              top: 16.0,
-            ),
-            child: Form(
-              key: formKey,
-              child: StatefulBuilder(
-                builder: (context, setState) {
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      DropdownButtonFormField<String>(
-                        value: selectedCrimeType,
-                        decoration: const InputDecoration(
-                          labelText: 'Crime Type',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: crimeTypes.map((crimeType) {
-                          return DropdownMenuItem<String>(
-                            value: crimeType['name'],
-                            child: Text(crimeType['name']),
-                          );
-                        }).toList(),
-                        onChanged: (newValue) {
-                          if (newValue != null) {
-                            setState(() {
-                              selectedCrimeType = newValue;
-                              selectedCrimeId = crimeTypes.firstWhere(
-                                (crime) => crime['name'] == newValue,
-                              )['id'];
-                            });
-                          }
-                        },
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please select a crime type';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: descriptionController,
-                        decoration: const InputDecoration(
-                          labelText: 'Description (optional)',
-                          border: OutlineInputBorder(),
-                        ),
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: dateController,
-                        decoration: const InputDecoration(
-                          labelText: 'Date',
-                          border: OutlineInputBorder(),
-                        ),
-                        readOnly: true,
-                        onTap: () async {
-                          DateTime? pickedDate = await showDatePicker(
-                            context: context,
-                            initialDate: now,
-                            firstDate: DateTime(2000),
-                            lastDate: DateTime(2101),
-                          );
-                          if (pickedDate != null) {
-                            dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
-                          }
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: timeController,
-                        decoration: const InputDecoration(
-                          labelText: 'Time',
-                          border: OutlineInputBorder(),
-                        ),
-                        readOnly: true,
-                        onTap: () async {
-                          TimeOfDay? pickedTime = await showTimePicker(
-                            context: context,
-                            initialTime: TimeOfDay.now(),
-                          );
-                          if (pickedTime != null) {
-                            timeController.text =
-                                '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
-                          }
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () async {
-                            if (formKey.currentState!.validate()) {
-                              try {
-                                final dateTime = DateTime.parse(
-                                    '${dateController.text} ${timeController.text}');
-
-                                await _reportHotspot(
-                                  selectedCrimeId,
-                                  descriptionController.text,
-                                  position,
-                                  dateTime,
-                                );
-
-                                if (mounted) {
-                                  Navigator.pop(context);
-                                  _showSnackBar(
-                                      'Hotspot reported successfully. Waiting for admin approval.');
-                                }
-                              } catch (e) {
-                                if (mounted) {
-                                  _showSnackBar(
-                                      'Failed to report hotspot: ${e.toString()}');
-                                }
-                              }
-                            }
-                          },
-                          child: const Text('Submit Report'),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        );
-      },
-    );
   } catch (e) {
     if (mounted) {
       _showSnackBar('Error loading crime types: ${e.toString()}');
@@ -1092,69 +1126,236 @@ void _showReportHotspotForm(LatLng position) async {
   }
 }
 
-
-
-// Add this method to handle user reports
-Future<void> _reportHotspot(
-  int typeId, 
-  String description, 
-  LatLng position, 
-  DateTime dateTime
+Future<void> _showMobileReportForm(
+  LatLng position,
+  List<Map<String, dynamic>> crimeTypes,
+  DateTime now,
 ) async {
-  final response = await Supabase.instance.client
-      .from('hotspot')
-      .insert({
+  final formKey = GlobalKey<FormState>();
+  final descriptionController = TextEditingController();
+  final dateController = TextEditingController(
+    text: DateFormat('yyyy-MM-dd').format(now),
+  );
+  final timeController = TextEditingController(
+    text: DateFormat('HH:mm').format(now),
+  );
+
+  String selectedCrimeType = crimeTypes[0]['name'];
+  int selectedCrimeId = crimeTypes[0]['id'];
+  bool isSubmitting = false;
+
+  final result = await showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) {
+      return StatefulBuilder(
+        builder: (context, setState) {
+          return SingleChildScrollView(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              left: 16,
+              right: 16,
+              top: 16,
+            ),
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: selectedCrimeType,
+                    decoration: const InputDecoration(
+                      labelText: 'Crime Type',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: crimeTypes.map((crimeType) {
+                      return DropdownMenuItem<String>(
+                        value: crimeType['name'],
+                        child: Text(crimeType['name']),
+                      );
+                    }).toList(),
+                    onChanged: isSubmitting
+                        ? null
+                        : (newValue) {
+                            if (newValue != null) {
+                              setState(() {
+                                selectedCrimeType = newValue;
+                                selectedCrimeId = crimeTypes
+                                    .firstWhere((c) => c['name'] == newValue)['id'];
+                              });
+                            }
+                          },
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please select a crime type';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Description (optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 3,
+                    enabled: !isSubmitting,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: dateController,
+                    decoration: const InputDecoration(
+                      labelText: 'Date',
+                      border: OutlineInputBorder(),
+                    ),
+                    readOnly: true,
+                    onTap: isSubmitting
+                        ? null
+                        : () async {
+                            final pickedDate = await showDatePicker(
+                              context: context,
+                              initialDate: now,
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime(2101),
+                            );
+                            if (pickedDate != null) {
+                              dateController.text =
+                                  DateFormat('yyyy-MM-dd').format(pickedDate);
+                            }
+                          },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: timeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Time',
+                      border: OutlineInputBorder(),
+                    ),
+                    readOnly: true,
+                    onTap: isSubmitting
+                        ? null
+                        : () async {
+                            final pickedTime = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay.now(),
+                            );
+                            if (pickedTime != null) {
+                              timeController.text =
+                                  '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
+                            }
+                          },
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: isSubmitting
+                          ? null
+                          : () async {
+                              if (formKey.currentState!.validate()) {
+                                setState(() => isSubmitting = true);
+                                try {
+                                  final dateTime = DateTime.parse(
+                                      '${dateController.text} ${timeController.text}');
+                                  
+                                  await _reportHotspot(
+                                    selectedCrimeId,
+                                    descriptionController.text,
+                                    position,
+                                    dateTime,
+                                  );
+
+                                  if (mounted) {
+                                    Navigator.pop(context, true);
+                                  }
+                                } catch (e) {
+                                  if (mounted) {
+                                    setState(() => isSubmitting = false);
+                                    _showSnackBar(
+                                        'Failed to report hotspot: ${e.toString()}');
+                                  }
+                                }
+                              }
+                            },
+                      child: isSubmitting
+                          ? const CircularProgressIndicator()
+                          : const Text('Submit Report'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+
+  if (result == true && mounted) {
+    _showSnackBar('Hotspot reported successfully. Waiting for admin approval.');
+  }
+}
+
+
+
+  Future<void> _reportHotspot(
+    int typeId,
+    String description,
+    LatLng position,
+    DateTime dateTime,
+  ) async {
+    try {
+      final insertData = {
         'type_id': typeId,
-        'description': description,
+        'description': description.isNotEmpty ? description : null,
         'location': 'POINT(${position.longitude} ${position.latitude})',
         'time': dateTime.toIso8601String(),
         'status': 'pending',
         'created_by': _userProfile?['id'],
         'reported_by': _userProfile?['id'],
-      })
-      .select('''
-        *,
-        crime_type: type_id (id, name, level)
-      ''');
+        'created_at': DateTime.now().toIso8601String(),
+      };
 
-  if (mounted) {
-    setState(() {
-      _hotspots.add(response[0]);
-    });
-  }
-}
+      await Supabase.instance.client
+          .from('hotspot')
+          .insert(insertData)
+          .timeout(const Duration(seconds: 10));
 
-
-
-
-
-Future<void> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
-  try {
-    final response = await Supabase.instance.client
-        .from('hotspot')
-        .insert({
-          'type_id': int.parse(typeId), // Convert to int
-          'description': description,
-          'location': 'POINT(${position.longitude} ${position.latitude})',
-          'time': dateTime.toIso8601String(),
-          'created_by': _userProfile?['id'],
-        })
-        .select('''
-          *,
-          crime_type: type_id (id, name, level)
-        '''); // Include the crime_type relation in the response
-
-    if (mounted) {
-      setState(() {
-        _hotspots.add(response[0]);
-      });
-      _showSnackBar('Hotspot saved successfully');
+      // Real-time subscription will handle adding to the list
+    } on PostgrestException catch (e) {
+      throw Exception('Database error: ${e.message}');
+    } on TimeoutException {
+      throw Exception('Request timed out. Please try again.');
+    } catch (e) {
+      throw Exception('Failed to report hotspot: ${e.toString()}');
     }
-  } catch (e) {
-    _showSnackBar('Failed to save hotspot: ${e.toString()}');
-    print('Error details: $e');
   }
-}
+
+
+
+
+
+  Future<void> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
+    try {
+      await Supabase.instance.client
+          .from('hotspot')
+          .insert({
+            'type_id': int.parse(typeId),
+            'description': description,
+            'location': 'POINT(${position.longitude} ${position.latitude})',
+            'time': dateTime.toIso8601String(),
+            'created_by': _userProfile?['id'],
+          });
+
+      if (mounted) {
+        _showSnackBar('Hotspot saved successfully');
+      }
+    } catch (e) {
+      _showSnackBar('Failed to save hotspot: ${e.toString()}');
+      print('Error details: $e');
+    }
+  }
 
   Future<void> _shareLocation(LatLng position) async {
     final url = 'https://www.google.com/maps/search/?api=1&query=${position.latitude},${position.longitude}';
@@ -1462,6 +1663,7 @@ Widget _buildMap() {
         maxZoom: 19,
         fallbackUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       ),
+      
       // Polyline layer should come before markers to appear underneath
       if (_polylinePoints.isNotEmpty)
         PolylineLayer(
@@ -1473,6 +1675,7 @@ Widget _buildMap() {
             ),
           ],
         ),
+      
       // Main markers layer (current position and destination)
       MarkerLayer(
         markers: [
@@ -1500,7 +1703,8 @@ Widget _buildMap() {
             ),
         ],
       ),
-      // Hotspots layer (appears on top of other markers)
+
+   // Hotspots layer with real-time updates
 Consumer<HotspotFilterService>(
   builder: (context, filterService, child) {
     return MarkerLayer(
@@ -1508,33 +1712,51 @@ Consumer<HotspotFilterService>(
         final currentUserId = _userProfile?['id'];
         final isAdmin = _isAdmin;
         final status = hotspot['status'] ?? 'approved';
+        final activeStatus = hotspot['active_status'] ?? 'active';
         final createdBy = hotspot['created_by'];
         final reportedBy = hotspot['reported_by'];
+        final isOwnHotspot = currentUserId != null && 
+                           (currentUserId == createdBy || currentUserId == reportedBy);
 
-        // Admins can see all hotspots based on filter settings
+        // Admin view - show all hotspots based on filters
         if (isAdmin) {
           return filterService.shouldShowHotspot(hotspot);
         }
-        // Regular users can see approved hotspots based on filter settings
-        else if (status == 'approved' && filterService.shouldShowHotspot(hotspot)) {
+
+        // Non-admin view rules:
+        // 1. Show active+approved hotspots that match crime type filters
+        if (activeStatus == 'active' && 
+            status == 'approved' && 
+            filterService.shouldShowHotspot(hotspot)) {
           return true;
         }
-        // Regular users can see their own pending or rejected hotspots if the respective filters are on
-        else if (currentUserId != null && (currentUserId == createdBy || currentUserId == reportedBy)) {
+
+        // 2. Show user's own hotspots regardless of active_status if:
+        //    - It's pending and pending filter is enabled
+        //    - It's rejected (will be inactive) and rejected filter is enabled
+        if (isOwnHotspot) {
           if ((status == 'pending' && filterService.showPending) ||
               (status == 'rejected' && filterService.showRejected)) {
             return true;
           }
         }
+
         return false;
       }).map((hotspot) {
-        // Your existing marker creation logic
         final coords = hotspot['location']['coordinates'];
         final point = LatLng(coords[1], coords[0]);
         final status = hotspot['status'] ?? 'approved';
+        final activeStatus = hotspot['active_status'] ?? 'active';
         final crimeLevel = hotspot['crime_type']['level'];
+        final isActive = activeStatus == 'active';
+        final isOwnHotspot = _userProfile?['id'] != null && 
+                           (_userProfile?['id'] == hotspot['created_by'] || 
+                            _userProfile?['id'] == hotspot['reported_by']);
+
+        // Determine marker appearance
         Color markerColor;
         IconData markerIcon;
+        double opacity = 1.0;
 
         if (status == 'pending') {
           markerColor = Colors.deepPurple;
@@ -1542,7 +1764,10 @@ Consumer<HotspotFilterService>(
         } else if (status == 'rejected') {
           markerColor = Colors.grey;
           markerIcon = Icons.block;
+          // Make rejected markers semi-transparent unless it's the user's own
+          opacity = isOwnHotspot ? 1.0 : 0.6;
         } else {
+          // For approved hotspots
           switch (crimeLevel) {
             case 'critical':
               markerColor = Colors.red;
@@ -1564,40 +1789,34 @@ Consumer<HotspotFilterService>(
               markerColor = Colors.blue;
               markerIcon = Icons.location_pin;
           }
+
+          // Apply inactive styling
+          if (!isActive) {
+            markerColor = markerColor.withOpacity(0.3);
+          }
         }
 
         return Marker(
           point: point,
-          width: 40,
-          height: 40,
-          builder: (ctx) => GestureDetector(
-            onTap: () => _showHotspotDetails(hotspot),
-            child: Container(
-              decoration: BoxDecoration(
-                color: markerColor.withOpacity(0.8),
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: Colors.white,
-                  width: 2,
-                ),
-              ),
-              child: Icon(
-                markerIcon,
-                color: Colors.white,
-                size: 20,
-              ),
+          width: 60,
+          height: 60,
+          builder: (ctx) => Opacity(
+            opacity: opacity,
+            child: PulsingHotspotMarker(
+              markerColor: markerColor,
+              markerIcon: markerIcon,
+              isActive: isActive && status != 'rejected', // Don't pulse rejected markers
+              onTap: () => _showHotspotDetails(hotspot),
             ),
           ),
         );
       }).toList(),
     );
   },
-)
-,
+),
     ],
   );
 }
-
 
 
 
@@ -1629,29 +1848,30 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
   final DateTime time = DateTime.parse(hotspot['time']).toLocal();
   final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
   final status = hotspot['status'] ?? 'approved';
+  final activeStatus = hotspot['active_status'] ?? 'active';
   final isOwner = hotspot['created_by'] == _userProfile?['id'] ||
       hotspot['reported_by'] == _userProfile?['id'];
 
   // Desktop/Web View
   if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
-  showDialog(
-  context: context,
-  barrierColor: Colors.black.withOpacity(0.3), // Optional dim
-  builder: (context) => Center(
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: HotspotDetailsDesktop(
-        hotspot: hotspot,
-        userProfile: _userProfile,
-        isAdmin: _isAdmin,
-        onReview: _reviewHotspot,
-        onReject: _showRejectDialog,
-        onDelete: _deleteHotspot,
-        onEdit: _showEditHotspotForm,
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.3),
+      builder: (context) => Center(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: HotspotDetailsDesktop(
+            hotspot: hotspot,
+            userProfile: _userProfile,
+            isAdmin: _isAdmin,
+            onReview: _reviewHotspot,
+            onReject: _showRejectDialog,
+            onDelete: _deleteHotspot,
+            onEdit: _showEditHotspotForm,
+          ),
+        ),
       ),
-    ),
-  ),
-);
+    );
     return;
   }
 
@@ -1700,6 +1920,20 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
               title: const Text('Time:'),
               subtitle: Text(formattedTime),
             ),
+            // Show active status only to admins
+            if (_isAdmin)
+              ListTile(
+                title: Text(
+                  'Active Status: ${activeStatus.toUpperCase()}',
+                  style: TextStyle(
+                    color: activeStatus == 'active' ? Colors.green : Colors.grey,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                trailing: activeStatus == 'active' 
+                  ? const Icon(Icons.check_circle, color: Colors.green)
+                  : const Icon(Icons.cancel, color: Colors.grey),
+              ),
             if (status != 'approved')
               ListTile(
                 title: Text(
@@ -1779,23 +2013,24 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
                   ],
                 ),
               ),
-            if (_isAdmin && status == 'approved')
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _showEditHotspotForm(hotspot);
-                      },
-                      child: const Text('Edit'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _deleteHotspot(hotspot['id']),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                      child: const Text('Delete'),
+if (_isAdmin && status == 'approved')
+  Padding(
+    padding: const EdgeInsets.symmetric(vertical: 16.0),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pop(context);
+            _showEditHotspotForm(hotspot);
+          },
+          child: const Text('Edit'),
+        ),
+        ElevatedButton(
+          onPressed: () => _deleteHotspot(hotspot['id']),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+          child: const Text('Delete'),
+
                     ),
                   ],
                 ),
@@ -1846,17 +2081,16 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
         .from('hotspot')
         .update({
           'status': approve ? 'approved' : 'rejected',
+          'active_status': approve ? 'active' : 'inactive', // Automatically set inactive when rejected
           'rejection_reason': reason,
           'updated_at': DateTime.now().toIso8601String(),
-          // If approved, transfer ownership to admin
           if (approve) 'created_by': _userProfile?['id'],
         })
         .eq('id', id);
 
-    await _loadHotspots();
     if (mounted) {
-      Navigator.pop(context); // Close details sheet
-      _showSnackBar(approve ? 'Hotspot approved' : 'Hotspot rejected');
+      Navigator.pop(context);
+      _showSnackBar(approve ? 'Hotspot approved' : 'Hotspot rejected and deactivated');
     }
   } catch (e) {
     if (mounted) {
@@ -1881,38 +2115,43 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
 
   String selectedCrimeType = hotspot['crime_type']['name'];
   int selectedCrimeId = hotspot['type_id'];
+  
+  // Add active status variables
+  String selectedActiveStatus = hotspot['active_status'] ?? 'active';
+  bool isActiveStatus = selectedActiveStatus == 'active';
 
-  // Desktop/Web view
-  if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        child: EditHotspotFormDesktop(
-          hotspot: hotspot,
-          onUpdate: (id, crimeId, description, time) async {
-            try {
-              await _updateHotspot(id, crimeId, description, time);
-              await _loadHotspots();
-              if (mounted) {
-                Navigator.pop(context);
-                _showSnackBar('Hotspot updated successfully');
-              }
-            } catch (e) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to update hotspot: $e')),
-                );
-              }
+// Desktop/Web view
+if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
+  showDialog(
+    context: context,
+    builder: (context) => Dialog(
+      child: EditHotspotFormDesktop(
+        hotspot: hotspot,
+        onUpdate: (id, crimeId, description, time, activeStatus) async {
+          try {
+            await _updateHotspot(id, crimeId, description, time, activeStatus);
+            await _loadHotspots();
+            if (mounted) {
+              Navigator.pop(context);
+              _showSnackBar('Hotspot updated successfully');
             }
-          },
-          onCancel: () {
-            _showHotspotDetails(hotspot);
-          },
-        ),
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Failed to update hotspot: $e')),
+              );
+            }
+          }
+        },
+        onCancel: () {
+          _showHotspotDetails(hotspot);
+        },
+        isAdmin: _isAdmin, // Add this line
       ),
-    );
-    return;
-  }
+    ),
+  );
+  return;
+}
 
   // Mobile view (bottom sheet)
   showModalBottomSheet(
@@ -1957,10 +2196,12 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
                       return null;
                     },
                   ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: descriptionController,
                     decoration: const InputDecoration(labelText: 'Description (optional)'),
                   ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: dateController,
                     decoration: const InputDecoration(labelText: 'Date'),
@@ -1977,6 +2218,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
                       }
                     },
                   ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: timeController,
                     decoration: const InputDecoration(labelText: 'Time'),
@@ -1993,6 +2235,48 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
                       }
                     },
                   ),
+                  const SizedBox(height: 16),
+                  // Add active status toggle for admins only
+                  if (_isAdmin)
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Active Status:',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                          ),
+                          Row(
+                            children: [
+                              Switch(
+                                value: isActiveStatus,
+                                onChanged: (value) {
+                                  setState(() {
+                                    isActiveStatus = value;
+                                    selectedActiveStatus = value ? 'active' : 'inactive';
+                                  });
+                                },
+                                activeColor: Colors.green,
+                                inactiveThumbColor: Colors.grey,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                isActiveStatus ? 'Active' : 'Inactive',
+                                style: TextStyle(
+                                  color: isActiveStatus ? Colors.green : Colors.grey,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
                   const SizedBox(height: 24),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -2007,6 +2291,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
                                 selectedCrimeId,
                                 descriptionController.text,
                                 dateTime,
+                                selectedActiveStatus,
                               );
                               await _loadHotspots();
                               if (mounted) {
@@ -2030,7 +2315,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
                       ),
                       ElevatedButton(
                         onPressed: () {
-                          Navigator.pop(context); // Close the edit form
+                          Navigator.pop(context);
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             _showHotspotDetails(hotspot);
                           });
@@ -2057,31 +2342,43 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) {
 
 
 
-Future<void> _updateHotspot(int id, int typeId, String description, DateTime dateTime) async {
+Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, DateTime dateTime, [String? activeStatus]) async {
   try {
-    await Supabase.instance.client
-        .from('hotspot')
-        .update({
-          'type_id': typeId, // Now using the passed typeId
-          'description': description,
-          'time': dateTime.toIso8601String(),
-        })
-        .eq('id', id)
-        .select('''
-          *,
-          crime_type: type_id (id, name, level)
-        '''); // Include the relation in response
+    final updateData = {
+      'type_id': typeId,
+      'description': description,
+      'time': dateTime.toIso8601String(),
+      // Always include active_status if provided, regardless of admin status
+      // The UI should prevent non-admins from changing this anyway
+      if (activeStatus != null) 'active_status': activeStatus,
+      // Add updated_at timestamp to ensure change is detected
+      'updated_at': DateTime.now().toIso8601String(),
+    };
 
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .update(updateData)
+        .eq('id', id)
+        .select('''*, crime_type: type_id (id, name, level)''')
+        .single();
+
+    // Force a refresh of the hotspots list to ensure UI consistency
     if (mounted) {
-      _showSnackBar('Hotspot updated successfully');
-      _loadHotspots(); // Refresh the list
+      await _loadHotspots();
     }
+
+    return response;
   } catch (e) {
-    _showSnackBar('Failed to update hotspot: ${e.toString()}');
+    if (mounted) {
+      _showSnackBar('Failed to update hotspot: ${e.toString()}');
+    }
     print('Update error details: $e');
+    rethrow;
   }
 }
 
+
+  // Update your _deleteHotspot method to remove manual state update
   Future<void> _deleteHotspot(int id) async {
     try {
       await Supabase.instance.client
@@ -2090,9 +2387,6 @@ Future<void> _updateHotspot(int id, int typeId, String description, DateTime dat
           .eq('id', id);
 
       if (mounted) {
-        setState(() {
-          _hotspots.removeWhere((hotspot) => hotspot['id'] == id);
-        });
         _showSnackBar('Hotspot deleted successfully');
         Navigator.pop(context);
       }

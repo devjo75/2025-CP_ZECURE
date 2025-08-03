@@ -13,7 +13,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
   final VoidCallback onAddHotspot;
 
   const LocationOptionsDialogDesktop({
-    Key? key,
+    super.key,
     required this.locationName,
     required this.isAdmin,
     required this.userProfile,
@@ -24,7 +24,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
     required this.onShareLocation,
     required this.onReportHotspot,
     required this.onAddHotspot,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

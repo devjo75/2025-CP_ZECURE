@@ -11,7 +11,7 @@ class AddHotspotFormDesktop extends StatefulWidget {
   final VoidCallback onSubmit;
 
   const AddHotspotFormDesktop({
-    Key? key,
+    super.key,
     required this.formKey,
     required this.descriptionController,
     required this.dateController,
@@ -20,7 +20,7 @@ class AddHotspotFormDesktop extends StatefulWidget {
     required this.selectedCrimeType,
     required this.onCrimeTypeChanged,
     required this.onSubmit,
-  }) : super(key: key);
+  });
 
   @override
   State<AddHotspotFormDesktop> createState() => _AddHotspotFormDesktopState();
