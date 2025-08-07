@@ -12,18 +12,19 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:zecure/desktop/report_hotspot_form_desktop.dart' show ReportHotspotFormDesktop;
 import 'package:zecure/services/auth_service.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:zecure/screens/profile_screen.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
+import 'package:zecure/desktop/report_hotspot_form_desktop.dart' show ReportHotspotFormDesktop;
 import 'package:zecure/desktop/hotspot_filter_dialog_desktop.dart';
 import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/add_hotspot_form_desktop.dart';
 import 'package:zecure/desktop/hotspot_details_desktop.dart';
 import 'package:zecure/desktop/edit_hotspot_form_desktop.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
+
 
 
 
@@ -170,34 +171,62 @@ Future<void> _loadUserProfile() async {
         .subscribe();
   }
 
-// Handle real-time hotspot insertions
 void _handleHotspotInsert(PostgresChangePayload payload) async {
   if (!mounted) return;
   
   try {
-    // Fetch the complete hotspot data with crime_type relation
+    // Fetch the complete hotspot data with crime_type relation including category
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
           *,
-          crime_type: type_id (id, name, level)
+          crime_type: type_id (id, name, level, category, description)
         ''')
         .eq('id', payload.newRecord['id'])
         .single();
 
     if (mounted) {
       setState(() {
-        _hotspots.add(response);
+        // Ensure the crime_type data is properly structured
+        if (response['crime_type'] != null) {
+          _hotspots.add(response);
+        } else {
+          // Add with placeholder if crime_type is null
+          _hotspots.add({
+            ...response,
+            'crime_type': {
+              'id': response['type_id'],
+              'name': 'Unknown',
+              'level': 'unknown',
+              'category': 'Unknown',
+              'description': null
+            }
+          });
+        }
       });
       
-      // Only show notification for new hotspots if user is admin
       if (_isAdmin) {
-        final crimeType = response['crime_type']['name'];
-        _showSnackBar('New hotspot reported: $crimeType');
+        final crimeType = response['crime_type']?['name'] ?? 'Unknown';
+        _showSnackBar('New crime reported: $crimeType');
       }
     }
   } catch (e) {
-    print('Error fetching new hotspot: $e');
+    print('Error fetching new crime: $e');
+    // Add basic entry if full fetch fails
+    if (mounted) {
+      setState(() {
+        _hotspots.add({
+          ...payload.newRecord,
+          'crime_type': {
+            'id': payload.newRecord['type_id'],
+            'name': 'Unknown',
+            'level': 'unknown',
+            'category': 'Unknown',
+            'description': null
+          }
+        });
+      });
+    }
   }
 }
 
@@ -211,12 +240,12 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
       orElse: () => {},
     );
 
-    // Fetch the updated hotspot data
+    // Fetch the updated hotspot data WITH CATEGORY included
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
           *,
-          crime_type: type_id (id, name, level)
+          crime_type: type_id (id, name, level, category, description)
         ''')
         .eq('id', payload.newRecord['id'])
         .single();
@@ -225,11 +254,26 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
       setState(() {
         final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
         if (index != -1) {
-          _hotspots[index] = response;
+          // Preserve the existing crime_type data if the new one is missing fields
+          final existingCrimeType = _hotspots[index]['crime_type'] ?? {};
+          _hotspots[index] = {
+            ...response,
+            'crime_type': {
+              ...existingCrimeType,
+              ...(response['crime_type'] ?? {}),
+              'category': response['crime_type']?['category'] ?? existingCrimeType['category'] ?? 'General'
+            }
+          };
         } else {
-          // If not found and it's now active, add it
+          // If not found and it's now active, add it with proper crime_type data
           if (response['active_status'] == 'active') {
-            _hotspots.add(response);
+            _hotspots.add({
+              ...response,
+              'crime_type': {
+                ...(response['crime_type'] ?? {}),
+                'category': response['crime_type']?['category'] ?? 'General'
+              }
+            });
           }
         }
       });
@@ -239,13 +283,13 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
       final newStatus = response['status'] ?? 'approved';
       final previousActiveStatus = previousHotspot['active_status'] ?? 'active';
       final newActiveStatus = response['active_status'] ?? 'active';
-      final crimeType = response['crime_type']['name'];
+      final crimeType = response['crime_type']?['name'] ?? 'Unknown';
 
       if (newStatus != previousStatus) {
         if (newStatus == 'approved') {
-          _showSnackBar('Hotspot approved: $crimeType');
+          _showSnackBar('Crime report approved: $crimeType');
         } else if (newStatus == 'rejected') {
-          _showSnackBar('Hotspot rejected: $crimeType');
+          _showSnackBar('Crime report rejected: $crimeType');
         }
       }
       
@@ -259,7 +303,26 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
       }
     }
   } catch (e) {
-    print('Error fetching updated hotspot: $e');
+    print('Error fetching updated crime: $e');
+    // Try to at least update with basic info if full fetch fails
+    if (mounted) {
+      setState(() {
+        final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
+        if (index != -1) {
+          _hotspots[index] = {
+            ..._hotspots[index],
+            ...payload.newRecord,
+            'crime_type': _hotspots[index]['crime_type'] ?? {
+              'id': payload.newRecord['type_id'],
+              'name': 'Unknown',
+              'level': 'unknown',
+              'category': 'General',
+              'description': null
+            }
+          };
+        }
+      });
+    }
   }
 }
 
@@ -281,14 +344,31 @@ Future<void> _loadHotspots() async {
         .from('hotspot')
         .select('''
           *,
-          crime_type: type_id (id, name, level)
+          crime_type: type_id (id, name, level, category, description)
         ''');
 
     // Apply filters based on admin status
     PostgrestFilterBuilder filteredQuery;
     if (!_isAdmin) {
-      print('Filtering for active hotspots only');
-      filteredQuery = query.eq('active_status', 'active');
+      print('Filtering hotspots for non-admin user');
+      final currentUserId = _userProfile?['id'];
+      
+      // Check if currentUserId is not null before using it
+      if (currentUserId != null) {
+        // For non-admins, show:
+        // 1. All approved active hotspots
+        // 2. User's own reports (regardless of status)
+        filteredQuery = query.or(
+          'and(active_status.eq.active,status.eq.approved),' +
+          'created_by.eq.$currentUserId,' +
+          'reported_by.eq.$currentUserId'
+        );
+      } else {
+        // If user ID is null, only show approved active hotspots
+        filteredQuery = query
+            .eq('active_status', 'active')
+            .eq('status', 'approved');
+      }
     } else {
       print('Admin user - loading all hotspots');
       filteredQuery = query;
@@ -317,6 +397,8 @@ Future<void> _loadHotspots() async {
     }
   }
 }
+
+// Alternative safer approach - separate queries for different cases
 
 
 
@@ -494,10 +576,27 @@ void _showHotspotFilterDialog() {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Filter Hotspots',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                        'Filter Crimes',
+                        style: TextStyle(
+                          fontSize: 20, 
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const SizedBox(height: 16),
+                      
+                      // Severity filters
+                      const Padding(
+                        padding: EdgeInsets.only(left: 8.0),
+                        child: Text(
+                          'Severity',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       _buildFilterToggle(
                         context,
                         'Critical',
@@ -518,7 +617,7 @@ void _showHotspotFilterDialog() {
                         context,
                         'Medium',
                         Icons.info,
-                        Colors.yellow,
+                        Colors.amber,
                         filterService.showMedium,
                         (value) => filterService.toggleMedium(),
                       ),
@@ -530,7 +629,95 @@ void _showHotspotFilterDialog() {
                         filterService.showLow,
                         (value) => filterService.toggleLow(),
                       ),
+                      const SizedBox(height: 16),
+                      
+                      // Category filters
+                      const Padding(
+                        padding: EdgeInsets.only(left: 8.0),
+                        child: Text(
+                          'Categories',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildFilterToggle(
+                        context,
+                        'Property',
+                        Icons.house,
+                        Colors.blue,
+                        filterService.showProperty,
+                        (value) => filterService.toggleProperty(),
+                      ),
+                      _buildFilterToggle(
+                        context,
+                        'Violent',
+                        Icons.warning,
+                        Colors.red,
+                        filterService.showViolent,
+                        (value) => filterService.toggleViolent(),
+                      ),
+                      _buildFilterToggle(
+                        context,
+                        'Drug',
+                        Icons.medical_services,
+                        Colors.purple,
+                        filterService.showDrug,
+                        (value) => filterService.toggleDrug(),
+                      ),
+                      _buildFilterToggle(
+                        context,
+                        'Public Order',
+                        Icons.gavel,
+                        Colors.orange,
+                        filterService.showPublicOrder,
+                        (value) => filterService.togglePublicOrder(),
+                      ),
+                      _buildFilterToggle(
+                        context,
+                        'Financial',
+                        Icons.attach_money,
+                        Colors.green,
+                        filterService.showFinancial,
+                        (value) => filterService.toggleFinancial(),
+                      ),
+                      _buildFilterToggle(
+                        context,
+                        'Traffic',
+                        Icons.directions_car,
+                        Colors.blueGrey,
+                        filterService.showTraffic,
+                        (value) => filterService.toggleTraffic(),
+                      ),
+                      _buildFilterToggle(
+                        context,
+                        'Alerts',
+                        Icons.notification_important,
+                        Colors.deepPurple,  // Distinct color for alerts
+                        filterService.showAlerts,
+                        (value) => filterService.toggleAlerts(),
+                      ),
+                      
+                      const SizedBox(height: 16),
+                      
+                      
+                      // Status filters (only for logged-in users)
                       if (_userProfile != null) ...[
+                        const Padding(
+                          padding: EdgeInsets.only(left: 8.0),
+                          child: Text(
+                            'Status',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
                         _buildFilterToggle(
                           context,
                           'Pending',
@@ -547,11 +734,21 @@ void _showHotspotFilterDialog() {
                           filterService.showRejected,
                           (value) => filterService.toggleRejected(),
                         ),
+                        const SizedBox(height: 16),
                       ],
-                      const SizedBox(height: 16),
+                      
+                      // Close button
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).primaryColor,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
                           onPressed: () => Navigator.pop(context),
                           child: const Text('Close'),
                         ),
@@ -567,9 +764,6 @@ void _showHotspotFilterDialog() {
     );
   }
 }
-
-
-
 
 Widget _buildFilterToggle(
   BuildContext context,
@@ -692,7 +886,7 @@ void _showLocationOptions(LatLng position) async {
               if (!_isAdmin && _userProfile != null)
                 ListTile(
                   leading: const Icon(Icons.report, color: Colors.orange),
-                  title: const Text('Report Hotspot'),
+                  title: const Text('Report Crime'),
                   subtitle: const Text('Submit for admin approval'),
                   onTap: () {
                     Navigator.pop(context);
@@ -702,7 +896,7 @@ void _showLocationOptions(LatLng position) async {
               if (_isAdmin)
                 ListTile(
                   leading: const Icon(Icons.add_location_alt),
-                  title: const Text('Add Hotspot'),
+                  title: const Text('Add Crime Incident'),
                   subtitle: const Text('Immediately published'),
                   onTap: () {
                     Navigator.pop(context);
@@ -883,201 +1077,214 @@ double _estimateRouteDuration(double distanceMeters) {
   return distanceMeters / averageSpeed; // duration in seconds
 }
 
-void _showAddHotspotForm(LatLng position) {
+void _showAddHotspotForm(LatLng position) async {
   final isDesktop = MediaQuery.of(context).size.width >= 600;
 
-  final formKey = GlobalKey<FormState>();
-  final descriptionController = TextEditingController();
-  final dateController = TextEditingController();
-  final timeController = TextEditingController();
+  try {
+    // Fetch crime types from Supabase including category
+    final crimeTypesResponse = await Supabase.instance.client
+        .from('crime_type')
+        .select('*')
+        .order('name');
 
-  List<Map<String, dynamic>> crimeTypes = [
-    {'id': 1, 'name': 'Theft', 'level': 'medium'},
-    {'id': 2, 'name': 'Assault', 'level': 'high'},
-    {'id': 3, 'name': 'Vandalism', 'level': 'low'},
-    {'id': 4, 'name': 'Burglary', 'level': 'high'},
-    {'id': 5, 'name': 'Homicide', 'level': 'critical'},
-  ];
+    if (crimeTypesResponse.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No crime types available.')),
+      );
+      return;
+    }
 
-  if (crimeTypes.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No crime types available.')),
-    );
-    return;
-  }
+    final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
+    final formKey = GlobalKey<FormState>();
+    final descriptionController = TextEditingController();
+    final dateController = TextEditingController();
+    final timeController = TextEditingController();
 
-  String selectedCrimeType = crimeTypes[0]['name'];
-  int selectedCrimeId = crimeTypes[0]['id'];
+    String selectedCrimeType = crimeTypes[0]['name'];
+    int selectedCrimeId = crimeTypes[0]['id'];
+    // ignore: unused_local_variable
+    String selectedCategory = crimeTypes[0]['category'];
 
-  final now = DateTime.now();
-  dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-  timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    final now = DateTime.now();
+    dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+    timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
 
-  void onSubmit() async {
-    if (formKey.currentState!.validate()) {
-      try {
-        final dateTime = DateTime(
-          int.parse(dateController.text.split('-')[0]),
-          int.parse(dateController.text.split('-')[1]),
-          int.parse(dateController.text.split('-')[2]),
-          int.parse(timeController.text.split(':')[0]),
-          int.parse(timeController.text.split(':')[1]),
-        );
-
-        await _saveHotspot(
-          selectedCrimeId.toString(),
-          descriptionController.text,
-          position,
-          dateTime,
-        );
-
-        await _loadHotspots();
-
-        if (mounted) {
-          Navigator.pop(context);
-          _showSnackBar('Hotspot added successfully');
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to save hotspot: ${e.toString()}'),
-              duration: const Duration(seconds: 5),
-            ),
+    void onSubmit() async {
+      if (formKey.currentState!.validate()) {
+        try {
+          final dateTime = DateTime(
+            int.parse(dateController.text.split('-')[0]),
+            int.parse(dateController.text.split('-')[1]),
+            int.parse(dateController.text.split('-')[2]),
+            int.parse(timeController.text.split(':')[0]),
+            int.parse(timeController.text.split(':')[1]),
           );
+
+          await _saveHotspot(
+            selectedCrimeId.toString(),
+            descriptionController.text,
+            position,
+            dateTime,
+          );
+
+          await _loadHotspots();
+
+          if (mounted) {
+            Navigator.pop(context);
+            _showSnackBar('Crime reported successfully');
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to save crime report: ${e.toString()}'),
+                duration: const Duration(seconds: 5),
+              ),
+            );
+          }
         }
       }
     }
-  }
 
-  if (isDesktop) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AddHotspotFormDesktop(
-          formKey: formKey,
-          descriptionController: descriptionController,
-          dateController: dateController,
-          timeController: timeController,
-          crimeTypes: crimeTypes,
-          selectedCrimeType: selectedCrimeType,
-          onCrimeTypeChanged: (value) {
-            selectedCrimeType = value;
-            selectedCrimeId = crimeTypes.firstWhere((c) => c['name'] == value)['id'];
-          },
-          onSubmit: onSubmit,
-        );
-      },
-    );
-  } else {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return SingleChildScrollView(
-          child: Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              left: 16,
-              right: 16,
-              top: 16,
-            ),
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<String>(
-                    value: selectedCrimeType,
-                    decoration: const InputDecoration(
-                      labelText: 'Crime Type',
-                      border: OutlineInputBorder(),
+    if (isDesktop) {
+      showDialog(
+        context: context,
+        builder: (context) {
+          return AddHotspotFormDesktop(
+            formKey: formKey,
+            descriptionController: descriptionController,
+            dateController: dateController,
+            timeController: timeController,
+            crimeTypes: crimeTypes,
+            selectedCrimeType: selectedCrimeType,
+            onCrimeTypeChanged: (value) {
+              final selected = crimeTypes.firstWhere((c) => c['name'] == value);
+              selectedCrimeType = value;
+              selectedCrimeId = selected['id'];
+              selectedCategory = selected['category'];
+            },
+            onSubmit: onSubmit,
+          );
+        },
+      );
+    } else {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (context) {
+          return SingleChildScrollView(
+            child: Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                left: 16,
+                right: 16,
+                top: 16,
+              ),
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: selectedCrimeType,
+                      decoration: const InputDecoration(
+                        labelText: 'Crime Type',
+                        border: OutlineInputBorder(),
+                      ),
+items: crimeTypes.map((crimeType) {
+  return DropdownMenuItem<String>(
+    value: crimeType['name'],
+    child: Text(
+      '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+      style: const TextStyle(fontSize: 14),
+      overflow: TextOverflow.ellipsis, // Handles long text gracefully
+    ),
+  );
+}).toList(),
+                      onChanged: (newValue) {
+                        if (newValue != null) {
+                          final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
+                          selectedCrimeType = newValue;
+                          selectedCrimeId = selected['id'];
+                          selectedCategory = selected['category'];
+                        }
+                      },
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Please select a crime type';
+                        }
+                        return null;
+                      },
                     ),
-                    items: crimeTypes.map((crimeType) {
-                      return DropdownMenuItem<String>(
-                        value: crimeType['name'],
-                        child: Text(crimeType['name']),
-                      );
-                    }).toList(),
-                    onChanged: (newValue) {
-                      if (newValue != null) {
-                        selectedCrimeType = newValue;
-                        selectedCrimeId = crimeTypes.firstWhere(
-                          (crime) => crime['name'] == newValue,
-                        )['id'];
-                      }
-                    },
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please select a crime type';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: descriptionController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description (optional)',
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: descriptionController,
+                      decoration: const InputDecoration(
+                        labelText: 'Description (optional)',
+                        border: OutlineInputBorder(),
+                      ),
+                      maxLines: 3,
                     ),
-                    maxLines: 3,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: dateController,
-                    decoration: const InputDecoration(
-                      labelText: 'Date',
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: dateController,
+                      decoration: const InputDecoration(
+                        labelText: 'Date',
+                        border: OutlineInputBorder(),
+                      ),
+                      readOnly: true,
+                      onTap: () async {
+                        DateTime? pickedDate = await showDatePicker(
+                          context: context,
+                          initialDate: now,
+                          firstDate: DateTime(2000),
+                          lastDate: DateTime(2101),
+                        );
+                        if (pickedDate != null) {
+                          dateController.text =
+                              "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                        }
+                      },
                     ),
-                    readOnly: true,
-                    onTap: () async {
-                      DateTime? pickedDate = await showDatePicker(
-                        context: context,
-                        initialDate: now,
-                        firstDate: DateTime(2000),
-                        lastDate: DateTime(2101),
-                      );
-                      if (pickedDate != null) {
-                        dateController.text =
-                            "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: timeController,
-                    decoration: const InputDecoration(
-                      labelText: 'Time',
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: timeController,
+                      decoration: const InputDecoration(
+                        labelText: 'Time',
+                        border: OutlineInputBorder(),
+                      ),
+                      readOnly: true,
+                      onTap: () async {
+                        TimeOfDay? pickedTime = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay.now(),
+                        );
+                        if (pickedTime != null) {
+                          timeController.text =
+                              "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                        }
+                      },
                     ),
-                    readOnly: true,
-                    onTap: () async {
-                      TimeOfDay? pickedTime = await showTimePicker(
-                        context: context,
-                        initialTime: TimeOfDay.now(),
-                      );
-                      if (pickedTime != null) {
-                        timeController.text =
-                            "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: onSubmit,
-                      child: const Text('Submit'),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: onSubmit,
+                        child: const Text('Submit'),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+    }
+  } catch (e) {
+    if (mounted) {
+      _showSnackBar('Error loading crime types: ${e.toString()}');
+    }
   }
 }
 
@@ -1142,6 +1349,8 @@ Future<void> _showMobileReportForm(
 
   String selectedCrimeType = crimeTypes[0]['name'];
   int selectedCrimeId = crimeTypes[0]['id'];
+  // ignore: unused_local_variable
+  String selectedCategory = crimeTypes[0]['category'];
   bool isSubmitting = false;
 
   final result = await showModalBottomSheet(
@@ -1168,20 +1377,25 @@ Future<void> _showMobileReportForm(
                       labelText: 'Crime Type',
                       border: OutlineInputBorder(),
                     ),
-                    items: crimeTypes.map((crimeType) {
-                      return DropdownMenuItem<String>(
-                        value: crimeType['name'],
-                        child: Text(crimeType['name']),
-                      );
-                    }).toList(),
+items: crimeTypes.map((crimeType) {
+  return DropdownMenuItem<String>(
+    value: crimeType['name'],
+    child: Text(
+      '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+      style: const TextStyle(fontSize: 14),
+      overflow: TextOverflow.ellipsis, // Handles long text gracefully
+    ),
+  );
+}).toList(),
                     onChanged: isSubmitting
                         ? null
                         : (newValue) {
                             if (newValue != null) {
+                              final selected = crimeTypes.firstWhere((c) => c['name'] == newValue);
                               setState(() {
                                 selectedCrimeType = newValue;
-                                selectedCrimeId = crimeTypes
-                                    .firstWhere((c) => c['name'] == newValue)['id'];
+                                selectedCrimeId = selected['id'];
+                                selectedCategory = selected['category'];
                               });
                             }
                           },
@@ -1293,10 +1507,268 @@ Future<void> _showMobileReportForm(
   );
 
   if (result == true && mounted) {
-    _showSnackBar('Hotspot reported successfully. Waiting for admin approval.');
+    _showSnackBar('Crime reported successfully. Waiting for admin approval.');
   }
 }
 
+
+void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
+  try {
+    // Fetch crime types from Supabase including category
+    final crimeTypesResponse = await Supabase.instance.client
+        .from('crime_type')
+        .select('*')
+        .order('name');
+
+    final formKey = GlobalKey<FormState>();
+    final descriptionController = TextEditingController(text: hotspot['description'] ?? '');
+    final dateController = TextEditingController(
+      text: DateFormat('yyyy-MM-dd').format(DateTime.parse(hotspot['time']).toLocal()),
+    );
+    final timeController = TextEditingController(
+      text: DateFormat('HH:mm').format(DateTime.parse(hotspot['time']).toLocal()),
+    );
+
+    final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
+    String selectedCrimeType = hotspot['crime_type']['name'];
+    int selectedCrimeId = hotspot['type_id'];
+    // ignore: unused_local_variable
+    String selectedCategory = hotspot['crime_type']['category'] ?? 'Unknown';
+    
+    // Add active status variables
+    String selectedActiveStatus = hotspot['active_status'] ?? 'active';
+    bool isActiveStatus = selectedActiveStatus == 'active';
+
+    // Desktop/Web view
+    if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
+      showDialog(
+        context: context,
+        builder: (context) => Dialog(
+          child: EditHotspotFormDesktop(
+            hotspot: hotspot,
+            crimeTypes: crimeTypes,
+            onUpdate: (id, crimeId, description, time, activeStatus) async {
+              try {
+                await _updateHotspot(id, crimeId, description, time, activeStatus);
+                await _loadHotspots();
+                if (mounted) {
+                  Navigator.pop(context);
+                  _showSnackBar('Crime report updated');
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to update crime report: $e')),
+                  );
+                }
+              }
+            },
+            onCancel: () {
+              _showHotspotDetails(hotspot);
+            },
+            isAdmin: _isAdmin,
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Mobile view (bottom sheet)
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
+          left: 16.0,
+          right: 16.0,
+          top: 16.0,
+        ),
+        child: StatefulBuilder(
+          builder: (context, setState) {
+            return Form(
+              key: formKey,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: selectedCrimeType,
+                      decoration: const InputDecoration(labelText: 'Crime Type'),
+items: crimeTypes.map((crimeType) {
+  return DropdownMenuItem<String>(
+    value: crimeType['name'],
+    child: Text(
+      '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+      style: const TextStyle(fontSize: 14),
+      overflow: TextOverflow.ellipsis, // Handles long text gracefully
+    ),
+  );
+}).toList(),
+                      onChanged: (newValue) {
+                        if (newValue != null) {
+                          final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
+                          setState(() {
+                            selectedCrimeType = newValue;
+                            selectedCrimeId = selected['id'];
+                            selectedCategory = selected['category'];
+                          });
+                        }
+                      },
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Please select a crime type';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: descriptionController,
+                      decoration: const InputDecoration(labelText: 'Description (optional)'),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: dateController,
+                      decoration: const InputDecoration(labelText: 'Date'),
+                      readOnly: true,
+                      onTap: () async {
+                        DateTime? pickedDate = await showDatePicker(
+                          context: context,
+                          initialDate: DateTime.parse(hotspot['time']),
+                          firstDate: DateTime(2000),
+                          lastDate: DateTime(2101),
+                        );
+                        if (pickedDate != null) {
+                          dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: timeController,
+                      decoration: const InputDecoration(labelText: 'Time'),
+                      readOnly: true,
+                      onTap: () async {
+                        TimeOfDay? pickedTime = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
+                        );
+                        if (pickedTime != null) {
+                          final now = DateTime.now();
+                          final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
+                          timeController.text = DateFormat('HH:mm').format(formatted);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    // Add active status toggle for admins only
+                    if (_isAdmin)
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Active Status:',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                            ),
+                            Row(
+                              children: [
+                                Switch(
+                                  value: isActiveStatus,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      isActiveStatus = value;
+                                      selectedActiveStatus = value ? 'active' : 'inactive';
+                                    });
+                                  },
+                                  activeColor: Colors.green,
+                                  inactiveThumbColor: Colors.grey,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  isActiveStatus ? 'Active' : 'Inactive',
+                                  style: TextStyle(
+                                    color: isActiveStatus ? Colors.green : Colors.grey,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        ElevatedButton(
+                          onPressed: () async {
+                            if (formKey.currentState!.validate()) {
+                              try {
+                                final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
+                                await _updateHotspot(
+                                  hotspot['id'],
+                                  selectedCrimeId,
+                                  descriptionController.text,
+                                  dateTime,
+                                  selectedActiveStatus,
+                                );
+                                await _loadHotspots();
+                                if (mounted) {
+                                  Navigator.pop(context);
+                                  _showSnackBar('Hotspot updated successfully');
+                                }
+                              } catch (e) {
+                                print('Error updating hotspot: $e');
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Failed to update hotspot: ${e.toString()}'),
+                                      duration: const Duration(seconds: 5),
+                                    ),
+                                  );
+                                }
+                              }
+                            }
+                          },
+                          child: const Text('Update'),
+                        ),
+                        ElevatedButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              _showHotspotDetails(hotspot);
+                            });
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.grey[500],
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  } catch (e) {
+    if (mounted) {
+      _showSnackBar('Error loading crime types: ${e.toString()}');
+    }
+  }
+}
 
 
   Future<void> _reportHotspot(
@@ -1308,7 +1780,7 @@ Future<void> _showMobileReportForm(
     try {
       final insertData = {
         'type_id': typeId,
-        'description': description.isNotEmpty ? description : null,
+        'description': description.trim().isNotEmpty ? description.trim() : null,
         'location': 'POINT(${position.longitude} ${position.latitude})',
         'time': dateTime.toIso8601String(),
         'status': 'pending',
@@ -1342,14 +1814,14 @@ Future<void> _showMobileReportForm(
           .from('hotspot')
           .insert({
             'type_id': int.parse(typeId),
-            'description': description,
+            'description': description.trim().isNotEmpty ? description.trim() : null,
             'location': 'POINT(${position.longitude} ${position.latitude})',
             'time': dateTime.toIso8601String(),
             'created_by': _userProfile?['id'],
           });
 
       if (mounted) {
-        _showSnackBar('Hotspot saved successfully');
+        _showSnackBar('Crime record saved');
       }
     } catch (e) {
       _showSnackBar('Failed to save hotspot: ${e.toString()}');
@@ -1704,7 +2176,7 @@ Widget _buildMap() {
         ],
       ),
 
-   // Hotspots layer with real-time updates
+  // Hotspots layer with real-time updates
 Consumer<HotspotFilterService>(
   builder: (context, filterService, child) {
     return MarkerLayer(
@@ -1731,14 +2203,12 @@ Consumer<HotspotFilterService>(
           return true;
         }
 
-        // 2. Show user's own hotspots regardless of active_status if:
-        //    - It's pending and pending filter is enabled
-        //    - It's rejected (will be inactive) and rejected filter is enabled
+        // 2. Always show user's own hotspots regardless of status
         if (isOwnHotspot) {
-          if ((status == 'pending' && filterService.showPending) ||
-              (status == 'rejected' && filterService.showRejected)) {
-            return true;
-          }
+          // Apply filter service settings for pending/rejected if needed
+          if (status == 'pending' && !filterService.showPending) return false;
+          if (status == 'rejected' && !filterService.showRejected) return false;
+          return true;
         }
 
         return false;
@@ -1851,6 +2321,8 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
   final activeStatus = hotspot['active_status'] ?? 'active';
   final isOwner = hotspot['created_by'] == _userProfile?['id'] ||
       hotspot['reported_by'] == _userProfile?['id'];
+  final crimeType = hotspot['crime_type'];
+  final category = crimeType['category'] ?? 'Unknown Category';
 
   // Desktop/Web View
   if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
@@ -1886,12 +2358,22 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              title: Text('Type: ${hotspot['crime_type']['name']}'),
-              subtitle: Text('Level: ${hotspot['crime_type']['level']}'),
+              title: Text('Type: ${crimeType['name']}'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Category: $category'),
+                  Text('Level: ${crimeType['level']}'),
+                ],
+              ),
             ),
             ListTile(
               title: const Text('Description:'),
-              subtitle: Text(hotspot['description'] ?? 'No description'),
+              subtitle: Text(
+                (hotspot['description'] == null || hotspot['description'].toString().trim().isEmpty) 
+                    ? 'No description' 
+                    : hotspot['description'],
+              ),
             ),
             ListTile(
               title: const Text('Location:'),
@@ -2013,24 +2495,23 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
                   ],
                 ),
               ),
-if (_isAdmin && status == 'approved')
-  Padding(
-    padding: const EdgeInsets.symmetric(vertical: 16.0),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        ElevatedButton(
-          onPressed: () {
-            Navigator.pop(context);
-            _showEditHotspotForm(hotspot);
-          },
-          child: const Text('Edit'),
-        ),
-        ElevatedButton(
-          onPressed: () => _deleteHotspot(hotspot['id']),
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-          child: const Text('Delete'),
-
+            if (_isAdmin && status == 'approved')
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showEditHotspotForm(hotspot);
+                      },
+                      child: const Text('Edit'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => _deleteHotspot(hotspot['id']),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                      child: const Text('Delete'),
                     ),
                   ],
                 ),
@@ -2050,7 +2531,7 @@ void _showRejectDialog(int hotspotId) {
   showDialog(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Reject Hotspot'),
+      title: const Text('Reject Report'),
       content: TextField(
         controller: reasonController,
         decoration: const InputDecoration(
@@ -2090,7 +2571,7 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
 
     if (mounted) {
       Navigator.pop(context);
-      _showSnackBar(approve ? 'Hotspot approved' : 'Hotspot rejected and deactivated');
+      _showSnackBar(approve ? 'Report approved' : 'Report rejected and deactivated');
     }
   } catch (e) {
     if (mounted) {
@@ -2098,247 +2579,6 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
     }
   }
 }
-
-void _showEditHotspotForm(Map<String, dynamic> hotspot) {
-  final formKey = GlobalKey<FormState>();
-  final descriptionController = TextEditingController(text: hotspot['description'] ?? '');
-  final dateController = TextEditingController(text: DateTime.parse(hotspot['time']).toLocal().toString().split(' ')[0]);
-  final timeController = TextEditingController(text: DateFormat('HH:mm').format(DateTime.parse(hotspot['time']).toLocal()));
-
-  List<Map<String, dynamic>> crimeTypes = [
-    {'id': 1, 'name': 'Theft', 'level': 'medium'},
-    {'id': 2, 'name': 'Assault', 'level': 'high'},
-    {'id': 3, 'name': 'Vandalism', 'level': 'low'},
-    {'id': 4, 'name': 'Burglary', 'level': 'high'},
-    {'id': 5, 'name': 'Homicide', 'level': 'critical'},
-  ];
-
-  String selectedCrimeType = hotspot['crime_type']['name'];
-  int selectedCrimeId = hotspot['type_id'];
-  
-  // Add active status variables
-  String selectedActiveStatus = hotspot['active_status'] ?? 'active';
-  bool isActiveStatus = selectedActiveStatus == 'active';
-
-// Desktop/Web view
-if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
-  showDialog(
-    context: context,
-    builder: (context) => Dialog(
-      child: EditHotspotFormDesktop(
-        hotspot: hotspot,
-        onUpdate: (id, crimeId, description, time, activeStatus) async {
-          try {
-            await _updateHotspot(id, crimeId, description, time, activeStatus);
-            await _loadHotspots();
-            if (mounted) {
-              Navigator.pop(context);
-              _showSnackBar('Hotspot updated successfully');
-            }
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Failed to update hotspot: $e')),
-              );
-            }
-          }
-        },
-        onCancel: () {
-          _showHotspotDetails(hotspot);
-        },
-        isAdmin: _isAdmin, // Add this line
-      ),
-    ),
-  );
-  return;
-}
-
-  // Mobile view (bottom sheet)
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    builder: (context) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
-        left: 16.0,
-        right: 16.0,
-        top: 16.0,
-      ),
-      child: StatefulBuilder(
-        builder: (context, setState) {
-          return Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<String>(
-                    value: selectedCrimeType,
-                    decoration: const InputDecoration(labelText: 'Crime Type'),
-                    items: crimeTypes.map((crimeType) {
-                      return DropdownMenuItem<String>(
-                        value: crimeType['name'],
-                        child: Text(crimeType['name']),
-                      );
-                    }).toList(),
-                    onChanged: (newValue) {
-                      if (newValue != null) {
-                        setState(() {
-                          selectedCrimeType = newValue;
-                          selectedCrimeId = crimeTypes.firstWhere((crime) => crime['name'] == newValue)['id'];
-                        });
-                      }
-                    },
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please select a crime type';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: descriptionController,
-                    decoration: const InputDecoration(labelText: 'Description (optional)'),
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: dateController,
-                    decoration: const InputDecoration(labelText: 'Date'),
-                    readOnly: true,
-                    onTap: () async {
-                      DateTime? pickedDate = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.parse(hotspot['time']),
-                        firstDate: DateTime(2000),
-                        lastDate: DateTime(2101),
-                      );
-                      if (pickedDate != null) {
-                        dateController.text = pickedDate.toString().split(' ')[0];
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: timeController,
-                    decoration: const InputDecoration(labelText: 'Time'),
-                    readOnly: true,
-                    onTap: () async {
-                      TimeOfDay? pickedTime = await showTimePicker(
-                        context: context,
-                        initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
-                      );
-                      if (pickedTime != null) {
-                        final now = DateTime.now();
-                        final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
-                        timeController.text = DateFormat('HH:mm').format(formatted);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  // Add active status toggle for admins only
-                  if (_isAdmin)
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey.shade300),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Active Status:',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                          ),
-                          Row(
-                            children: [
-                              Switch(
-                                value: isActiveStatus,
-                                onChanged: (value) {
-                                  setState(() {
-                                    isActiveStatus = value;
-                                    selectedActiveStatus = value ? 'active' : 'inactive';
-                                  });
-                                },
-                                activeColor: Colors.green,
-                                inactiveThumbColor: Colors.grey,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                isActiveStatus ? 'Active' : 'Inactive',
-                                style: TextStyle(
-                                  color: isActiveStatus ? Colors.green : Colors.grey,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  const SizedBox(height: 24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      ElevatedButton(
-                        onPressed: () async {
-                          if (formKey.currentState!.validate()) {
-                            try {
-                              final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
-                              await _updateHotspot(
-                                hotspot['id'],
-                                selectedCrimeId,
-                                descriptionController.text,
-                                dateTime,
-                                selectedActiveStatus,
-                              );
-                              await _loadHotspots();
-                              if (mounted) {
-                                Navigator.pop(context);
-                                _showSnackBar('Hotspot updated successfully');
-                              }
-                            } catch (e) {
-                              print('Error updating hotspot: $e');
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Failed to update hotspot: ${e.toString()}'),
-                                    duration: const Duration(seconds: 5),
-                                  ),
-                                );
-                              }
-                            }
-                          }
-                        },
-                        child: const Text('Update'),
-                      ),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            _showHotspotDetails(hotspot);
-                          });
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.grey[500],
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('Cancel'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    ),
-  );
-}
-
 
 
 
@@ -2348,10 +2588,7 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
       'type_id': typeId,
       'description': description,
       'time': dateTime.toIso8601String(),
-      // Always include active_status if provided, regardless of admin status
-      // The UI should prevent non-admins from changing this anyway
       if (activeStatus != null) 'active_status': activeStatus,
-      // Add updated_at timestamp to ensure change is detected
       'updated_at': DateTime.now().toIso8601String(),
     };
 
@@ -2359,10 +2596,9 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
         .from('hotspot')
         .update(updateData)
         .eq('id', id)
-        .select('''*, crime_type: type_id (id, name, level)''')
+        .select('''*, crime_type: type_id (id, name, level, category)''')
         .single();
 
-    // Force a refresh of the hotspots list to ensure UI consistency
     if (mounted) {
       await _loadHotspots();
     }
@@ -2387,11 +2623,11 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
           .eq('id', id);
 
       if (mounted) {
-        _showSnackBar('Hotspot deleted successfully');
+        _showSnackBar('Crime report deleted successfully');
         Navigator.pop(context);
       }
     } catch (e) {
-      _showSnackBar('Failed to delete hotspot: ${e.toString()}');
+      _showSnackBar('Failed to delete crime report: ${e.toString()}');
     }
   }
 

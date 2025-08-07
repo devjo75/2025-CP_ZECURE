@@ -22,6 +22,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _contactNumberController = TextEditingController();
+  final _birthdayController = TextEditingController();
   
   DateTime? _selectedDate;
   String? _selectedGender;
@@ -29,17 +30,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
 
-  Future<void> _selectDate(BuildContext context) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime(1900),
-      lastDate: DateTime.now(),
-    );
-    if (picked != null && picked != _selectedDate) {
-      setState(() => _selectedDate = picked);
-    }
+Future<void> _selectDate(BuildContext context) async {
+  final DateTime? picked = await showDatePicker(
+    context: context,
+    initialDate: DateTime.now(),
+    firstDate: DateTime(1900),
+    lastDate: DateTime.now(),
+  );
+  if (picked != null && picked != _selectedDate) {
+    setState(() {
+      _selectedDate = picked;
+      _birthdayController.text = "${picked.toLocal()}".split(' ')[0]; // Formats as YYYY-MM-DD
+      // Or use a more formatted date:
+      // _birthdayController.text = DateFormat('MMMM d, y').format(picked);
+    });
   }
+}
 
 Future<void> _register() async {
   if (!_formKey.currentState!.validate()) return;
@@ -227,19 +233,19 @@ if (isWeb) ...[
             icon: Icons.credit_card_outlined,
           ),
           const SizedBox(height: 16),
-          _buildFormField(
-            controller: TextEditingController(),
-            labelText: 'Birthday',
-            icon: Icons.calendar_today,
-            readOnly: true,
-            onTap: () => _selectDate(context),
-            validator: (value) {
-              if (_selectedDate == null) {
-                return 'Please select your birthday';
-              }
-              return null;
-            },
-          ),
+_buildFormField(
+  controller: _birthdayController,
+  labelText: 'Birthday',
+  icon: Icons.calendar_today,
+  readOnly: true,
+  onTap: () => _selectDate(context),
+  validator: (value) {
+    if (_selectedDate == null) {
+      return 'Please select your birthday';
+    }
+    return null;
+  },
+),
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
             decoration: InputDecoration(
@@ -414,19 +420,19 @@ if (isWeb) ...[
                         icon: Icons.credit_card_outlined,
                       ),
                       const SizedBox(height: 16),
-                      _buildFormField(
-    controller: TextEditingController(),
-    labelText: 'Birthday',
-    icon: Icons.calendar_today,
-    readOnly: true,
-    onTap: () => _selectDate(context),
-    validator: (value) {
-      if (_selectedDate == null) {
-        return 'Please select your birthday';
-      }
-      return null;
-    },
-  ),
+_buildFormField(
+  controller: _birthdayController,
+  labelText: 'Birthday',
+  icon: Icons.calendar_today,
+  readOnly: true,
+  onTap: () => _selectDate(context),
+  validator: (value) {
+    if (_selectedDate == null) {
+      return 'Please select your birthday';
+    }
+    return null;
+  },
+),
   const SizedBox(height: 16),
   DropdownButtonFormField<String>(
     decoration: InputDecoration(

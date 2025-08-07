@@ -5,14 +5,16 @@ class EditHotspotFormDesktop extends StatefulWidget {
   final Map<String, dynamic> hotspot;
   final Future<void> Function(int id, int crimeId, String description, DateTime time, String activeStatus) onUpdate;
   final VoidCallback onCancel;
-  final bool isAdmin; // Add this parameter
+  final bool isAdmin;
+  final List<Map<String, dynamic>> crimeTypes; // Now properly included in constructor
 
   const EditHotspotFormDesktop({
     super.key,
     required this.hotspot,
     required this.onUpdate,
     required this.onCancel,
-    required this.isAdmin, // Add this parameter
+    required this.isAdmin,
+    required this.crimeTypes,
   });
 
   @override
@@ -24,36 +26,23 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
   late TextEditingController _descriptionController;
   late TextEditingController _dateController;
   late TextEditingController _timeController;
-
-  late List<Map<String, dynamic>> _crimeTypes;
   late String _selectedCrimeType;
   late int _selectedCrimeId;
-
-  // Add active status variables
   late String _selectedActiveStatus;
   late bool _isActiveStatus;
+  bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-
-    _crimeTypes = [
-      {'id': 1, 'name': 'Theft', 'level': 'medium'},
-      {'id': 2, 'name': 'Assault', 'level': 'high'},
-      {'id': 3, 'name': 'Vandalism', 'level': 'low'},
-      {'id': 4, 'name': 'Burglary', 'level': 'high'},
-      {'id': 5, 'name': 'Homicide', 'level': 'critical'},
-    ];
-
     _descriptionController = TextEditingController(text: widget.hotspot['description'] ?? '');
+    
     final dateTime = DateTime.parse(widget.hotspot['time']).toLocal();
     _dateController = TextEditingController(text: dateTime.toString().split(' ')[0]);
     _timeController = TextEditingController(text: DateFormat('HH:mm').format(dateTime));
 
     _selectedCrimeType = widget.hotspot['crime_type']['name'];
     _selectedCrimeId = widget.hotspot['type_id'];
-    
-    // Initialize active status
     _selectedActiveStatus = widget.hotspot['active_status'] ?? 'active';
     _isActiveStatus = _selectedActiveStatus == 'active';
   }
@@ -74,21 +63,52 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
     );
-    if (pickedDate != null) {
-      _dateController.text = pickedDate.toString().split(' ')[0];
+    if (pickedDate != null && mounted) {
+      setState(() {
+        _dateController.text = pickedDate.toString().split(' ')[0];
+      });
     }
   }
 
   Future<void> _pickTime() async {
-    TimeOfDay initialTime = TimeOfDay.fromDateTime(DateTime.tryParse('${_dateController.text} ${_timeController.text}') ?? DateTime.now());
+    TimeOfDay initialTime = TimeOfDay.fromDateTime(
+      DateTime.tryParse('${_dateController.text} ${_timeController.text}') ?? DateTime.now()
+    );
     final pickedTime = await showTimePicker(
       context: context,
       initialTime: initialTime,
     );
-    if (pickedTime != null) {
-      final now = DateTime.now();
-      final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
-      _timeController.text = DateFormat('HH:mm').format(formatted);
+    if (pickedTime != null && mounted) {
+      setState(() {
+        final now = DateTime.now();
+        final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
+        _timeController.text = DateFormat('HH:mm').format(formatted);
+      });
+    }
+  }
+
+  Future<void> _submitForm() async {
+    if (!_formKey.currentState!.validate() || _isSubmitting) return;
+
+    setState(() => _isSubmitting = true);
+    try {
+      final dateTime = DateTime.parse('${_dateController.text} ${_timeController.text}');
+      await widget.onUpdate(
+        widget.hotspot['id'],
+        _selectedCrimeId,
+        _descriptionController.text,
+        dateTime,
+        _selectedActiveStatus,
+      );
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update hotspot: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -104,21 +124,30 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
           children: [
             DropdownButtonFormField<String>(
               value: _selectedCrimeType,
-              decoration: const InputDecoration(labelText: 'Crime Type'),
-              items: _crimeTypes.map((crimeType) {
+              decoration: const InputDecoration(
+                labelText: 'Crime Type',
+                border: OutlineInputBorder(),
+              ),
+              items: widget.crimeTypes.map((crimeType) {
                 return DropdownMenuItem<String>(
                   value: crimeType['name'],
-                  child: Text(crimeType['name']),
+                  child: Text(
+                    '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                    style: const TextStyle(fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 );
               }).toList(),
-              onChanged: (newValue) {
-                if (newValue != null) {
-                  setState(() {
-                    _selectedCrimeType = newValue;
-                    _selectedCrimeId = _crimeTypes.firstWhere((c) => c['name'] == newValue)['id'];
-                  });
-                }
-              },
+              onChanged: _isSubmitting
+                  ? null
+                  : (newValue) {
+                      if (newValue != null && mounted) {
+                        setState(() {
+                          _selectedCrimeType = newValue;
+                          _selectedCrimeId = widget.crimeTypes.firstWhere((c) => c['name'] == newValue)['id'];
+                        });
+                      }
+                    },
               validator: (value) {
                 if (value == null || value.isEmpty) {
                   return 'Please select a crime type';
@@ -129,23 +158,33 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
             const SizedBox(height: 16),
             TextFormField(
               controller: _descriptionController,
-              decoration: const InputDecoration(labelText: 'Description (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Description (optional)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+              enabled: !_isSubmitting,
             ),
             const SizedBox(height: 16),
             TextFormField(
               controller: _dateController,
-              decoration: const InputDecoration(labelText: 'Date'),
+              decoration: const InputDecoration(
+                labelText: 'Date',
+                border: OutlineInputBorder(),
+              ),
               readOnly: true,
-              onTap: _pickDate,
+              onTap: _isSubmitting ? null : _pickDate,
             ),
             const SizedBox(height: 16),
             TextFormField(
               controller: _timeController,
-              decoration: const InputDecoration(labelText: 'Time'),
+              decoration: const InputDecoration(
+                labelText: 'Time',
+                border: OutlineInputBorder(),
+              ),
               readOnly: true,
-              onTap: _pickTime,
+              onTap: _isSubmitting ? null : _pickTime,
             ),
-            // Add active status toggle for admins only
             if (widget.isAdmin)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -166,12 +205,16 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
                         children: [
                           Switch(
                             value: _isActiveStatus,
-                            onChanged: (value) {
-                              setState(() {
-                                _isActiveStatus = value;
-                                _selectedActiveStatus = value ? 'active' : 'inactive';
-                              });
-                            },
+                            onChanged: _isSubmitting
+                                ? null
+                                : (value) {
+                                    if (mounted) {
+                                      setState(() {
+                                        _isActiveStatus = value;
+                                        _selectedActiveStatus = value ? 'active' : 'inactive';
+                                      });
+                                    }
+                                  },
                             activeColor: Colors.green,
                             inactiveThumbColor: Colors.grey,
                           ),
@@ -194,32 +237,27 @@ class _EditHotspotFormDesktopState extends State<EditHotspotFormDesktop> {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 ElevatedButton(
-                  onPressed: () async {
-                    if (_formKey.currentState!.validate()) {
-                      try {
-                        final dateTime = DateTime.parse('${_dateController.text} ${_timeController.text}');
-                        await widget.onUpdate(
-                          widget.hotspot['id'],
-                          _selectedCrimeId,
-                          _descriptionController.text,
-                          dateTime,
-                          _selectedActiveStatus, // Pass the active status
-                        );
-                        if (mounted) Navigator.pop(context);
-                      } catch (e) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Failed to update hotspot: $e')),
-                        );
-                      }
-                    }
-                  },
-                  child: const Text('Update'),
+                  onPressed: _isSubmitting ? null : _submitForm,
+                  child: _isSubmitting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation(Colors.white),
+                          ),
+                        )
+                      : const Text('Update'),
                 ),
                 ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    widget.onCancel();
-                  },
+                  onPressed: _isSubmitting
+                      ? null
+                      : () {
+                          if (mounted) {
+                            Navigator.pop(context);
+                            widget.onCancel();
+                          }
+                        },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.grey[500],
                     foregroundColor: Colors.white,

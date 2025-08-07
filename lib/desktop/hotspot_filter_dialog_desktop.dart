@@ -4,8 +4,13 @@ import 'package:zecure/services/hotspot_filter_service.dart';
 
 class HotspotFilterDialogDesktop extends StatelessWidget {
   final Map<String, dynamic>? userProfile;
+  final Widget Function(BuildContext, String, IconData, Color, bool, void Function(bool)) buildFilterToggle;
 
-  const HotspotFilterDialogDesktop({super.key, required this.userProfile, required Widget Function(BuildContext context, String label, IconData icon, Color color, bool value, Function(bool p1) onChanged) buildFilterToggle});
+  const HotspotFilterDialogDesktop({
+    super.key, 
+    required this.userProfile,
+    required this.buildFilterToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -22,10 +27,13 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Filter Hotspots',
+                      'Filter Crimes',
                       style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
+                    
+                    // Severity filters
+                    const Text('Severity:', style: TextStyle(fontWeight: FontWeight.bold)),
                     _buildFilterToggle(
                       context,
                       'Critical',
@@ -58,7 +66,71 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                       filterService.showLow,
                       (value) => filterService.toggleLow(),
                     ),
+                    const SizedBox(height: 16),
+                    
+                    // Category filters
+                    const Text('Categories:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    _buildFilterToggle(
+                      context,
+                      'Property',
+                      Icons.house,
+                      Colors.blue,
+                      filterService.showProperty,
+                      (value) => filterService.toggleProperty(),
+                    ),
+                    _buildFilterToggle(
+                      context,
+                      'Violent',
+                      Icons.warning,
+                      Colors.red,
+                      filterService.showViolent,
+                      (value) => filterService.toggleViolent(),
+                    ),
+                    _buildFilterToggle(
+                      context,
+                      'Drug',
+                      Icons.medical_services,
+                      Colors.purple,
+                      filterService.showDrug,
+                      (value) => filterService.toggleDrug(),
+                    ),
+                    _buildFilterToggle(
+                      context,
+                      'Public Order',
+                      Icons.gavel,
+                      Colors.orange,
+                      filterService.showPublicOrder,
+                      (value) => filterService.togglePublicOrder(),
+                    ),
+                    _buildFilterToggle(
+                      context,
+                      'Financial',
+                      Icons.attach_money,
+                      Colors.green,
+                      filterService.showFinancial,
+                      (value) => filterService.toggleFinancial(),
+                    ),
+                    _buildFilterToggle(
+                      context,
+                      'Traffic',
+                      Icons.directions_car,
+                      Colors.blueGrey,
+                      filterService.showTraffic,
+                      (value) => filterService.toggleTraffic(),
+                    ),
+                      _buildFilterToggle(
+                        context,
+                        'Alerts',
+                        Icons.notification_important,
+                        Colors.deepPurple,
+                        filterService.showAlerts,
+                        (value) => filterService.toggleAlerts(),
+                      ),
+                    const SizedBox(height: 16),
+                    
+                    // Status filters (only for logged-in users)
                     if (userProfile != null) ...[
+                      const Text('Status:', style: TextStyle(fontWeight: FontWeight.bold)),
                       _buildFilterToggle(
                         context,
                         'Pending',
@@ -75,8 +147,10 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                         filterService.showRejected,
                         (value) => filterService.toggleRejected(),
                       ),
+                      const SizedBox(height: 16),
                     ],
-                    const SizedBox(height: 16),
+                    
+                    // Close button
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
@@ -95,7 +169,7 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
   }
 }
 
-// You can keep this utility in the same file or move to a shared utilities file
+// Utility function for building filter toggles
 Widget _buildFilterToggle(
   BuildContext context,
   String label,
@@ -109,5 +183,6 @@ Widget _buildFilterToggle(
     secondary: Icon(icon, color: color),
     value: value,
     onChanged: onChanged,
+    dense: true,
   );
 }

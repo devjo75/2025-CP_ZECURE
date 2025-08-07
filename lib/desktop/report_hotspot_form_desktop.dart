@@ -93,7 +93,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Hotspot reported successfully. Waiting for admin approval.')),
+          const SnackBar(content: Text('Crime reported successfully. Waiting for admin approval.')),
         );
       }
     } on FormatException {
@@ -105,7 +105,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to report hotspot: $e')),
+          SnackBar(content: Text('Failed to report crime: $e')),
         );
       }
     } finally {
@@ -132,17 +132,23 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
               items: widget.crimeTypes.map((crimeType) {
                 return DropdownMenuItem<String>(
                   value: crimeType['name'],
-                  child: Text(crimeType['name']),
+                  child: Text(
+                    '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                    style: const TextStyle(fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 );
               }).toList(),
-              onChanged: (newValue) {
-                if (newValue != null && mounted) {
-                  setState(() {
-                    _selectedCrimeType = newValue;
-                    _selectedCrimeId = widget.crimeTypes.firstWhere((c) => c['name'] == newValue)['id'];
-                  });
-                }
-              },
+              onChanged: _isSubmitting
+                  ? null
+                  : (newValue) {
+                      if (newValue != null && mounted) {
+                        setState(() {
+                          _selectedCrimeType = newValue;
+                          _selectedCrimeId = widget.crimeTypes.firstWhere((c) => c['name'] == newValue)['id'];
+                        });
+                      }
+                    },
               validator: (value) {
                 if (value == null || value.isEmpty) {
                   return 'Please select a crime type';
@@ -158,6 +164,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                 border: OutlineInputBorder(),
               ),
               maxLines: 3,
+              enabled: !_isSubmitting,
             ),
             const SizedBox(height: 16),
             TextFormField(
@@ -167,7 +174,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                 border: OutlineInputBorder(),
               ),
               readOnly: true,
-              onTap: _pickDate,
+              onTap: _isSubmitting ? null : _pickDate,
             ),
             const SizedBox(height: 16),
             TextFormField(
@@ -177,13 +184,13 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                 border: OutlineInputBorder(),
               ),
               readOnly: true,
-              onTap: _pickTime,
+              onTap: _isSubmitting ? null : _pickTime,
             ),
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _submitForm,
+                onPressed: _isSubmitting ? null : _submitForm,
                 child: _isSubmitting
                     ? const SizedBox(
                         width: 20,
@@ -200,12 +207,14 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton(
-                onPressed: () {
-                  if (!_isSubmitting && mounted) {
-                    Navigator.pop(context);
-                    widget.onCancel();
-                  }
-                },
+                onPressed: _isSubmitting
+                    ? null
+                    : () {
+                        if (mounted) {
+                          Navigator.pop(context);
+                          widget.onCancel();
+                        }
+                      },
                 child: const Text('Cancel'),
               ),
             ),

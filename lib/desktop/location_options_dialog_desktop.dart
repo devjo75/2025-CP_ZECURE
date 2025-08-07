@@ -77,7 +77,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                 if (!isAdmin && userProfile != null)
                   ListTile(
                     leading: const Icon(Icons.report, color: Colors.orange),
-                    title: const Text('Report Hotspot'),
+                    title: const Text('Report Crime'),
                     subtitle: const Text('Submit for admin approval'),
                     onTap: () {
                       Navigator.pop(context);
@@ -87,7 +87,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                 if (isAdmin)
                   ListTile(
                     leading: const Icon(Icons.add_location_alt),
-                    title: const Text('Add Hotspot'),
+                    title: const Text('Add Crime Incident'),
                     subtitle: const Text('Immediately published'),
                     onTap: () {
                       Navigator.pop(context);

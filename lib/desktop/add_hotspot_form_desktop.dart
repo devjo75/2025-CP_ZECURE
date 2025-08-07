@@ -56,7 +56,11 @@ class _AddHotspotFormDesktopState extends State<AddHotspotFormDesktop> {
                   items: widget.crimeTypes.map((crimeType) {
                     return DropdownMenuItem<String>(
                       value: crimeType['name'],
-                      child: Text(crimeType['name']),
+                      child: Text(
+                        '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                        style: const TextStyle(fontSize: 14),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     );
                   }).toList(),
                   onChanged: (value) {

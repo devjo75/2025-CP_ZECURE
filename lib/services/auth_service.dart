@@ -15,8 +15,10 @@ class AuthService {
     String? extName,
     DateTime? bday,
     String? gender,
-    String? contactNumber, // Add this parameter
+    String? contactNumber,
   }) async {
+    // The database trigger will automatically create the basic user record
+    // We just need to pass the metadata for the trigger to use
     final response = await _supabase.auth.signUp(
       email: email,
       password: password,
@@ -24,22 +26,33 @@ class AuthService {
         'username': username,
         'first_name': firstName,
         'last_name': lastName,
-      },
-    );
-
-    if (response.user != null) {
-      await _supabase.from('users').insert({
-        'email': email,
-        'username': username,
-        'first_name': firstName,
-        'last_name': lastName,
         'middle_name': middleName,
         'ext_name': extName,
         'bday': bday?.toIso8601String(),
         'gender': gender,
-        'contact_number': contactNumber, // Add this field
-        'role': 'user',
-      });
+        'contact_number': contactNumber,
+      },
+    );
+
+    // If signup was successful and we have additional data not handled by trigger,
+    // update the user record with the additional fields
+    if (response.user != null && response.error == null) {
+      try {
+        // Wait a moment for the trigger to complete
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // Update with additional fields that might not be in the trigger
+        await _supabase.from('users').update({
+          'middle_name': middleName,
+          'ext_name': extName,
+          'bday': bday?.toIso8601String(),
+          'gender': gender,
+          'contact_number': contactNumber,
+        }).eq('id', response.user!.id);
+      } catch (e) {
+        // If update fails, it's not critical since basic user was created by trigger
+        print('Warning: Could not update additional user fields: $e');
+      }
     }
 
     return response;
@@ -56,24 +69,98 @@ class AuthService {
   }
 
   Future<void> updatePassword({
-  required String currentPassword,
-  required String newPassword,
-}) async {
-  // First verify the current password by signing in again
-  final email = _supabase.auth.currentUser?.email;
-  if (email == null) throw Exception('No user logged in');
-  
-  // Reauthenticate
-  await _supabase.auth.signInWithPassword(
-    email: email,
-    password: currentPassword,
-  );
-  
-  // Then update password
-  await _supabase.auth.updateUser(
-    UserAttributes(password: newPassword),
-  );
-}
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    // First verify the current password by signing in again
+    final email = _supabase.auth.currentUser?.email;
+    if (email == null) throw Exception('No user logged in');
+    
+    // Reauthenticate
+    await _supabase.auth.signInWithPassword(
+      email: email,
+      password: currentPassword,
+    );
+    
+    // Then update password
+    await _supabase.auth.updateUser(
+      UserAttributes(password: newPassword),
+    );
+  }
+
+  Future<void> updateProfile({
+    String? username,
+    String? firstName,
+    String? lastName,
+    String? middleName,
+    String? extName,
+    DateTime? bday,
+    String? gender,
+    String? contactNumber,
+  }) async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) throw Exception('No user logged in');
+
+    final updateData = <String, dynamic>{};
+    
+    if (username != null) updateData['username'] = username;
+    if (firstName != null) updateData['first_name'] = firstName;
+    if (lastName != null) updateData['last_name'] = lastName;
+    if (middleName != null) updateData['middle_name'] = middleName;
+    if (extName != null) updateData['ext_name'] = extName;
+    if (bday != null) updateData['bday'] = bday.toIso8601String();
+    if (gender != null) updateData['gender'] = gender;
+    if (contactNumber != null) updateData['contact_number'] = contactNumber;
+
+    if (updateData.isNotEmpty) {
+      await _supabase
+          .from('users')
+          .update(updateData)
+          .eq('id', user.id);
+    }
+  }
+
+  Future<Map<String, dynamic>?> getUserProfile() async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) return null;
+
+    final response = await _supabase
+        .from('users')
+        .select()
+        .eq('id', user.id)
+        .single();
+
+    return response;
+  }
+
+  Future<bool> isAdmin() async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) return false;
+
+    try {
+      final response = await _supabase
+          .from('users')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+
+      return response['role'] == 'admin';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<void> makeUserAdmin(String userId) async {
+    // Only existing admins should be able to call this
+    if (!await isAdmin()) {
+      throw Exception('Only admins can promote users');
+    }
+
+    await _supabase
+        .from('users')
+        .update({'role': 'admin'})
+        .eq('id', userId);
+  }
 
   Future<void> signOut() async {
     await _supabase.auth.signOut();
@@ -84,3 +171,6 @@ class AuthService {
   Stream<AuthState> get authStateChanges => _supabase.auth.onAuthStateChange;
 }
 
+extension on AuthResponse {
+  get error => null;
+}
