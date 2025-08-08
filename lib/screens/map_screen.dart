@@ -38,14 +38,14 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-enum MainTab { map, profile }
+enum MainTab { map, notifications, profile }
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
   final _authService = AuthService(Supabase.instance.client);
 
-  bool _showAdditionalButtons = false;
+ 
 
 
   // Location state
@@ -60,7 +60,7 @@ class _MapScreenState extends State<MapScreen> {
 
   // Live tracking state
   StreamSubscription<Position>? _positionStream;
-  bool _isLiveLocationActive = false;
+
   bool _showClearButton = false;
 
   // User state
@@ -75,6 +75,13 @@ class _MapScreenState extends State<MapScreen> {
   Map<String, dynamic>? _selectedHotspot;
   RealtimeChannel? _hotspotsChannel;
 
+  // NOTIFICATIONS
+List<Map<String, dynamic>> _notifications = [];
+RealtimeChannel? _notificationsChannel;
+int _unreadNotificationCount = 0;
+// Add notification to enum
+
+
 @override
 void initState() {
   super.initState();
@@ -82,7 +89,6 @@ void initState() {
   // Add auth state listener
   Supabase.instance.client.auth.onAuthStateChange.listen((event) {
     if (event.session != null && mounted) {
-      // Reload user profile and hotspots when auth state changes
       _loadUserProfile();
     } else if (mounted) {
       setState(() {
@@ -96,19 +102,147 @@ void initState() {
   _loadUserProfile();
   _loadHotspots();
   _setupRealtimeSubscription();
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    _getCurrentLocation();
+  _setupNotificationsRealtime();
+  _loadNotifications();
+  Timer.periodic(const Duration(hours: 1), (_) => _cleanupOrphanedNotifications());
+  
+  // Start live location with error handling
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    try {
+      await _getCurrentLocation(); // First try to get immediate location
+      _startLiveLocation(); // Then start continuous tracking
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        _showSnackBar('Error starting location: ${e.toString()}');
+      }
+    }
   });
 }
 
-  @override
-  void dispose() {
-    _positionStream?.cancel();
-    _searchController.dispose();
-    _profileScreen.disposeControllers();
-    _hotspotsChannel?.unsubscribe(); // Add this line
-    super.dispose();
+@override
+void dispose() {
+  _positionStream?.cancel();
+  _searchController.dispose();
+  _profileScreen.disposeControllers();
+  _hotspotsChannel?.unsubscribe();
+  _notificationsChannel?.unsubscribe();
+  super.dispose();
+}
+
+
+  void _setupNotificationsRealtime() {
+    _notificationsChannel?.unsubscribe();
+    
+    _notificationsChannel = Supabase.instance.client
+        .channel('notifications_realtime')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'notifications',
+          callback: _handleNotificationInsert,
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'notifications',
+          callback: _handleNotificationUpdate,
+        )
+        .subscribe((status, error) {
+          if (status == 'SUBSCRIBED') {
+            print('Successfully connected to notifications channel');
+          } else if (status == 'CHANNEL_ERROR') {
+            print('Error connecting to notifications channel: $error');
+            Future.delayed(const Duration(seconds: 5), _setupNotificationsRealtime);
+          }
+        });
   }
+
+
+  void _handleNotificationInsert(PostgresChangePayload payload) {
+    if (!mounted) return;
+    
+    final newNotification = payload.newRecord;
+    if (newNotification['user_id'] == _userProfile?['id']) {
+      setState(() {
+        _notifications.insert(0, newNotification);
+        _unreadNotificationCount++;
+      });
+      
+      // Just show a snackbar, don't auto-navigate
+      if (_currentTab != MainTab.notifications) {
+        _showSnackBar('New notification: ${newNotification['title']}');
+      }
+    }
+  }
+
+  void _handleNotificationUpdate(PostgresChangePayload payload) {
+    if (!mounted) return;
+    
+    final index = _notifications.indexWhere((n) => n['id'] == payload.newRecord['id']);
+    if (index != -1) {
+      setState(() {
+        _notifications[index] = payload.newRecord;
+      });
+    }
+  }
+
+
+Future<void> _loadNotifications() async {
+  if (_userProfile == null) {
+    print('Cannot load notifications - no user profile');
+    return;
+  }
+  
+  print('Loading notifications for user ${_userProfile!['id']}');
+  
+  try {
+    final response = await Supabase.instance.client
+        .from('notifications')
+        .select()
+        .eq('user_id', _userProfile!['id'])
+        .order('created_at', ascending: false);
+
+    print('Received ${response.length} notifications');
+    
+    if (mounted) {
+      setState(() {
+        _notifications = List<Map<String, dynamic>>.from(response);
+        _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
+        print('Unread notifications count: $_unreadNotificationCount');
+      });
+    }
+  } catch (e) {
+    print('Error loading notifications: $e');
+  }
+}
+
+Future<void> _markAsRead(String notificationId) async {
+  try {
+    await Supabase.instance.client
+        .from('notifications')
+        .update({'is_read': true})
+        .eq('id', notificationId);
+
+    await _loadNotifications();
+  } catch (e) {
+    print('Error marking notification as read: $e');
+  }
+}
+
+Future<void> _markAllAsRead() async {
+  try {
+    await Supabase.instance.client
+        .from('notifications')
+        .update({'is_read': true})
+        .eq('user_id', _userProfile!['id'])
+        .eq('is_read', false);
+
+    await _loadNotifications();
+  } catch (e) {
+    print('Error marking all notifications as read: $e');
+  }
+}
 
 Future<void> _loadUserProfile() async {
   final user = _authService.currentUser;
@@ -128,7 +262,8 @@ Future<void> _loadUserProfile() async {
           _profileScreen.initControllers();
         });
         
-        // Load hotspots only after admin status is set
+        // Load notifications after profile is loaded
+        await _loadNotifications();
         await _loadHotspots();
       }
     } catch (e) {
@@ -140,58 +275,63 @@ Future<void> _loadUserProfile() async {
   }
 }
 
-  void _toggleAdditionalButtons() {
-  setState(() {
-    _showAdditionalButtons = !_showAdditionalButtons;
-  });
-}
 
-  // Add this new method for setting up real-time subscription
-  void _setupRealtimeSubscription() {
-    _hotspotsChannel = Supabase.instance.client
-        .channel('hotspots_realtime')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'hotspot',
-          callback: _handleHotspotInsert,
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'hotspot',
-          callback: _handleHotspotUpdate,
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.delete,
-          schema: 'public',
-          table: 'hotspot',
-          callback: _handleHotspotDelete,
-        )
-        .subscribe();
-  }
+
+void _setupRealtimeSubscription() {
+  _hotspotsChannel?.unsubscribe(); // Unsubscribe first if already subscribed
+
+  _hotspotsChannel = Supabase.instance.client
+      .channel('hotspots_realtime')
+      .onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'hotspot',
+        callback: _handleHotspotInsert,
+      )
+      .onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'hotspot',
+        callback: _handleHotspotUpdate,
+      )
+      .onPostgresChanges(
+        event: PostgresChangeEvent.delete,
+        schema: 'public',
+        table: 'hotspot',
+        callback: _handleHotspotDelete,
+      )
+      .subscribe((status, error) {
+        if (status == 'SUBSCRIBED') {
+          print('Successfully connected to hotspots channel');
+        } else if (status == 'CHANNEL_ERROR') {
+          print('Error connecting to hotspots channel: $error');
+          // Attempt to reconnect after delay
+          Future.delayed(const Duration(seconds: 5), _setupRealtimeSubscription);
+        }
+      });
+}
 
 void _handleHotspotInsert(PostgresChangePayload payload) async {
   if (!mounted) return;
   
   try {
-    // Fetch the complete hotspot data with crime_type relation including category
+    // Fetch the complete hotspot data
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
           *,
-          crime_type: type_id (id, name, level, category, description)
+          crime_type:type_id(name),
+          created_by,
+          reported_by
         ''')
         .eq('id', payload.newRecord['id'])
         .single();
 
     if (mounted) {
       setState(() {
-        // Ensure the crime_type data is properly structured
         if (response['crime_type'] != null) {
           _hotspots.add(response);
         } else {
-          // Add with placeholder if crime_type is null
           _hotspots.add({
             ...response,
             'crime_type': {
@@ -205,14 +345,63 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
         }
       });
       
-      if (_isAdmin) {
-        final crimeType = response['crime_type']?['name'] ?? 'Unknown';
-        _showSnackBar('New crime reported: $crimeType');
+      // Only send notifications for pending reports AND this is an INSERT operation
+      if (response['status'] == 'pending') {
+        print('Processing notifications for hotspot ${response['id']} with status: ${response['status']}');
+        
+        final admins = await Supabase.instance.client
+            .from('users')
+            .select('id')
+            .eq('role', 'admin');
+
+        print('Found ${admins.length} admins to notify');
+
+        for (final admin in admins) {
+          try {
+            // Check if notification already exists for this specific hotspot and admin
+            final existingNotifications = await Supabase.instance.client
+                .from('notifications')
+                .select('id')
+                .eq('user_id', admin['id'])
+                .eq('hotspot_id', response['id'])
+                .eq('type', 'report'); // Add type filter for more specificity
+
+            print('Existing notifications for admin ${admin['id']}: ${existingNotifications.length}');
+
+            // Only create notification if none exists
+            if (existingNotifications.isEmpty) {
+              final notificationData = {
+                'user_id': admin['id'],
+                'title': 'New Crime Report',
+                'message': 'New ${response['crime_type']['name']} report awaiting review',
+                'type': 'report',
+                'hotspot_id': response['id'],
+                'created_at': DateTime.now().toIso8601String(), // Explicit timestamp
+              };
+
+              print('Creating notification for admin ${admin['id']}');
+              
+              final insertResult = await Supabase.instance.client
+                  .from('notifications')
+                  .insert(notificationData)
+                  .select()
+                  .single();
+                  
+              print('Notification created successfully: ${insertResult['id']}');
+            } else {
+              print('Notification already exists for admin ${admin['id']}, skipping');
+            }
+          } catch (notificationError) {
+            print('Error creating notification for admin ${admin['id']}: $notificationError');
+            // Continue with next admin even if one fails
+          }
+        }
+      } else {
+        print('Hotspot status is ${response['status']}, not sending notifications');
       }
     }
   } catch (e) {
-    print('Error fetching new crime: $e');
-    // Add basic entry if full fetch fails
+    print('Error in _handleHotspotInsert: $e');
     if (mounted) {
       setState(() {
         _hotspots.add({
@@ -326,16 +515,51 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
   }
 }
 
-  // Handle real-time hotspot deletions
-  void _handleHotspotDelete(PostgresChangePayload payload) {
-    if (!mounted) return;
+void _handleHotspotDelete(PostgresChangePayload payload) {
+  if (!mounted) return;
+  
+  final deletedHotspotId = payload.oldRecord['id'];
+  
+  setState(() {
+    // Remove the hotspot from local state
+    _hotspots.removeWhere((hotspot) => hotspot['id'] == deletedHotspotId);
     
-    setState(() {
-      _hotspots.removeWhere((hotspot) => hotspot['id'] == payload.oldRecord['id']);
-    });
+    // Remove any notifications related to this hotspot
+    _notifications.removeWhere((notification) => 
+      notification['hotspot_id'] == deletedHotspotId);
     
-    
+    // Update unread notifications count
+    _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
+  });
+  
+  // Show a snackbar if the deleted hotspot was selected
+  if (_selectedHotspot != null && _selectedHotspot!['id'] == deletedHotspotId) {
+    _showSnackBar('Hotspot deleted');
+    _selectedHotspot = null;
   }
+}
+
+Future<void> _cleanupOrphanedNotifications() async {
+  try {
+    // Get all hotspot IDs
+    final hotspots = await Supabase.instance.client
+        .from('hotspot')
+        .select('id');
+    
+    final hotspotIds = hotspots.map((h) => h['id']).toList();
+    
+    // Delete notifications for non-existent hotspots
+    await Supabase.instance.client
+        .from('notifications')
+        .delete()
+        .not('hotspot_id', 'in', hotspotIds.isEmpty ? [''] : hotspotIds);
+    
+    // Refresh notifications
+    await _loadNotifications();
+  } catch (e) {
+    print('Error cleaning up notifications: $e');
+  }
+}
 
 Future<void> _loadHotspots() async {
   try {
@@ -359,9 +583,7 @@ Future<void> _loadHotspots() async {
         // 1. All approved active hotspots
         // 2. User's own reports (regardless of status)
         filteredQuery = query.or(
-          'and(active_status.eq.active,status.eq.approved),' +
-          'created_by.eq.$currentUserId,' +
-          'reported_by.eq.$currentUserId'
+          'and(active_status.eq.active,status.eq.approved),' 'created_by.eq.$currentUserId,' 'reported_by.eq.$currentUserId'
         );
       } else {
         // If user ID is null, only show approved active hotspots
@@ -403,96 +625,101 @@ Future<void> _loadHotspots() async {
 
 
 
-  Future<void> _getCurrentLocation() async {
-    if (!mounted) return;
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      _showSnackBar('Location services are disabled');
-      return;
+Future<void> _getCurrentLocation() async {
+  if (!mounted) return;
+  
+  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    if (mounted) {
+      setState(() => _isLoading = false);
     }
+    _showSnackBar('Location services are disabled');
+    return;
+  }
 
-    LocationPermission permission = await Geolocator.checkPermission();
+  LocationPermission permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
     if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        _showSnackBar('Location permissions are denied');
-        return;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      _showSnackBar('Location permissions are permanently denied');
-      return;
-    }
-
-    try {
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      if (mounted) {
-        setState(() {
-          _currentPosition = LatLng(position.latitude, position.longitude);
-          _isLoading = false;
-        });
-        _mapController.move(_currentPosition!, 15.0);
-      }
-    } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        _showSnackBar('Error getting location: ${e.toString()}');
       }
+      _showSnackBar('Location permissions are denied');
+      return;
     }
   }
 
-  void _startLiveLocation() {
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 10,
-      ),
-    ).listen((Position position) {
+  if (permission == LocationPermission.deniedForever) {
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+    _showSnackBar('Location permissions are permanently denied');
+    return;
+  }
+
+  try {
+    Position position = await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+    if (mounted) {
+      setState(() {
+        _currentPosition = LatLng(position.latitude, position.longitude);
+        _isLoading = false;
+      });
+      _mapController.move(_currentPosition!, 15.0);
+    }
+  } catch (e) {
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+    _showSnackBar('Error getting location: ${e.toString()}');
+  }
+}
+
+void _startLiveLocation() {
+  // Show loading initially
+  if (mounted) {
+    setState(() {
+      _isLoading = true;
+    });
+  }
+
+  _positionStream = Geolocator.getPositionStream(
+    locationSettings: const LocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 10,
+    ),
+  ).listen(
+    (Position position) {
       if (mounted) {
         setState(() {
           _currentPosition = LatLng(position.latitude, position.longitude);
-          if (_isLiveLocationActive) {
-            _polylinePoints.add(_currentPosition!);
-          }
+          _polylinePoints.add(_currentPosition!);
+          _isLoading = false; // Hide loading when we get the first position
         });
         _mapController.move(_currentPosition!, _mapController.zoom);
       }
-    });
-    setState(() {
-      _isLiveLocationActive = true;
-    });
-    _showSnackBar('Live tracking enabled');
-  }
+    },
+    onError: (error) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        _showSnackBar('Location error: ${error.toString()}');
+      }
+    },
+  );
+}
 
-  void _stopLiveLocation() {
-    _positionStream?.cancel();
-    _positionStream = null;
-    setState(() {
-      _isLiveLocationActive = false;
-    });
-    _showSnackBar('Live tracking disabled');
-  }
-
-  void _toggleLiveLocation() {
-    if (_isLiveLocationActive) {
-      _stopLiveLocation();
-    } else {
-      _startLiveLocation();
-    }
-  }
-
-  void _clearDirections() {
-    setState(() {
-      _polylinePoints.clear();
-      _distance = 0;
-      _duration = '';
-      _destination = null;
-      _showClearButton = false;
-    });
-  }
+void _clearDirections() {
+  setState(() {
+    _polylinePoints.clear();
+    _distance = 0;
+    _duration = '';
+    _destination = null;
+    _showClearButton = false;
+  });
+}
 
   Future<void> _getDirections(LatLng destination) async {
     if (_currentPosition == null) return;
@@ -737,22 +964,23 @@ void _showHotspotFilterDialog() {
                         const SizedBox(height: 16),
                       ],
                       
-                      // Close button
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(context).primaryColor,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                        // Close button
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white, // White background
+                              foregroundColor: Theme.of(context).primaryColor, // Blue text
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                             ),
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Close'),
                           ),
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Close'),
                         ),
-                      ),
+
                     ],
                   ),
                 ),
@@ -1563,9 +1791,12 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                 }
               }
             },
-            onCancel: () {
-              _showHotspotDetails(hotspot);
-            },
+onCancel: () {
+  setState(() {
+    _selectedHotspot = null;
+  });
+  Navigator.pop(context);
+},
             isAdmin: _isAdmin,
           ),
         ),
@@ -1986,108 +2217,108 @@ items: crimeTypes.map((crimeType) {
 
 
 
-  Widget _buildBottomNavBar() {
-    return BottomNavigationBar(
-      currentIndex: _currentTab.index,
-      onTap: (index) {
-        setState(() {
-          _currentTab = MainTab.values[index];
-        });
+Widget _buildBottomNavBar() {
+  return BottomNavigationBar(
+    currentIndex: _currentTab.index,
+    onTap: (index) {
+      setState(() {
+        _currentTab = MainTab.values[index];
+      });
 
-        if (_currentTab == MainTab.profile) {
-          _showProfileDialog();
-        }
-      },
-      items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.map),
-          label: 'Map',
+      if (_currentTab == MainTab.profile) {
+        _showProfileDialog();
+      } 
+      
+    },
+    items: [
+      const BottomNavigationBarItem(
+        icon: Icon(Icons.map),
+        label: 'Map',
+      ),
+      BottomNavigationBarItem(
+        icon: Stack(
+          children: [
+            const Icon(Icons.notifications),
+            if (_unreadNotificationCount > 0)
+              Positioned(
+                right: 0,
+                top: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  constraints: const BoxConstraints(
+                    minWidth: 16,
+                    minHeight: 16,
+                  ),
+                  child: Text(
+                    _unreadNotificationCount > 99 ? '99+' : '$_unreadNotificationCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
         ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.person),
-          label: 'Profile',
-        ),
-      ],
-      selectedItemColor: Colors.blue,
-      unselectedItemColor: Colors.grey,
-      showUnselectedLabels: true,
-      type: BottomNavigationBarType.fixed,
-    );
-  }
+        label: 'Notifications',
+      ),
+      const BottomNavigationBarItem(
+        icon: Icon(Icons.person),
+        label: 'Profile',
+      ),
+    ],
+    selectedItemColor: Colors.blue,
+    unselectedItemColor: Colors.grey,
+    showUnselectedLabels: true,
+    type: BottomNavigationBarType.fixed,
+  );
+}
 
 Widget _buildFloatingActionButtons() {
   return Column(
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.end,
     children: [
-      if (_showAdditionalButtons) ...[
-        Tooltip(
-          message: 'Filter Hotspots',
-          child: FloatingActionButton(
-            heroTag: 'filterHotspots',
-            onPressed: () {
-              _showHotspotFilterDialog();
-              _toggleAdditionalButtons();
-            },
-            backgroundColor: Colors.blue.shade700,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            mini: true,
-            child: const Icon(Icons.filter_alt),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Tooltip(
-          message: _isLiveLocationActive ? 'Live Location On' : 'Live Location Off',
-          child: FloatingActionButton(
-            heroTag: 'liveLocation',
-            onPressed: () {
-              _toggleLiveLocation();
-              _toggleAdditionalButtons();
-            },
-            backgroundColor: _isLiveLocationActive ? const Color.fromARGB(255, 25, 210, 133) : Colors.grey.shade700,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            mini: true,
-            child: Icon(
-              _isLiveLocationActive ? Icons.location_searching : Icons.location_disabled,
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        if (_showClearButton) ...[
-          Tooltip(
-            message: 'Clear Route',
-            child: FloatingActionButton(
-              heroTag: 'clearRoute',
-              onPressed: () {
-                _clearDirections();
-                _toggleAdditionalButtons();
-              },
-              backgroundColor: Colors.red.shade600,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              mini: true,
-              child: const Icon(
-                Icons.close,
-                color: Colors.white,
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ],
+      // Filter Crimes button (always visible)
       Tooltip(
-        message: 'Show Actions',
+        message: 'Filter Hotspots',
         child: FloatingActionButton(
-          heroTag: 'mainActionButton',
-          onPressed: _toggleAdditionalButtons,
-          backgroundColor: Colors.grey.shade300, // Light gray color
-          foregroundColor: Colors.black,
-          mini: true, // Minimize the button size
-          child: const Icon(Icons.menu),
+          heroTag: 'filterHotspots',
+          onPressed: _showHotspotFilterDialog,
+          backgroundColor: Colors.blue.shade700,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          mini: true,
+          child: const Icon(Icons.filter_alt),
         ),
       ),
       const SizedBox(height: 8),
+      
+      // Clear Directions button (only visible when there's a route)
+      if (_showClearButton)
+        Tooltip(
+          message: 'Clear Route',
+          child: FloatingActionButton(
+            heroTag: 'clearRoute',
+            onPressed: _clearDirections,
+            backgroundColor: Colors.red.shade600,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            mini: true,
+            child: const Icon(
+              Icons.close,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      const SizedBox(height: 8),
+      
+      // My Location button (always visible)
       Tooltip(
         message: 'My Location',
         child: FloatingActionButton(
@@ -2103,6 +2334,103 @@ Widget _buildFloatingActionButtons() {
   );
 }
 
+
+Widget _buildNotificationsScreen() {
+  return Scaffold(
+    appBar: AppBar(
+      title: const Text('Notifications'),
+      actions: [
+        if (_notifications.any((n) => !n['is_read']))
+          TextButton(
+            onPressed: _markAllAsRead,
+            child: const Text(
+              'Mark all as read',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+      ],
+    ),
+    body: _notifications.isEmpty
+        ? const Center(child: Text('No notifications yet'))
+        : RefreshIndicator(
+            onRefresh: _loadNotifications,
+            child: ListView.builder(
+              itemCount: _notifications.length,
+              itemBuilder: (context, index) {
+                final notification = _notifications[index];
+                
+                return Card(
+                  margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                  color: notification['is_read'] ? null : Colors.blue[50],
+                  child: ListTile(
+                    leading: _getNotificationIcon(notification['type']),
+                    title: Text(notification['title']),
+                    subtitle: Text(notification['message']),
+                    trailing: Text(
+                      DateFormat('MMM dd, hh:mm a').format(
+                        DateTime.parse(notification['created_at']).toLocal(),
+                      ),
+                    ),
+                    onTap: () {
+                      if (!notification['is_read']) {
+                        _markAsRead(notification['id']); // Only mark as read if unread
+                      }
+                      _handleNotificationTap(notification);
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+  );
+}
+
+Icon _getNotificationIcon(String type) {
+  switch (type) {
+    case 'report':
+      return const Icon(Icons.report, color: Colors.orange);
+    case 'approval':
+      return const Icon(Icons.check_circle, color: Colors.green);
+    case 'rejection':
+      return const Icon(Icons.cancel, color: Colors.red);
+    default:
+      return const Icon(Icons.notifications, color: Colors.blue);
+  }
+}
+
+void _handleNotificationTap(Map<String, dynamic> notification) {
+  if (notification['hotspot_id'] != null) {
+    // Check if hotspot still exists
+    final hotspot = _hotspots.firstWhere(
+      (h) => h['id'] == notification['hotspot_id'],
+      orElse: () => {},
+    );
+    
+    if (hotspot.isNotEmpty) {
+      // Get hotspot coordinates
+      final coords = hotspot['location']['coordinates'];
+      final hotspotPosition = LatLng(coords[1], coords[0]);
+      
+      setState(() {
+        _currentTab = MainTab.map; // Switch to map view
+        _selectedHotspot = hotspot; // Store the selected hotspot
+      });
+      
+      // Use post frame callback to ensure UI is ready
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Move map to hotspot location
+        _mapController.move(hotspotPosition, 15.0);
+        
+        // Show hotspot details after a small delay to allow map animation
+        Future.delayed(const Duration(milliseconds: 200), () {
+          _showHotspotDetails(hotspot);
+        });
+      });
+    } else {
+      _showSnackBar('The related hotspot has been deleted');
+    }
+  }
+}
 
   
 
@@ -2142,7 +2470,7 @@ Widget _buildMap() {
           polylines: [
             Polyline(
               points: _polylinePoints,
-              color: _isLiveLocationActive ? Colors.green : Colors.blue,
+              color: Colors.blue,
               strokeWidth: 4,
             ),
           ],
@@ -2156,9 +2484,9 @@ Widget _buildMap() {
               point: _currentPosition!,
               width: 40,
               height: 40,
-              builder: (ctx) => Icon(
+              builder: (ctx) => const Icon(
                 Icons.location_on,
-                color: _isLiveLocationActive ? Colors.green : Colors.red,
+                color: Colors.red, // Always green since we're always tracking
                 size: 40,
               ),
             ),
@@ -2176,7 +2504,6 @@ Widget _buildMap() {
         ],
       ),
 
-  // Hotspots layer with real-time updates
 Consumer<HotspotFilterService>(
   builder: (context, filterService, child) {
     return MarkerLayer(
@@ -2188,7 +2515,7 @@ Consumer<HotspotFilterService>(
         final createdBy = hotspot['created_by'];
         final reportedBy = hotspot['reported_by'];
         final isOwnHotspot = currentUserId != null && 
-                           (currentUserId == createdBy || currentUserId == reportedBy);
+                         (currentUserId == createdBy || currentUserId == reportedBy);
 
         // Admin view - show all hotspots based on filters
         if (isAdmin) {
@@ -2220,8 +2547,9 @@ Consumer<HotspotFilterService>(
         final crimeLevel = hotspot['crime_type']['level'];
         final isActive = activeStatus == 'active';
         final isOwnHotspot = _userProfile?['id'] != null && 
-                           (_userProfile?['id'] == hotspot['created_by'] || 
-                            _userProfile?['id'] == hotspot['reported_by']);
+                         (_userProfile?['id'] == hotspot['created_by'] || 
+                          _userProfile?['id'] == hotspot['reported_by']);
+        final isSelected = _selectedHotspot != null && _selectedHotspot!['id'] == hotspot['id'];
 
         // Determine marker appearance
         Color markerColor;
@@ -2268,16 +2596,41 @@ Consumer<HotspotFilterService>(
 
         return Marker(
           point: point,
-          width: 60,
-          height: 60,
-          builder: (ctx) => Opacity(
-            opacity: opacity,
-            child: PulsingHotspotMarker(
-              markerColor: markerColor,
-              markerIcon: markerIcon,
-              isActive: isActive && status != 'rejected', // Don't pulse rejected markers
-              onTap: () => _showHotspotDetails(hotspot),
-            ),
+          width: isSelected ? 70 : 60, // Slightly larger when selected
+          height: isSelected ? 70 : 60,
+          builder: (ctx) => Stack(
+            alignment: Alignment.center,
+            children: [
+              // Highlight ring for selected hotspot
+              if (isSelected)
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.blue.withOpacity(0.5),
+                      width: 3,
+                    ),
+                  ),
+                ),
+              // Main marker with pulsing effect
+              Opacity(
+                opacity: opacity,
+                child: PulsingHotspotMarker(
+                  markerColor: markerColor, // Keep original color
+                  markerIcon: markerIcon,
+                  isActive: isActive && status != 'rejected',
+                  pulseScale: isSelected ? 1.2 : 1.0,
+                  onTap: () {
+                    setState(() {
+                      _selectedHotspot = hotspot;
+                    });
+                    _showHotspotDetails(hotspot);
+                  },
+                ),
+              ),
+            ],
           ),
         );
       }).toList(),
@@ -2558,27 +2911,72 @@ void _showRejectDialog(int hotspotId) {
 
 Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
   try {
-    await Supabase.instance.client
+    // First get the hotspot to notify the reporter
+    final hotspotResponse = await Supabase.instance.client
+        .from('hotspot')
+        .select('''
+          id,
+          created_by,
+          reported_by,
+          crime_type:type_id(name),
+          description,
+          status
+        ''')
+        .eq('id', id)
+        .single();
+
+    // Update the hotspot status
+    final updateResponse = await Supabase.instance.client
         .from('hotspot')
         .update({
           'status': approve ? 'approved' : 'rejected',
-          'active_status': approve ? 'active' : 'inactive', // Automatically set inactive when rejected
+          'active_status': approve ? 'active' : 'inactive',
           'rejection_reason': reason,
           'updated_at': DateTime.now().toIso8601String(),
           if (approve) 'created_by': _userProfile?['id'],
         })
-        .eq('id', id);
+        .eq('id', id)
+        .select('id')
+        .single();
+
+    print('Hotspot update response: $updateResponse');
+
+    // Send notification to the reporter
+    final reporterId = hotspotResponse['reported_by'] ?? hotspotResponse['created_by'];
+    if (reporterId != null) {
+      final crimeName = hotspotResponse['crime_type']?['name'] ?? 'Unknown crime';
+      final notificationData = {
+        'user_id': reporterId,
+        'title': approve ? 'Report Approved' : 'Report Rejected',
+        'message': approve 
+            ? 'Your report about $crimeName has been approved'
+            : 'Your report was rejected. Reason: ${reason ?? "No reason provided"}',
+        'type': approve ? 'approval' : 'rejection',
+        'hotspot_id': id,
+      };
+
+      print('Attempting to insert notification: $notificationData');
+      
+      final insertResponse = await Supabase.instance.client
+          .from('notifications')
+          .insert(notificationData)
+          .select();
+
+      print('Notification insert response: $insertResponse');
+    }
 
     if (mounted) {
       Navigator.pop(context);
       _showSnackBar(approve ? 'Report approved' : 'Report rejected and deactivated');
     }
   } catch (e) {
+    print('Error in _reviewHotspot: ${e.toString()}');
     if (mounted) {
       _showSnackBar('Failed to review hotspot: ${e.toString()}');
     }
   }
 }
+
 
 
 
@@ -2614,22 +3012,47 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
 }
 
 
-  // Update your _deleteHotspot method to remove manual state update
-  Future<void> _deleteHotspot(int id) async {
-    try {
-      await Supabase.instance.client
-          .from('hotspot')
-          .delete()
-          .eq('id', id);
+Future<void> _deleteHotspot(int id) async {
+  final shouldDelete = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Confirm Deletion'),
+      content: const Text('Are you sure you want to delete this hotspot?'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text(
+            'Delete',
+            style: TextStyle(color: Colors.red),
+          ),
+        ),
+      ],
+    ),
+  );
 
-      if (mounted) {
-        _showSnackBar('Crime report deleted successfully');
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      _showSnackBar('Failed to delete crime report: ${e.toString()}');
+  if (shouldDelete != true) return;
+
+  try {
+    await Supabase.instance.client
+        .from('hotspot')
+        .delete()
+        .eq('id', id);
+
+    if (mounted) {
+      _showSnackBar('Hotspot deleted successfully');
+      Navigator.pop(context); // Close any open dialogs
+      await _loadHotspots(); // Refresh the list
+    }
+  } catch (e) {
+    if (mounted) {
+      _showSnackBar('Failed to delete hotspot: ${e.toString()}');
     }
   }
+}
 
 Widget _buildSearchBar({bool isWeb = false}) {
   return Container(
@@ -2700,12 +3123,13 @@ Widget build(BuildContext context) {
       automaticallyImplyLeading: false,
       title: isWeb
           ? SizedBox(
-              width: 400, // or any width you want for desktop
+              width: 400,
               child: _buildSearchBar(isWeb: true),
             )
           : _buildSearchBar(isWeb: false),
-      centerTitle: true, // center the title widget
+      centerTitle: true,
       actions: [
+        // Removed notification bell - only show login/logout
         if (_userProfile == null)
           IconButton(
             icon: const Icon(Icons.login),
@@ -2723,16 +3147,26 @@ Widget build(BuildContext context) {
           ),
       ],
     ),
-    body: Stack(
-      children: [
-        _buildMap(),
-        if (_isLoading)
-          const Center(child: CircularProgressIndicator()),
-      ],
-    ),
-    floatingActionButton: _buildFloatingActionButtons(),
+    body: _buildCurrentScreen(),
+    floatingActionButton: _currentTab == MainTab.map ? _buildFloatingActionButtons() : null,
     bottomNavigationBar: _userProfile != null ? _buildBottomNavBar() : null,
   );
+}
+
+Widget _buildCurrentScreen() {
+  switch (_currentTab) {
+    case MainTab.map:
+      return Stack(
+        children: [
+          _buildMap(),
+          if (_isLoading && _currentPosition == null)
+            const Center(child: CircularProgressIndicator()),
+        ],
+      );
+    case MainTab.notifications:
+      return _buildNotificationsScreen();
+    case MainTab.profile:
+      return Container(); }
 }
 
 

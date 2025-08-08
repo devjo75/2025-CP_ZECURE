@@ -72,20 +72,46 @@ class AuthService {
     required String currentPassword,
     required String newPassword,
   }) async {
-    // First verify the current password by signing in again
     final email = _supabase.auth.currentUser?.email;
     if (email == null) throw Exception('No user logged in');
     
-    // Reauthenticate
-    await _supabase.auth.signInWithPassword(
-      email: email,
-      password: currentPassword,
-    );
+    // Store the current session to restore later
+    final _ = _supabase.auth.currentSession;
     
-    // Then update password
-    await _supabase.auth.updateUser(
-      UserAttributes(password: newPassword),
-    );
+    try {
+      // Try to reauthenticate with the current password
+      final authResponse = await _supabase.auth.signInWithPassword(
+        email: email,
+        password: currentPassword,
+      );
+      
+      // Check if authentication failed
+      if (authResponse.user == null) {
+        throw const AuthException('Invalid login credentials');
+      }
+      
+      // Update password
+      await _supabase.auth.updateUser(
+        UserAttributes(password: newPassword),
+      );
+      
+    } catch (e) {
+      // If it's an AuthException, preserve it
+      if (e is AuthException) {
+        rethrow;
+      }
+      
+      // For other errors, check if it's likely a wrong password
+      if (e.toString().contains('Invalid login credentials') || 
+          e.toString().contains('invalid_credentials') ||
+          e.toString().contains('Invalid') ||
+          e.toString().contains('credentials')) {
+        throw const AuthException('Invalid login credentials');
+      }
+      
+      // For any other error, rethrow as is
+      rethrow;
+    }
   }
 
   Future<void> updateProfile({

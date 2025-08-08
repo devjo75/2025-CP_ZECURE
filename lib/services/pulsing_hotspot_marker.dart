@@ -11,7 +11,7 @@ class PulsingHotspotMarker extends StatefulWidget {
     required this.markerColor,
     required this.markerIcon,
     required this.isActive,
-    required this.onTap,
+    required this.onTap, required double pulseScale,
   });
 
   @override
