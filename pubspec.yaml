@@ -28,6 +28,8 @@ dependencies:
   provider: ^6.0.5
   google_maps_flutter: ^2.12.3
   path: ^1.8.3  # Add this line
+  fl_chart: ^1.0.0
+  syncfusion_flutter_charts: ^30.2.4
 
 dev_dependencies:
   flutter_test:

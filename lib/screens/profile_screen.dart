@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/services/auth_service.dart';
+import 'package:zecure/screens/admin_dashboard.dart';
 
 class ProfileScreen {
   final AuthService _authService;
@@ -387,22 +388,27 @@ Padding(
       ),
       if (isAdmin) ...[
         const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
-            onPressed: () => _showSnackBar(context, 'Admin features'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              side: BorderSide(color: Colors.blue.shade300),
-            ),
-            child: const Text(
-              'ADMIN DASHBOARD',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.blue,
+  SizedBox(
+    width: double.infinity,
+    child: OutlinedButton(
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const AdminDashboardScreen(),
+        ),
+      ),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+        side: BorderSide(color: Colors.blue.shade300),
+      ),
+      child: const Text(
+        'ADMIN DASHBOARD',
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          color: Colors.blue,
               ),
             ),
           ),

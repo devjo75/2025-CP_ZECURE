@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -60,6 +61,9 @@ class _MapScreenState extends State<MapScreen> {
 
   // Live tracking state
   StreamSubscription<Position>? _positionStream;
+  bool _hotspotsChannelConnected = false;
+  bool _notificationsChannelConnected = false;
+  Timer? _reconnectionTimer;
 
   bool _showClearButton = false;
 
@@ -89,28 +93,45 @@ void initState() {
   // Add auth state listener
   Supabase.instance.client.auth.onAuthStateChange.listen((event) {
     if (event.session != null && mounted) {
-      _loadUserProfile();
+      print('User logged in, loading profile and setting up real-time');
+      _loadUserProfile().then((_) {
+        // Setup real-time after profile is loaded
+        _setupNotificationsRealtime();
+        _loadNotifications();
+      });
     } else if (mounted) {
+      print('User logged out, cleaning up');
       setState(() {
         _userProfile = null;
         _isAdmin = false;
         _hotspots = [];
+        _notifications = [];
+        _unreadNotificationCount = 0;
       });
+      // Unsubscribe from channels
+      _notificationsChannel?.unsubscribe();
+      _hotspotsChannel?.unsubscribe();
     }
   });
 
   _loadUserProfile();
   _loadHotspots();
   _setupRealtimeSubscription();
-  _setupNotificationsRealtime();
-  _loadNotifications();
+  
+  // Only setup notifications if user is already logged in
+  if (_userProfile != null) {
+    _setupNotificationsRealtime();
+    _loadNotifications();
+  }
+
   Timer.periodic(const Duration(hours: 1), (_) => _cleanupOrphanedNotifications());
+  Timer.periodic(const Duration(minutes: 2), (_) => _checkRealtimeConnection());
   
   // Start live location with error handling
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
-      await _getCurrentLocation(); // First try to get immediate location
-      _startLiveLocation(); // Then start continuous tracking
+      await _getCurrentLocation();
+      _startLiveLocation();
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -127,120 +148,289 @@ void dispose() {
   _profileScreen.disposeControllers();
   _hotspotsChannel?.unsubscribe();
   _notificationsChannel?.unsubscribe();
+  _reconnectionTimer?.cancel(); // Add this line
   super.dispose();
 }
 
 
-  void _setupNotificationsRealtime() {
-    _notificationsChannel?.unsubscribe();
-    
-    _notificationsChannel = Supabase.instance.client
-        .channel('notifications_realtime')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'notifications',
-          callback: _handleNotificationInsert,
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'notifications',
-          callback: _handleNotificationUpdate,
-        )
-        .subscribe((status, error) {
-          if (status == 'SUBSCRIBED') {
-            print('Successfully connected to notifications channel');
-          } else if (status == 'CHANNEL_ERROR') {
-            print('Error connecting to notifications channel: $error');
-            Future.delayed(const Duration(seconds: 5), _setupNotificationsRealtime);
-          }
-        });
+void _setupNotificationsRealtime() {
+  _notificationsChannel?.unsubscribe();
+  _notificationsChannelConnected = false;
+  
+  // Only set up if user is logged in
+  if (_userProfile == null || _userProfile!['id'] == null) {
+    print('Cannot setup notifications - no user profile');
+    return;
   }
-
-
-  void _handleNotificationInsert(PostgresChangePayload payload) {
-    if (!mounted) return;
-    
-    final newNotification = payload.newRecord;
-    if (newNotification['user_id'] == _userProfile?['id']) {
-      setState(() {
-        _notifications.insert(0, newNotification);
-        _unreadNotificationCount++;
+  
+  final userId = _userProfile!['id'];
+  print('Setting up notifications channel for user: $userId');
+  
+  // FIXED: Use unfiltered subscription like your working code
+  _notificationsChannel = Supabase.instance.client
+      .channel('notifications_realtime_${DateTime.now().millisecondsSinceEpoch}') // Unique channel name
+      .onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'notifications',
+        // REMOVED: filter parameter - let all notifications come through
+        callback: _handleNotificationInsert,
+      )
+      .onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'notifications',
+        // REMOVED: filter parameter - let all notifications come through
+        callback: _handleNotificationUpdate,
+      )
+      .onPostgresChanges(
+        event: PostgresChangeEvent.delete,
+        schema: 'public',
+        table: 'notifications',
+        // REMOVED: filter parameter - let all notifications come through
+        callback: _handleNotificationDelete,
+      )
+      .subscribe((status, error) {
+        print('Notifications channel status: $status, error: $error');
+        
+        if (status == 'SUBSCRIBED') {
+          print('Notifications channel connected successfully');
+          setState(() => _notificationsChannelConnected = true);
+        } else if (status == 'CHANNEL_ERROR' || status == 'CLOSED' || error != null) {
+          print('Notifications channel error: $error');
+          setState(() => _notificationsChannelConnected = false);
+          _reconnectNotificationsChannel();
+        }
       });
+}
+
+
+void _reconnectNotificationsChannel() {
+  _reconnectionTimer?.cancel();
+  _reconnectionTimer = Timer(const Duration(seconds: 3), () {
+    if (mounted) _setupNotificationsRealtime();
+  });
+}
+
+
+void _handleNotificationInsert(PostgresChangePayload payload) {
+  if (!mounted) return;
+  
+  final newNotification = payload.newRecord;
+  
+  // FIXED: Filter by user ID in the handler, not in the subscription
+  if (newNotification['user_id'] != _userProfile?['id']) {
+    return; // Not for this user, ignore
+  }
+  
+  print('Handling notification insert for current user: ${newNotification['title']}');
+  
+  // Check if notification already exists by ID (more reliable than checking multiple fields)
+  final exists = _notifications.any((n) => n['id'] == newNotification['id']);
+  
+  if (!exists) {
+    setState(() {
+      _notifications.insert(0, newNotification);
       
-      // Just show a snackbar, don't auto-navigate
-      if (_currentTab != MainTab.notifications) {
-        _showSnackBar('New notification: ${newNotification['title']}');
+      // Update unread count
+      if (!(newNotification['is_read'] ?? false)) {
+        _unreadNotificationCount++;
+      }
+    });
+    
+    print('New notification added. Total: ${_notifications.length}, Unread: $_unreadNotificationCount');
+    
+    // Show snackbar notification only if not currently on notifications tab
+    if (_currentTab != MainTab.notifications) {
+      _showSnackBar('📢 ${newNotification['title'] ?? 'New notification'}');
+    }
+  } else {
+    print('Notification already exists, skipping');
+  }
+}
+
+void _handleNotificationUpdate(PostgresChangePayload payload) {
+  if (!mounted) return;
+  
+  final updatedNotification = payload.newRecord;
+  
+  // FIXED: Filter by user ID in the handler
+  if (updatedNotification['user_id'] != _userProfile?['id']) {
+    return; // Not for this user, ignore
+  }
+  
+  final notificationId = updatedNotification['id'];
+  
+  print('Handling notification update for current user, ID: $notificationId');
+  
+  final index = _notifications.indexWhere((n) => n['id'] == notificationId);
+  if (index != -1) {
+    final wasRead = _notifications[index]['is_read'] ?? false;
+    final isNowRead = updatedNotification['is_read'] ?? false;
+    
+    setState(() {
+      _notifications[index] = updatedNotification;
+      
+      // Update unread count based on read status change
+      if (wasRead != isNowRead) {
+        if (isNowRead && !wasRead) {
+          // Changed from unread to read
+          _unreadNotificationCount = (_unreadNotificationCount - 1).clamp(0, double.infinity).toInt();
+        } else if (!isNowRead && wasRead) {
+          // Changed from read to unread (unlikely but possible)
+          _unreadNotificationCount++;
+        }
+      }
+    });
+    
+    print('Notification updated. Unread count: $_unreadNotificationCount');
+  } else {
+    print('Notification not found in local list for update');
+  }
+}
+
+void _handleNotificationDelete(PostgresChangePayload payload) {
+  if (!mounted) return;
+  
+  final deletedNotification = payload.oldRecord;
+  
+  // FIXED: Filter by user ID in the handler
+  if (deletedNotification['user_id'] != _userProfile?['id']) {
+    return; // Not for this user, ignore
+  }
+  
+  final notificationId = deletedNotification['id'];
+  
+  print('Handling notification delete for current user, ID: $notificationId');
+  
+  setState(() {
+    final removedNotification = _notifications.firstWhere(
+      (n) => n['id'] == notificationId,
+      orElse: () => <String, dynamic>{},
+    );
+    
+    if (removedNotification.isNotEmpty) {
+      _notifications.removeWhere((n) => n['id'] == notificationId);
+      
+      // Update unread count if the deleted notification was unread
+      if (!(removedNotification['is_read'] ?? false)) {
+        _unreadNotificationCount = (_unreadNotificationCount - 1).clamp(0, double.infinity).toInt();
       }
     }
-  }
-
-  void _handleNotificationUpdate(PostgresChangePayload payload) {
-    if (!mounted) return;
-    
-    final index = _notifications.indexWhere((n) => n['id'] == payload.newRecord['id']);
-    if (index != -1) {
-      setState(() {
-        _notifications[index] = payload.newRecord;
-      });
-    }
-  }
+  });
+  
+  print('Notification deleted. Total: ${_notifications.length}, Unread: $_unreadNotificationCount');
+}
 
 
 Future<void> _loadNotifications() async {
-  if (_userProfile == null) {
+  if (_userProfile == null || _userProfile!['id'] == null) {
     print('Cannot load notifications - no user profile');
     return;
   }
   
-  print('Loading notifications for user ${_userProfile!['id']}');
+  final userId = _userProfile!['id'];
+  print('Loading notifications for user: $userId');
   
   try {
     final response = await Supabase.instance.client
         .from('notifications')
         .select()
-        .eq('user_id', _userProfile!['id'])
+        .eq('user_id', userId)
         .order('created_at', ascending: false);
-
-    print('Received ${response.length} notifications');
+    
+    print('Loaded ${response.length} notifications from database');
+    
+    // Remove duplicates before setting state
+    final uniqueNotifications = _removeDuplicateNotifications(response);
     
     if (mounted) {
       setState(() {
-        _notifications = List<Map<String, dynamic>>.from(response);
-        _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
-        print('Unread notifications count: $_unreadNotificationCount');
+        _notifications = uniqueNotifications;
+        _unreadNotificationCount = _notifications.where((n) => !(n['is_read'] ?? false)).length;
       });
+      
+      print('Notifications loaded. Total: ${_notifications.length}, Unread: $_unreadNotificationCount');
     }
   } catch (e) {
     print('Error loading notifications: $e');
+    if (mounted) {
+      _showSnackBar('Error loading notifications: ${e.toString()}');
+    }
   }
+}
+
+List<Map<String, dynamic>> _removeDuplicateNotifications(List<dynamic> notifications) {
+  final uniqueKeys = <String>{};
+  final uniqueNotifications = <Map<String, dynamic>>[];
+  
+  for (final notification in notifications.cast<Map<String, dynamic>>()) {
+    final key = '${notification['hotspot_id']}_${notification['user_id']}_${notification['type']}';
+    if (!uniqueKeys.contains(key)) {
+      uniqueKeys.add(key);
+      uniqueNotifications.add(notification);
+    }
+  }
+  
+  return uniqueNotifications;
 }
 
 Future<void> _markAsRead(String notificationId) async {
   try {
+    print('Marking notification as read: $notificationId');
+    
     await Supabase.instance.client
         .from('notifications')
         .update({'is_read': true})
         .eq('id', notificationId);
-
-    await _loadNotifications();
+    
+    // The real-time subscription should handle the UI update automatically
+    // But as a fallback, we can also update locally
+    final index = _notifications.indexWhere((n) => n['id'] == notificationId);
+    if (index != -1 && !(_notifications[index]['is_read'] ?? false)) {
+      setState(() {
+        _notifications[index]['is_read'] = true;
+        _unreadNotificationCount = (_unreadNotificationCount - 1).clamp(0, double.infinity).toInt();
+      });
+    }
+    
+    print('Notification marked as read. Unread count: $_unreadNotificationCount');
   } catch (e) {
     print('Error marking notification as read: $e');
+    if (mounted) {
+      _showSnackBar('Error updating notification: ${e.toString()}');
+    }
   }
 }
 
+// 7. Fix the markAllAsRead method
 Future<void> _markAllAsRead() async {
+  if (_userProfile == null) return;
+  
   try {
+    print('Marking all notifications as read');
+    
     await Supabase.instance.client
         .from('notifications')
         .update({'is_read': true})
         .eq('user_id', _userProfile!['id'])
         .eq('is_read', false);
-
-    await _loadNotifications();
+    
+    // The real-time subscription should handle the UI update automatically
+    // But as a fallback, we can also update locally
+    setState(() {
+      for (var notification in _notifications) {
+        notification['is_read'] = true;
+      }
+      _unreadNotificationCount = 0;
+    });
+    
+    print('All notifications marked as read');
   } catch (e) {
     print('Error marking all notifications as read: $e');
+    if (mounted) {
+      _showSnackBar('Error updating notifications: ${e.toString()}');
+    }
   }
 }
 
@@ -253,7 +443,7 @@ Future<void> _loadUserProfile() async {
           .select()
           .eq('email', user.email as Object)
           .single();
-
+      
       if (mounted) {
         setState(() {
           _userProfile = response;
@@ -262,7 +452,10 @@ Future<void> _loadUserProfile() async {
           _profileScreen.initControllers();
         });
         
-        // Load notifications after profile is loaded
+        print('User profile loaded: ${_userProfile!['id']}');
+        
+        // Setup real-time subscriptions after profile is loaded
+        _setupNotificationsRealtime();
         await _loadNotifications();
         await _loadHotspots();
       }
@@ -272,16 +465,19 @@ Future<void> _loadUserProfile() async {
         _showSnackBar('Error loading profile: ${e.toString()}');
       }
     }
+  } else {
+    print('No user logged in');
   }
 }
 
 
 
 void _setupRealtimeSubscription() {
-  _hotspotsChannel?.unsubscribe(); // Unsubscribe first if already subscribed
+  _hotspotsChannel?.unsubscribe();
+  _hotspotsChannelConnected = false;
 
   _hotspotsChannel = Supabase.instance.client
-      .channel('hotspots_realtime')
+      .channel('hotspots_realtime_${DateTime.now().millisecondsSinceEpoch}') // Unique channel name
       .onPostgresChanges(
         event: PostgresChangeEvent.insert,
         schema: 'public',
@@ -301,12 +497,23 @@ void _setupRealtimeSubscription() {
         callback: _handleHotspotDelete,
       )
       .subscribe((status, error) {
+        print('Hotspots channel status: $status, error: $error');
+        
         if (status == 'SUBSCRIBED') {
           print('Successfully connected to hotspots channel');
-        } else if (status == 'CHANNEL_ERROR') {
-          print('Error connecting to hotspots channel: $error');
+          setState(() => _hotspotsChannelConnected = true);
+        } else if (status == 'CHANNEL_ERROR' || status == 'CLOSED') {
+          print('Error with hotspots channel: $error');
+          setState(() => _hotspotsChannelConnected = false);
+          
           // Attempt to reconnect after delay
-          Future.delayed(const Duration(seconds: 5), _setupRealtimeSubscription);
+          _reconnectionTimer?.cancel();
+          _reconnectionTimer = Timer(const Duration(seconds: 3), () {
+            if (mounted) {
+              print('Attempting to reconnect hotspots channel...');
+              _setupRealtimeSubscription();
+            }
+          });
         }
       });
 }
@@ -315,90 +522,31 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
   if (!mounted) return;
   
   try {
-    // Fetch the complete hotspot data
+    // Fetch the complete hotspot data with proper crime type info
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
           *,
-          crime_type:type_id(name),
-          created_by,
-          reported_by
+          crime_type: type_id (id, name, level, category, description)
         ''')
         .eq('id', payload.newRecord['id'])
         .single();
 
     if (mounted) {
       setState(() {
-        if (response['crime_type'] != null) {
-          _hotspots.add(response);
-        } else {
-          _hotspots.add({
-            ...response,
-            'crime_type': {
-              'id': response['type_id'],
-              'name': 'Unknown',
-              'level': 'unknown',
-              'category': 'Unknown',
-              'description': null
-            }
-          });
-        }
-      });
-      
-      // Only send notifications for pending reports AND this is an INSERT operation
-      if (response['status'] == 'pending') {
-        print('Processing notifications for hotspot ${response['id']} with status: ${response['status']}');
-        
-        final admins = await Supabase.instance.client
-            .from('users')
-            .select('id')
-            .eq('role', 'admin');
-
-        print('Found ${admins.length} admins to notify');
-
-        for (final admin in admins) {
-          try {
-            // Check if notification already exists for this specific hotspot and admin
-            final existingNotifications = await Supabase.instance.client
-                .from('notifications')
-                .select('id')
-                .eq('user_id', admin['id'])
-                .eq('hotspot_id', response['id'])
-                .eq('type', 'report'); // Add type filter for more specificity
-
-            print('Existing notifications for admin ${admin['id']}: ${existingNotifications.length}');
-
-            // Only create notification if none exists
-            if (existingNotifications.isEmpty) {
-              final notificationData = {
-                'user_id': admin['id'],
-                'title': 'New Crime Report',
-                'message': 'New ${response['crime_type']['name']} report awaiting review',
-                'type': 'report',
-                'hotspot_id': response['id'],
-                'created_at': DateTime.now().toIso8601String(), // Explicit timestamp
-              };
-
-              print('Creating notification for admin ${admin['id']}');
-              
-              final insertResult = await Supabase.instance.client
-                  .from('notifications')
-                  .insert(notificationData)
-                  .select()
-                  .single();
-                  
-              print('Notification created successfully: ${insertResult['id']}');
-            } else {
-              print('Notification already exists for admin ${admin['id']}, skipping');
-            }
-          } catch (notificationError) {
-            print('Error creating notification for admin ${admin['id']}: $notificationError');
-            // Continue with next admin even if one fails
+        // Ensure proper crime_type structure
+        final crimeType = response['crime_type'] ?? {};
+        _hotspots.add({
+          ...response,
+          'crime_type': {
+            'id': crimeType['id'] ?? response['type_id'],
+            'name': crimeType['name'] ?? 'Unknown',
+            'level': crimeType['level'] ?? 'unknown',
+            'category': crimeType['category'] ?? 'General',
+            'description': crimeType['description'],
           }
-        }
-      } else {
-        print('Hotspot status is ${response['status']}, not sending notifications');
-      }
+        });
+      });
     }
   } catch (e) {
     print('Error in _handleHotspotInsert: $e');
@@ -410,7 +558,7 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
             'id': payload.newRecord['type_id'],
             'name': 'Unknown',
             'level': 'unknown',
-            'category': 'Unknown',
+            'category': 'General',
             'description': null
           }
         });
@@ -419,6 +567,7 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
   }
 }
 
+// ==== FIX 2: Fixed _handleHotspotUpdate for proper user-side color updates ====
 void _handleHotspotUpdate(PostgresChangePayload payload) async {
   if (!mounted) return;
   
@@ -429,7 +578,7 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
       orElse: () => {},
     );
 
-    // Fetch the updated hotspot data WITH CATEGORY included
+    // Fetch the updated hotspot data WITH proper crime_type structure
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
@@ -442,25 +591,42 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
     if (mounted) {
       setState(() {
         final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
+        
+        // Check if non-admin user should see this hotspot
+        final shouldShowForNonAdmin = _shouldNonAdminSeeHotspot(response);
+        
         if (index != -1) {
-          // Preserve the existing crime_type data if the new one is missing fields
-          final existingCrimeType = _hotspots[index]['crime_type'] ?? {};
-          _hotspots[index] = {
-            ...response,
-            'crime_type': {
-              ...existingCrimeType,
-              ...(response['crime_type'] ?? {}),
-              'category': response['crime_type']?['category'] ?? existingCrimeType['category'] ?? 'General'
-            }
-          };
+          // Hotspot exists in current list
+          if (_isAdmin || shouldShowForNonAdmin) {
+            // Update the existing hotspot with proper crime_type structure
+            final crimeType = response['crime_type'] ?? {};
+            _hotspots[index] = {
+              ...response,
+              'crime_type': {
+                'id': crimeType['id'] ?? response['type_id'],
+                'name': crimeType['name'] ?? 'Unknown',
+                'level': crimeType['level'] ?? 'unknown',
+                'category': crimeType['category'] ?? 'General',
+                'description': crimeType['description'],
+              }
+            };
+          } else {
+            // Non-admin user should no longer see this hotspot (e.g., it was rejected)
+            _hotspots.removeAt(index);
+          }
         } else {
-          // If not found and it's now active, add it with proper crime_type data
-          if (response['active_status'] == 'active') {
+          // Hotspot doesn't exist in current list
+          if (_isAdmin || shouldShowForNonAdmin) {
+            // Add it if user should see it
+            final crimeType = response['crime_type'] ?? {};
             _hotspots.add({
               ...response,
               'crime_type': {
-                ...(response['crime_type'] ?? {}),
-                'category': response['crime_type']?['category'] ?? 'General'
+                'id': crimeType['id'] ?? response['type_id'],
+                'name': crimeType['name'] ?? 'Unknown',
+                'level': crimeType['level'] ?? 'unknown',
+                'category': crimeType['category'] ?? 'General',
+                'description': crimeType['description'],
               }
             });
           }
@@ -485,9 +651,9 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
       // Show message for active status changes
       if (newActiveStatus != previousActiveStatus) {
         if (newActiveStatus == 'active') {
-          _showSnackBar('Hotspot activated: $crimeType');
+          _showSnackBar('Crime Report activated: $crimeType');
         } else {
-          _showSnackBar('Hotspot deactivated: $crimeType');
+          _showSnackBar('Crime Report deactivated: $crimeType');
         }
       }
     }
@@ -515,28 +681,24 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
   }
 }
 
-void _handleHotspotDelete(PostgresChangePayload payload) {
-  if (!mounted) return;
+
+bool _shouldNonAdminSeeHotspot(Map<String, dynamic> hotspot) {
+  final currentUserId = _userProfile?['id'];
+  final status = hotspot['status'] ?? 'approved';
+  final activeStatus = hotspot['active_status'] ?? 'active';
+  final createdBy = hotspot['created_by'];
+  final reportedBy = hotspot['reported_by'];
   
-  final deletedHotspotId = payload.oldRecord['id'];
+  // User's own hotspots (always visible to them)
+  final isOwnHotspot = currentUserId != null && 
+                   (currentUserId == createdBy || currentUserId == reportedBy);
   
-  setState(() {
-    // Remove the hotspot from local state
-    _hotspots.removeWhere((hotspot) => hotspot['id'] == deletedHotspotId);
-    
-    // Remove any notifications related to this hotspot
-    _notifications.removeWhere((notification) => 
-      notification['hotspot_id'] == deletedHotspotId);
-    
-    // Update unread notifications count
-    _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
-  });
-  
-  // Show a snackbar if the deleted hotspot was selected
-  if (_selectedHotspot != null && _selectedHotspot!['id'] == deletedHotspotId) {
-    _showSnackBar('Hotspot deleted');
-    _selectedHotspot = null;
+  if (isOwnHotspot) {
+    return true;
   }
+  
+  // Public hotspots (approved and active)
+  return status == 'approved' && activeStatus == 'active';
 }
 
 Future<void> _cleanupOrphanedNotifications() async {
@@ -563,7 +725,7 @@ Future<void> _cleanupOrphanedNotifications() async {
 
 Future<void> _loadHotspots() async {
   try {
-    // Start building the query
+    // Start building the query with proper crime type data
     final query = Supabase.instance.client
         .from('hotspot')
         .select('''
@@ -577,13 +739,14 @@ Future<void> _loadHotspots() async {
       print('Filtering hotspots for non-admin user');
       final currentUserId = _userProfile?['id'];
       
-      // Check if currentUserId is not null before using it
       if (currentUserId != null) {
         // For non-admins, show:
         // 1. All approved active hotspots
-        // 2. User's own reports (regardless of status)
+        // 2. User's own reports (regardless of status and active_status)
         filteredQuery = query.or(
-          'and(active_status.eq.active,status.eq.approved),' 'created_by.eq.$currentUserId,' 'reported_by.eq.$currentUserId'
+          'and(active_status.eq.active,status.eq.approved),'
+          'created_by.eq.$currentUserId,'
+          'reported_by.eq.$currentUserId'
         );
       } else {
         // If user ID is null, only show approved active hotspots
@@ -604,7 +767,21 @@ Future<void> _loadHotspots() async {
 
     if (mounted) {
       setState(() {
-        _hotspots = List<Map<String, dynamic>>.from(response);
+        _hotspots = List<Map<String, dynamic>>.from(response).map((hotspot) {
+          // Ensure proper crime_type structure for each hotspot
+          final crimeType = hotspot['crime_type'] ?? {};
+          return {
+            ...hotspot,
+            'crime_type': {
+              'id': crimeType['id'] ?? hotspot['type_id'],
+              'name': crimeType['name'] ?? 'Unknown',
+              'level': crimeType['level'] ?? 'unknown',
+              'category': crimeType['category'] ?? 'General',
+              'description': crimeType['description'],
+            }
+          };
+        }).toList();
+        
         print('Loaded ${_hotspots.length} hotspots');
         if (_isAdmin) {
           final inactiveCount = _hotspots.where((h) => h['active_status'] == 'inactive').length;
@@ -721,45 +898,109 @@ void _clearDirections() {
   });
 }
 
-  Future<void> _getDirections(LatLng destination) async {
-    if (_currentPosition == null) return;
-    try {
-      final response = await http.get(Uri.parse(
+Future<void> _getDirections(LatLng destination) async {
+  if (_currentPosition == null) return;
+  
+  try {
+    final response = await http.get(
+      Uri.parse(
         'https://router.project-osrm.org/route/v1/driving/'
         '${_currentPosition!.longitude},${_currentPosition!.latitude};'
         '${destination.longitude},${destination.latitude}?overview=full&geometries=geojson',
-      ));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final route = data['routes'][0];
-
+      ),
+      headers: {
+        'User-Agent': 'YourAppName/1.0',
+      },
+    ).timeout(
+      const Duration(seconds: 15),
+      onTimeout: () => throw TimeoutException('Route request timed out', const Duration(seconds: 15)),
+    );
+    
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      
+      // Check if routes exist
+      if (data['routes'] == null || (data['routes'] as List).isEmpty) {
+        _showSnackBar('No route found to destination');
+        return;
+      }
+      
+      final route = data['routes'][0];
+      
+      // Safely parse distance and duration with type conversion
+      final distance = _safeParseDouble(route['distance']) ?? 0.0;
+      final duration = _safeParseDouble(route['duration']) ?? 0.0;
+      
+      // Safely parse coordinates
+      List<LatLng> routePoints = [];
+      try {
+        final coordinates = route['geometry']?['coordinates'] as List?;
+        if (coordinates != null) {
+          routePoints = coordinates.map((coord) {
+            final coordList = coord as List;
+            final lng = _safeParseDouble(coordList[0]) ?? 0.0;
+            final lat = _safeParseDouble(coordList[1]) ?? 0.0;
+            return LatLng(lat, lng);
+          }).toList();
+        }
+      } catch (e) {
+        print('Error parsing route coordinates: $e');
+        _showSnackBar('Error processing route data');
+        return;
+      }
+      
+      if (mounted) {
         setState(() {
-          _distance = route['distance'] / 1000;
-          _duration = _formatDuration(route['duration']);
-          _polylinePoints = (route['geometry']['coordinates'] as List)
-              .map((coord) => LatLng(coord[1], coord[0]))
-              .toList();
+          _distance = distance / 1000; // Convert to km
+          _duration = _formatDuration(duration);
+          _polylinePoints = routePoints;
           _destination = destination;
           _showClearButton = true;
         });
+        
         _mapController.fitBounds(
           LatLngBounds(_currentPosition!, destination),
           options: const FitBoundsOptions(padding: EdgeInsets.all(50.0)),
         );
       }
-    } catch (e) {
-      _showSnackBar('Failed to get directions: ${e.toString()}');
-    }
-  }
-
-  String _formatDuration(double seconds) {
-    final duration = Duration(seconds: seconds.toInt());
-    if (duration.inHours > 0) {
-      return '${duration.inHours}h ${duration.inMinutes.remainder(60)}m';
     } else {
-      return '${duration.inMinutes}m';
+      print('Directions API returned status: ${response.statusCode}');
+      _showSnackBar('Failed to get directions (${response.statusCode})');
     }
+  } on TimeoutException catch (e) {
+    print('Directions timeout: $e');
+    _showSnackBar('Route request timed out - please try again');
+  } on SocketException catch (e) {
+    print('Network error during route request: $e');
+    _showSnackBar('Network error - check your connection');
+  } catch (e) {
+    print('Directions error: $e');
+    _showSnackBar('Failed to get directions: ${e.toString()}');
   }
+}
+
+// Helper method to safely parse numbers that might be int or double
+double? _safeParseDouble(dynamic value) {
+  if (value == null) return null;
+  if (value is double) return value;
+  if (value is int) return value.toDouble();
+  if (value is String) return double.tryParse(value);
+  return null;
+}
+
+// Updated _formatDuration to handle the double properly
+String _formatDuration(double seconds) {
+  if (seconds.isNaN || seconds.isInfinite || seconds < 0) {
+    return 'Unknown duration';
+  }
+  
+  final duration = Duration(seconds: seconds.round());
+  if (duration.inHours > 0) {
+    return '${duration.inHours}h ${duration.inMinutes.remainder(60)}m';
+  } else {
+    return '${duration.inMinutes}m';
+  }
+}
 
   void _showSnackBar(String message) {
     if (mounted) {
@@ -1158,20 +1399,39 @@ double _calculateDistance(LatLng point1, LatLng point2) {
 }
 
 Future<List<LatLng>> _getRouteFromAPI(LatLng start, LatLng end) async {
-  final response = await http.get(Uri.parse(
-    'https://router.project-osrm.org/route/v1/driving/'
-    '${start.longitude},${start.latitude};'
-    '${end.longitude},${end.latitude}?overview=full&geometries=geojson',
-  ));
+  final response = await http.get(
+    Uri.parse(
+      'https://router.project-osrm.org/route/v1/driving/'
+      '${start.longitude},${start.latitude};'
+      '${end.longitude},${end.latitude}?overview=full&geometries=geojson',
+    ),
+    headers: {
+      'User-Agent': 'YourAppName/1.0',
+    },
+  ).timeout(const Duration(seconds: 15));
 
   if (response.statusCode == 200) {
     final data = json.decode(response.body);
+    
+    if (data['routes'] == null || (data['routes'] as List).isEmpty) {
+      throw Exception('No route found');
+    }
+    
     final route = data['routes'][0];
-    return (route['geometry']['coordinates'] as List)
-        .map((coord) => LatLng(coord[1], coord[0]))
-        .toList();
+    final coordinates = route['geometry']?['coordinates'] as List?;
+    
+    if (coordinates == null) {
+      throw Exception('No route coordinates found');
+    }
+    
+    return coordinates.map((coord) {
+      final coordList = coord as List;
+      final lng = _safeParseDouble(coordList[0]) ?? 0.0;
+      final lat = _safeParseDouble(coordList[1]) ?? 0.0;
+      return LatLng(lat, lng);
+    }).toList();
   }
-  throw Exception('Failed to get route');
+  throw Exception('Failed to get route (${response.statusCode})');
 }
 
 List<LatLng> _findUnsafeSegments(List<LatLng> route) {
@@ -1214,21 +1474,40 @@ Future<List<LatLng>> _getRouteWithWaypoints(
   // Convert waypoints to string format for API
   final waypointsStr = waypoints.map((p) => '${p.longitude},${p.latitude}').join(';');
   
-  final response = await http.get(Uri.parse(
-    'https://router.project-osrm.org/route/v1/driving/'
-    '${start.longitude},${start.latitude};'
-    '$waypointsStr;'
-    '${end.longitude},${end.latitude}?overview=full&geometries=geojson',
-  ));
+  final response = await http.get(
+    Uri.parse(
+      'https://router.project-osrm.org/route/v1/driving/'
+      '${start.longitude},${start.latitude};'
+      '$waypointsStr;'
+      '${end.longitude},${end.latitude}?overview=full&geometries=geojson',
+    ),
+    headers: {
+      'User-Agent': 'YourAppName/1.0',
+    },
+  ).timeout(const Duration(seconds: 20)); // Longer timeout for complex routes
 
   if (response.statusCode == 200) {
     final data = json.decode(response.body);
+    
+    if (data['routes'] == null || (data['routes'] as List).isEmpty) {
+      throw Exception('No safe route found');
+    }
+    
     final route = data['routes'][0];
-    return (route['geometry']['coordinates'] as List)
-        .map((coord) => LatLng(coord[1], coord[0]))
-        .toList();
+    final coordinates = route['geometry']?['coordinates'] as List?;
+    
+    if (coordinates == null) {
+      throw Exception('No route coordinates found');
+    }
+    
+    return coordinates.map((coord) {
+      final coordList = coord as List;
+      final lng = _safeParseDouble(coordList[0]) ?? 0.0;
+      final lat = _safeParseDouble(coordList[1]) ?? 0.0;
+      return LatLng(lat, lng);
+    }).toList();
   }
-  throw Exception('Failed to get route with waypoints');
+  throw Exception('Failed to get safe route (${response.statusCode})');
 }
 
 Future<void> _getSafeRoute(LatLng destination) async {
@@ -1953,7 +2232,7 @@ items: crimeTypes.map((crimeType) {
                                 await _loadHotspots();
                                 if (mounted) {
                                   Navigator.pop(context);
-                                  _showSnackBar('Hotspot updated successfully');
+                                  _showSnackBar('Updated crime successfully');
                                 }
                               } catch (e) {
                                 print('Error updating hotspot: $e');
@@ -2002,63 +2281,195 @@ items: crimeTypes.map((crimeType) {
 }
 
 
-  Future<void> _reportHotspot(
-    int typeId,
-    String description,
-    LatLng position,
-    DateTime dateTime,
-  ) async {
-    try {
-      final insertData = {
-        'type_id': typeId,
-        'description': description.trim().isNotEmpty ? description.trim() : null,
-        'location': 'POINT(${position.longitude} ${position.latitude})',
-        'time': dateTime.toIso8601String(),
-        'status': 'pending',
-        'created_by': _userProfile?['id'],
-        'reported_by': _userProfile?['id'],
-        'created_at': DateTime.now().toIso8601String(),
-      };
+Future<void> _reportHotspot(
+  int typeId,
+  String description,
+  LatLng position,
+  DateTime dateTime,
+) async {
+  try {
+    final insertData = {
+      'type_id': typeId,
+      'description': description.trim().isNotEmpty ? description.trim() : null,
+      'location': 'POINT(${position.longitude} ${position.latitude})',
+      'time': dateTime.toIso8601String(),
+      'status': 'pending',
+      'created_by': _userProfile?['id'],
+      'reported_by': _userProfile?['id'],
+      'created_at': DateTime.now().toIso8601String(),
+    };
 
-      await Supabase.instance.client
-          .from('hotspot')
-          .insert(insertData)
-          .timeout(const Duration(seconds: 10));
+    // Insert the hotspot
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .insert(insertData)
+        .select('''
+          *,
+          crime_type: type_id (id, name, level, category, description)
+        ''')
+        .single();
 
-      // Real-time subscription will handle adding to the list
-    } on PostgrestException catch (e) {
-      throw Exception('Database error: ${e.message}');
-    } on TimeoutException {
-      throw Exception('Request timed out. Please try again.');
-    } catch (e) {
-      throw Exception('Failed to report hotspot: ${e.toString()}');
-    }
-  }
+    print('Hotspot inserted successfully: ${response['id']}');
 
+    // Only create notifications if this is a pending report
+    if (response['status'] == 'pending') {
+      try {
+        // Get all admin users
+        final admins = await Supabase.instance.client
+            .from('users')
+            .select('id')
+            .eq('role', 'admin');
 
+        // Create a single batch insert for all notifications with unique constraint
+        if (admins.isNotEmpty) {
+          final notifications = admins.map((admin) => {
+            'user_id': admin['id'],
+            'title': 'New Crime Report',
+            'message': 'New ${response['crime_type']['name']} report awaiting review',
+            'type': 'report',
+            'hotspot_id': response['id'],
+            'created_at': DateTime.now().toIso8601String(),
+            // Add a unique constraint key to prevent duplicates
+            'unique_key': 'report_${response['id']}_${admin['id']}',
+          }).toList();
 
-
-
-  Future<void> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
-    try {
-      await Supabase.instance.client
-          .from('hotspot')
-          .insert({
-            'type_id': int.parse(typeId),
-            'description': description.trim().isNotEmpty ? description.trim() : null,
-            'location': 'POINT(${position.longitude} ${position.latitude})',
-            'time': dateTime.toIso8601String(),
-            'created_by': _userProfile?['id'],
-          });
-
-      if (mounted) {
-        _showSnackBar('Crime record saved');
+          // Use upsert to prevent duplicates
+          await Supabase.instance.client
+              .from('notifications')
+              .upsert(
+                notifications,
+                onConflict: 'unique_key', // This requires a unique constraint in your DB
+              );
+          
+          print('Created/updated ${notifications.length} admin notifications');
+        }
+      } catch (notificationError) {
+        print('Error creating notifications: $notificationError');
       }
-    } catch (e) {
-      _showSnackBar('Failed to save hotspot: ${e.toString()}');
-      print('Error details: $e');
+    }
+
+    // UI fallback if real-time fails
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (!_hotspots.any((h) => h['id'] == response['id']) && mounted) {
+      setState(() {
+        final crimeType = response['crime_type'] ?? {};
+        _hotspots.insert(0, {
+          ...response,
+          'crime_type': {
+            'id': crimeType['id'] ?? response['type_id'],
+            'name': crimeType['name'] ?? 'Unknown',
+            'level': crimeType['level'] ?? 'unknown',
+            'category': crimeType['category'] ?? 'General',
+            'description': crimeType['description'],
+          }
+        });
+      });
+    }
+
+  } catch (e) {
+    _showSnackBar('Failed to report hotspot: ${e.toString()}');
+  }
+}
+
+
+
+// 7. Add method to check and refresh if real-time is disconnected
+void _checkRealtimeConnection() {
+  if (_userProfile != null) {
+    if (!_hotspotsChannelConnected) {
+      print('Hotspots channel disconnected, attempting reconnection...');
+      _setupRealtimeSubscription();
+    }
+    
+    if (!_notificationsChannelConnected) {
+      print('Notifications channel disconnected, attempting reconnection...');
+      _setupNotificationsRealtime();
     }
   }
+}
+
+// 5. Update _saveHotspot with similar fallback mechanism
+Future<void> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
+  try {
+    final insertData = {
+      'type_id': int.parse(typeId),
+      'description': description.trim().isNotEmpty ? description.trim() : null,
+      'location': 'POINT(${position.longitude} ${position.latitude})',
+      'time': dateTime.toIso8601String(),
+      'created_by': _userProfile?['id'],
+      'status': 'approved', // Admin creates are auto-approved
+      'active_status': 'active',
+    };
+
+    // Insert the hotspot - let real-time handle the rest
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .insert(insertData)
+        .select('''
+          *,
+          crime_type: type_id (id, name, level, category, description)
+        ''')
+        .single();
+
+    print('Crime report added successfully: ${response['id']}');
+
+    // Optional fallback only for UI updates
+    await Future.delayed(const Duration(milliseconds: 500));
+    
+    final hotspotExists = _hotspots.any((h) => h['id'] == response['id']);
+    
+    if (!hotspotExists) {
+      print('Real-time failed, manually adding admin hotspot to UI');
+      
+      if (mounted) {
+        setState(() {
+          final crimeType = response['crime_type'] ?? {};
+          _hotspots.insert(0, {
+            ...response,
+            'crime_type': {
+              'id': crimeType['id'] ?? response['type_id'],
+              'name': crimeType['name'] ?? 'Unknown',
+              'level': crimeType['level'] ?? 'unknown',
+              'category': crimeType['category'] ?? 'General',
+              'description': crimeType['description'],
+            }
+          });
+        });
+      }
+    }
+
+    if (mounted) {
+      _showSnackBar('Crime record saved');
+    }
+  } catch (e) {
+    _showSnackBar('Failed to save hotspot: ${e.toString()}');
+    print('Error details: $e');
+  }
+}
+
+void _handleHotspotDelete(PostgresChangePayload payload) {
+  if (!mounted) return;
+  
+  final deletedHotspotId = payload.oldRecord['id'];
+  
+  setState(() {
+    // Remove the hotspot from local state
+    _hotspots.removeWhere((hotspot) => hotspot['id'] == deletedHotspotId);
+    
+    // Remove any notifications related to this hotspot
+    _notifications.removeWhere((notification) => 
+      notification['hotspot_id'] == deletedHotspotId);
+    
+    // Update unread notifications count
+    _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
+  });
+  
+  // Show a snackbar if the deleted hotspot was selected
+  if (_selectedHotspot != null && _selectedHotspot!['id'] == deletedHotspotId) {
+    _showSnackBar('Crime report deleted');
+    _selectedHotspot = null;
+  }
+}
 
   Future<void> _shareLocation(LatLng position) async {
     final url = 'https://www.google.com/maps/search/?api=1&query=${position.latitude},${position.longitude}';
@@ -2700,7 +3111,7 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
     return;
   }
 
-  // Mobile View (Bottom Sheet)
+  // Mobile View (Bottom Sheet) - Updated to show active status for everyone
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -2755,24 +3166,23 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
               title: const Text('Time:'),
               subtitle: Text(formattedTime),
             ),
-            // Show active status only to admins
-            if (_isAdmin)
-              ListTile(
-                title: Text(
-                  'Active Status: ${activeStatus.toUpperCase()}',
-                  style: TextStyle(
-                    color: activeStatus == 'active' ? Colors.green : Colors.grey,
-                    fontWeight: FontWeight.bold,
-                  ),
+            // Show active status for everyone (not just admins)
+            ListTile(
+              title: Text(
+                'Status: ${activeStatus.toUpperCase()}',
+                style: TextStyle(
+                  color: activeStatus == 'active' ? Colors.green : Colors.grey,
+                  fontWeight: FontWeight.bold,
                 ),
-                trailing: activeStatus == 'active' 
-                  ? const Icon(Icons.check_circle, color: Colors.green)
-                  : const Icon(Icons.cancel, color: Colors.grey),
               ),
+              trailing: activeStatus == 'active' 
+                ? const Icon(Icons.check_circle, color: Colors.green)
+                : const Icon(Icons.cancel, color: Colors.grey),
+            ),
             if (status != 'approved')
               ListTile(
                 title: Text(
-                  'Status: ${status.toUpperCase()}',
+                  'Review Status: ${status.toUpperCase()}',
                   style: TextStyle(
                     color: status == 'pending' ? Colors.orange : Colors.red,
                     fontWeight: FontWeight.bold,
@@ -2782,6 +3192,7 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
                     ? Text('Reason: ${hotspot['rejection_reason']}')
                     : null,
               ),
+            // ... rest of the existing action buttons remain the same ...
             if (_isAdmin && status == 'pending')
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16.0),
@@ -2939,7 +3350,7 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
         .select('id')
         .single();
 
-    print('Hotspot update response: $updateResponse');
+    print('Report update response: $updateResponse');
 
     // Send notification to the reporter
     final reporterId = hotspotResponse['reported_by'] ?? hotspotResponse['created_by'];
@@ -3043,13 +3454,13 @@ Future<void> _deleteHotspot(int id) async {
         .eq('id', id);
 
     if (mounted) {
-      _showSnackBar('Hotspot deleted successfully');
+      _showSnackBar('Report deleted successfully');
       Navigator.pop(context); // Close any open dialogs
       await _loadHotspots(); // Refresh the list
     }
   } catch (e) {
     if (mounted) {
-      _showSnackBar('Failed to delete hotspot: ${e.toString()}');
+      _showSnackBar('Failed to delete report: ${e.toString()}');
     }
   }
 }
@@ -3170,31 +3581,64 @@ Widget _buildCurrentScreen() {
 }
 
 
-  Future<List<LocationSuggestion>> _searchLocations(String query) async {
-    if (query.isEmpty) return [];
-    try {
-      final response = await http.get(
-        Uri.parse('https://nominatim.openstreetmap.org/search?format=json&q=$query'),
-      );
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        return data.map((item) => LocationSuggestion(
-          displayName: item['display_name'],
-          lat: double.parse(item['lat']),
-          lon: double.parse(item['lon']),
-        )).toList();
-      } else {
-        throw Exception('Failed to load locations');
+Future<List<LocationSuggestion>> _searchLocations(String query) async {
+  if (query.isEmpty || query.length < 2) return []; // Minimum 2 characters
+  
+  try {
+    // Add timeout and better error handling
+    final response = await http.get(
+      Uri.parse('https://nominatim.openstreetmap.org/search?format=json&q=${Uri.encodeComponent(query)}&limit=10&countrycodes=ph'), // Add country code for better results
+      headers: {
+        'User-Agent': 'YourAppName/1.0 (contact@yourapp.com)', // Required by Nominatim
+      },
+    ).timeout(
+      const Duration(seconds: 10), // Add timeout
+      onTimeout: () => throw TimeoutException('Search request timed out', const Duration(seconds: 10)),
+    );
+    
+    if (response.statusCode == 200) {
+      final List<dynamic> data = json.decode(response.body);
+      
+      if (data.isEmpty) {
+        return [];
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Search error: ${e.toString()}')),
-        );
-      }
-      return [];
+      
+      return data.map((item) {
+        try {
+          return LocationSuggestion(
+            displayName: item['display_name']?.toString() ?? 'Unknown location',
+            lat: double.tryParse(item['lat']?.toString() ?? '0') ?? 0.0,
+            lon: double.tryParse(item['lon']?.toString() ?? '0') ?? 0.0,
+          );
+        } catch (e) {
+          print('Error parsing location item: $e');
+          return null;
+        }
+      }).where((item) => item != null).cast<LocationSuggestion>().toList();
+    } else {
+      print('Search API returned status: ${response.statusCode}');
+      throw HttpException('Search service temporarily unavailable (${response.statusCode})');
     }
+  } on TimeoutException catch (e) {
+    print('Search timeout: $e');
+    if (mounted) {
+      _showSnackBar('Search timeout - please try again');
+    }
+    return [];
+  } on SocketException catch (e) {
+    print('Network error during search: $e');
+    if (mounted) {
+      _showSnackBar('Network error - check your connection');
+    }
+    return [];
+  } catch (e) {
+    print('Search error: $e');
+    if (mounted) {
+      _showSnackBar('Search temporarily unavailable');
+    }
+    return [];
   }
+}
 
   void _onSuggestionSelected(LocationSuggestion suggestion) {
     final newPosition = LatLng(suggestion.lat, suggestion.lon);
