@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:zecure/main.dart';
 import 'package:zecure/services/auth_service.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -2494,15 +2495,17 @@ void _handleHotspotDelete(PostgresChangePayload payload) {
     }
   }
 
-  Future<void> _logout() async {
-    await _authService.signOut();
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginScreen()),
-      );
-    }
+Future<void> _logout() async {
+  isLoggingOut = true; // Set the flag
+  await _authService.signOut();
+  if (mounted) {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+    );
   }
+}
+
 
   void _showLogoutConfirmation() async {
     final shouldLogout = await showDialog<bool>(
