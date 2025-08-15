@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
 import 'package:zecure/screens/map_screen.dart';
+import 'dart:async';
 
 class LandingScreen extends StatefulWidget {
   const LandingScreen({super.key});
@@ -14,18 +15,31 @@ class _LandingScreenState extends State<LandingScreen>
     with TickerProviderStateMixin {
   late AnimationController _fadeController;
   late AnimationController _slideController;
+  late AnimationController _featureController;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
+  late Animation<double> _featureScaleAnimation;
+  
+  // Carousel controllers
+  late PageController _pageController;
+  int _currentPage = 0;
+  Timer? _autoPlayTimer;
 
   @override
   void initState() {
     super.initState();
+    
+    // Initialize existing animations
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     );
     _slideController = AnimationController(
       duration: const Duration(milliseconds: 1200),
+      vsync: this,
+    );
+    _featureController = AnimationController(
+      duration: const Duration(milliseconds: 800),
       vsync: this,
     );
 
@@ -45,15 +59,102 @@ class _LandingScreenState extends State<LandingScreen>
       curve: Curves.easeOutBack,
     ));
 
+    _featureScaleAnimation = Tween<double>(
+      begin: 0.8,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _featureController,
+      curve: Curves.elasticOut,
+    ));
+
+    // Initialize carousel
+    _pageController = PageController(viewportFraction: 0.85);
+    
+    // Start animations
     _fadeController.forward();
     _slideController.forward();
+    
+    // Delayed feature animation
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _featureController.forward();
+    });
+    
+    // Start auto-play
+    _startAutoPlay();
+  }
+
+  void _startAutoPlay() {
+    _autoPlayTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (_pageController.hasClients && mounted) {
+        final nextPage = (_currentPage + 1) % _getFeatures().length;
+        _pageController.animateToPage(
+          nextPage,
+          duration: const Duration(milliseconds: 800),
+          curve: Curves.easeInOutCubic,
+        );
+      }
+    });
+  }
+
+  void _stopAutoPlay() {
+    _autoPlayTimer?.cancel();
   }
 
   @override
   void dispose() {
     _fadeController.dispose();
     _slideController.dispose();
+    _featureController.dispose();
+    _pageController.dispose();
+    _stopAutoPlay();
     super.dispose();
+  }
+
+  List<Map<String, dynamic>> _getFeatures() {
+    return [
+      {
+        'icon': Icons.map_rounded,
+        'title': 'Live Safety Map',
+        'description': 'See current unsafe areas and safe zones in your neighborhood on an easy-to-read map',
+        'color': Colors.blue,
+        'gradient': [Colors.blue.shade400, Colors.blue.shade600],
+      },
+      {
+        'icon': Icons.psychology_rounded,
+        'title': 'Smart Safety Alerts',
+        'description': 'Get helpful warnings about areas to avoid based on recent incidents and reports',
+        'color': Colors.purple,
+        'gradient': [Colors.purple.shade400, Colors.purple.shade600],
+      },
+      {
+        'icon': Icons.route_rounded,
+        'title': 'Safe Route Finder',
+        'description': 'Find the safest paths to your destination using current safety information',
+        'color': Colors.green,
+        'gradient': [Colors.green.shade400, Colors.green.shade600],
+      },
+      {
+        'icon': Icons.notification_important_rounded,
+        'title': 'Instant Safety Alerts',
+        'description': 'Get quick notifications about safety concerns happening near you',
+        'color': Colors.orange,
+        'gradient': [Colors.orange.shade400, Colors.orange.shade600],
+      },
+      {
+        'icon': Icons.people_rounded,
+        'title': 'Community Reports',
+        'description': 'Share safety information and mark safe places to help your neighbors',
+        'color': Colors.teal,
+        'gradient': [Colors.teal.shade400, Colors.teal.shade600],
+      },
+      {
+        'icon': Icons.shield_rounded,
+        'title': 'For Everyone',
+        'description': 'Made for all Zamboanga families, police officers, and local government',
+        'color': Colors.indigo,
+        'gradient': [Colors.indigo.shade400, Colors.indigo.shade600],
+      },
+    ];
   }
 
   @override
@@ -92,15 +193,18 @@ class _LandingScreenState extends State<LandingScreen>
                     ),
                   ),
                   
-                  SizedBox(height: isWeb ? 40 : 24),
+                  SizedBox(height: isWeb ? 60 : 40),
                   
-                  // Features Section
-                  FadeTransition(
-                    opacity: _fadeAnimation,
-                    child: _buildFeaturesSection(isWeb, screenWidth),
+                  // Enhanced Features Section with Carousel
+                  ScaleTransition(
+                    scale: _featureScaleAnimation,
+                    child: FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: _buildEnhancedFeaturesSection(isWeb, screenWidth),
+                    ),
                   ),
                   
-                  SizedBox(height: isWeb ? 40 : 24),
+                  SizedBox(height: isWeb ? 60 : 40),
                   
                   // Call to Action
                   FadeTransition(
@@ -119,7 +223,6 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   Widget _buildHeroSection(bool isWeb, double screenWidth) {
-    // Expanded width for hero content
     final double maxWidth = isWeb ? 700 : screenWidth * 0.95;
     
     return Container(
@@ -130,21 +233,23 @@ class _LandingScreenState extends State<LandingScreen>
           constraints: BoxConstraints(maxWidth: maxWidth),
           child: Column(
             children: [
-              // Logo without shadow
+              // Logo without shadow and expanded size
               Image.asset(
                 'assets/images/zecure.png',
-                height: isWeb ? 120 : 100,
-                width: isWeb ? 120 : 100,
+                height: isWeb ? 150 : 130,
+                width: isWeb ? 150 : 130,
                 errorBuilder: (context, error, stackTrace) => Container(
-                  height: isWeb ? 120 : 100,
-                  width: isWeb ? 120 : 100,
+                  height: isWeb ? 150 : 130,
+                  width: isWeb ? 150 : 130,
                   decoration: BoxDecoration(
-                    color: Colors.blue.shade600,
-                    borderRadius: BorderRadius.circular(60),
+                    gradient: LinearGradient(
+                      colors: [Colors.blue.shade400, Colors.blue.shade600],
+                    ),
+                    borderRadius: BorderRadius.circular(75),
                   ),
                   child: Icon(
                     Icons.security_rounded,
-                    size: isWeb ? 70 : 60,
+                    size: isWeb ? 90 : 80,
                     color: Colors.white,
                   ),
                 ),
@@ -152,15 +257,20 @@ class _LandingScreenState extends State<LandingScreen>
               
               SizedBox(height: isWeb ? 20 : 12),
               
-              // Main Title
-              Text(
-                'Welcome to Zecure',
-                style: GoogleFonts.poppins(
-                  fontSize: isWeb ? 38 : 26,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade800,
+              // Main Title with gradient
+              ShaderMask(
+                shaderCallback: (bounds) => LinearGradient(
+                  colors: [Colors.blue.shade600, Colors.blue.shade800],
+                ).createShader(bounds),
+                child: Text(
+                  'Welcome to Zecure',
+                  style: GoogleFonts.poppins(
+                    fontSize: isWeb ? 38 : 26,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
               ),
               
               const SizedBox(height: 8),
@@ -198,150 +308,268 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  Widget _buildFeaturesSection(bool isWeb, double screenWidth) {
-    final features = [
-      {
-        'icon': Icons.map_rounded,
-        'title': 'Live Safety Map',
-        'description': 'See current unsafe areas and safe zones in your neighborhood on an easy-to-read map'
-      },
-      {
-        'icon': Icons.psychology_rounded,
-        'title': 'Smart Safety Alerts',
-        'description': 'Get helpful warnings about areas to avoid based on recent incidents and reports'
-      },
-      {
-        'icon': Icons.route_rounded,
-        'title': 'Safe Route Finder',
-        'description': 'Find the safest paths to your destination using current safety information'
-      },
-      {
-        'icon': Icons.notification_important_rounded,
-        'title': 'Instant Safety Alerts',
-        'description': 'Get quick notifications about safety concerns happening near you'
-      },
-      {
-        'icon': Icons.people_rounded,
-        'title': 'Community Reports',
-        'description': 'Share safety information and mark safe places to help your neighbors'
-      },
-      {
-        'icon': Icons.shield_rounded,
-        'title': 'For Everyone',
-        'description': 'Made for all Zamboanga families, police officers, and local government'
-      },
-    ];
-
-    // Expanded width for features section
-    final double maxWidth = isWeb ? 1000 : screenWidth * 0.95;
-
-    return SizedBox(
-      width: double.infinity,
-      child: Center(
-        child: Container(
-          constraints: BoxConstraints(maxWidth: maxWidth),
-          child: Column(
-            children: [
-              Text(
-                'How Zecure Keeps You Safe',
-                style: GoogleFonts.poppins(
-                  fontSize: isWeb ? 26 : 22,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade800,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              
-              SizedBox(height: isWeb ? 32 : 24),
-              
-              if (isWeb)
-                Wrap(
-                  spacing: 24,
-                  runSpacing: 24,
-                  alignment: WrapAlignment.center,
-                  children: features
-                      .map((feature) => _buildFeatureCard(feature, isWeb, screenWidth))
-                      .toList(),
-                )
-              else
-                Column(
-                  children: features
-                      .map((feature) => Padding(
-                            padding: const EdgeInsets.only(bottom: 16),
-                            child: _buildFeatureCard(feature, isWeb, screenWidth),
-                          ))
-                      .toList(),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFeatureCard(Map<String, dynamic> feature, bool isWeb, double screenWidth) {
-    // Expanded width for feature cards
-    final double cardWidth = isWeb ? 300 : screenWidth * 0.92;
+  Widget _buildEnhancedFeaturesSection(bool isWeb, double screenWidth) {
+    final features = _getFeatures();
     
     return Container(
-      width: cardWidth,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 20,
-            spreadRadius: 2,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+      width: double.infinity,
+      margin: EdgeInsets.symmetric(vertical: isWeb ? 30 : 20),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blue.shade50,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              feature['icon'],
-              color: Colors.blue.shade600,
-              size: 26,
-            ),
-          ),
-          
-          const SizedBox(height: 14),
-          
+          // Section Title
           Text(
-            feature['title'],
+            'How Zecure Keeps You Safe',
             style: GoogleFonts.poppins(
-              fontSize: 17,
+              fontSize: isWeb ? 28 : 24,
               fontWeight: FontWeight.bold,
               color: Colors.grey.shade800,
             ),
+            textAlign: TextAlign.center,
           ),
           
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           
           Text(
-            feature['description'],
+            'Discover powerful features designed for your safety',
             style: GoogleFonts.poppins(
-              fontSize: 13,
+              fontSize: isWeb ? 16 : 14,
               color: Colors.grey.shade600,
-              height: 1.5,
             ),
+            textAlign: TextAlign.center,
+          ),
+          
+          SizedBox(height: isWeb ? 30 : 25),
+          
+          // Carousel Section with expanded width
+          SizedBox(
+            width: double.infinity,
+            height: isWeb ? 280 : 220,
+            child: PageView.builder(
+              controller: _pageController,
+              onPageChanged: (index) {
+                setState(() {
+                  _currentPage = index;
+                });
+              },
+              itemCount: features.length,
+              itemBuilder: (context, index) {
+                return AnimatedBuilder(
+                  animation: _pageController,
+                  builder: (context, child) {
+                    double value = 0;
+                    if (_pageController.position.haveDimensions) {
+                      value = index.toDouble() - (_pageController.page ?? 0);
+                      value = (1 - (value.abs() * 0.3)).clamp(0.7, 1.0);
+                    } else {
+                      value = index == 0 ? 1.0 : 0.7;
+                    }
+                    
+                    return Transform.scale(
+                      scale: value,
+                      child: Opacity(
+                        opacity: value,
+                        child: _buildEnhancedFeatureCard(features[index], isWeb, screenWidth),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          
+          const SizedBox(height: 18),
+          
+          // Pagination Dots
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(features.length, (index) {
+              return GestureDetector(
+                onTap: () {
+                  _pageController.animateToPage(
+                    index,
+                    duration: const Duration(milliseconds: 600),
+                    curve: Curves.easeInOut,
+                  );
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  width: _currentPage == index ? 24 : 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: _currentPage == index 
+                      ? Colors.blue.shade600 
+                      : Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              );
+            }),
+          ),
+          
+          const SizedBox(height: 15),
+          
+          // Auto-play controls
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                onPressed: () {
+                  _stopAutoPlay();
+                  if (_currentPage > 0) {
+                    _pageController.previousPage(
+                      duration: const Duration(milliseconds: 600),
+                      curve: Curves.easeInOut,
+                    );
+                  }
+                },
+                icon: Icon(Icons.chevron_left, color: Colors.blue.shade600),
+              ),
+              IconButton(
+                onPressed: () {
+                  if (_autoPlayTimer?.isActive == true) {
+                    _stopAutoPlay();
+                  } else {
+                    _startAutoPlay();
+                  }
+                  setState(() {});
+                },
+                icon: Icon(
+                  _autoPlayTimer?.isActive == true ? Icons.pause : Icons.play_arrow,
+                  color: Colors.blue.shade600,
+                ),
+              ),
+              IconButton(
+                onPressed: () {
+                  _stopAutoPlay();
+                  if (_currentPage < features.length - 1) {
+                    _pageController.nextPage(
+                      duration: const Duration(milliseconds: 600),
+                      curve: Curves.easeInOut,
+                    );
+                  }
+                },
+                icon: Icon(Icons.chevron_right, color: Colors.blue.shade600),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
+Widget _buildEnhancedFeatureCard(Map<String, dynamic> feature, bool isWeb, double screenWidth) {
+  return Container(
+    margin: EdgeInsets.symmetric(
+      horizontal: isWeb ? 8 : 6,
+      vertical: isWeb ? 12 : 8, // <-- Added top & bottom margin for breathing space
+    ),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Colors.white,
+          Colors.grey.shade50,
+        ],
+      ),
+      borderRadius: BorderRadius.circular(20),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.08),
+          blurRadius: 20,
+          spreadRadius: -2,
+          offset: const Offset(0, 6),
+        ),
+        BoxShadow(
+          color: feature['color'].withOpacity(0.08),
+          blurRadius: 15,
+          spreadRadius: -8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -30,
+            right: -30,
+            child: Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  colors: [
+                    feature['color'].withOpacity(0.08),
+                    feature['color'].withOpacity(0.04),
+                    Colors.transparent,
+                  ],
+                ),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.all(isWeb ? 24 : 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: feature['gradient'],
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: feature['color'].withOpacity(0.25),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    feature['icon'],
+                    color: Colors.white,
+                    size: isWeb ? 28 : 24,
+                  ),
+                ),
+                SizedBox(height: isWeb ? 20 : 16),
+                Text(
+                  feature['title'],
+                  style: GoogleFonts.poppins(
+                    fontSize: isWeb ? 18 : 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade800,
+                    height: 1.2,
+                  ),
+                ),
+                SizedBox(height: isWeb ? 10 : 8),
+                Text(
+                  feature['description'],
+                  style: GoogleFonts.poppins(
+                    fontSize: isWeb ? 13 : 12,
+                    color: Colors.grey.shade600,
+                    height: 1.5,
+                  ),
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+
   Widget _buildCallToAction(bool isWeb, double screenWidth) {
-    // Expanded width for call to action section
     final double maxWidth = isWeb ? 600 : screenWidth * 0.95;
     
     return SizedBox(
@@ -375,40 +603,54 @@ class _LandingScreenState extends State<LandingScreen>
               
               SizedBox(height: isWeb ? 28 : 20),
               
-              // Login Button
+              // Login Button with enhanced design
               SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const LoginScreen(),
-                      ),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue.shade600,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.blue.shade600, Colors.blue.shade700],
                     ),
-                    elevation: 4,
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.login_rounded),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Get Started - Login',
-                        style: GoogleFonts.poppins(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.blue.withOpacity(0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
                       ),
                     ],
+                  ),
+                  child: ElevatedButton(
+onPressed: () {
+  Navigator.pushAndRemoveUntil(
+    context,
+    MaterialPageRoute(builder: (context) => const LoginScreen()),
+    (Route<dynamic> route) => false, // Remove all previous routes
+  );
+},
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.transparent,
+                      shadowColor: Colors.transparent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.login_rounded),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Get Started - Login',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -419,14 +661,13 @@ class _LandingScreenState extends State<LandingScreen>
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const MapScreen(),
-                      ),
-                    );
-                  },
+onPressed: () {
+  Navigator.pushAndRemoveUntil(
+    context,
+    MaterialPageRoute(builder: (context) => const MapScreen()),
+    (Route<dynamic> route) => false, // Remove all previous routes
+  );
+},
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.blue.shade600,
                     padding: const EdgeInsets.symmetric(vertical: 18),

@@ -54,8 +54,24 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _currentPosition;
   LatLng? _destination;
   bool _isLoading = true;
-  List<LatLng> _polylinePoints = [];
+  final List<LatLng> _polylinePoints = [];
+  bool _locationButtonPressed = false;
 
+
+  // ADD: New variables for route tracking
+  List<LatLng> _routePoints = []; // Only for directions/safe routes
+  bool _hasActiveRoute = false;
+  double _remainingDistance = 0;
+  String _remainingDuration = '';
+  Timer? _routeUpdateTimer;
+  
+static const LocationSettings _locationSettings = LocationSettings(
+  accuracy: LocationAccuracy.high,
+  distanceFilter: 5, // Only update if moved 5+ meters
+  // timeLimit: Duration(seconds: 30), // REMOVE THIS LINE
+);
+
+  
   // Directions state
   double _distance = 0;
   String _duration = '';
@@ -149,7 +165,8 @@ void dispose() {
   _profileScreen.disposeControllers();
   _hotspotsChannel?.unsubscribe();
   _notificationsChannel?.unsubscribe();
-  _reconnectionTimer?.cancel(); // Add this line
+  _reconnectionTimer?.cancel(); 
+  _routeUpdateTimer?.cancel();
   super.dispose();
 }
 
@@ -855,7 +872,6 @@ Future<void> _getCurrentLocation() async {
 }
 
 void _startLiveLocation() {
-  // Show loading initially
   if (mounted) {
     setState(() {
       _isLoading = true;
@@ -863,19 +879,25 @@ void _startLiveLocation() {
   }
 
   _positionStream = Geolocator.getPositionStream(
-    locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 10,
-    ),
+    locationSettings: _locationSettings,
   ).listen(
     (Position position) {
       if (mounted) {
-        setState(() {
-          _currentPosition = LatLng(position.latitude, position.longitude);
-          _polylinePoints.add(_currentPosition!);
-          _isLoading = false; // Hide loading when we get the first position
-        });
-        _mapController.move(_currentPosition!, _mapController.zoom);
+        final newPosition = LatLng(position.latitude, position.longitude);
+        
+        // Only update if the position has actually changed significantly
+        if (_currentPosition == null || 
+            _calculateDistance(_currentPosition!, newPosition) > 3) { // 3 meter threshold
+          setState(() {
+            _currentPosition = newPosition;
+            _isLoading = false;
+          });
+          
+          // Update route progress if we have an active route
+          if (_hasActiveRoute && _destination != null) {
+            _updateRouteProgress();
+          }
+        }
       }
     },
     onError: (error) {
@@ -883,20 +905,81 @@ void _startLiveLocation() {
         setState(() {
           _isLoading = false;
         });
-        _showSnackBar('Location error: ${error.toString()}');
+        // Only show error if it's not a timeout - filter out timeout messages
+        if (!error.toString().contains('TimeoutException') && 
+            !error.toString().contains('Time limit reached')) {
+          _showSnackBar('Location error: ${error.toString()}');
+        }
       }
     },
   );
 }
 
 void _clearDirections() {
+  _routeUpdateTimer?.cancel(); // Stop route updates
   setState(() {
-    _polylinePoints.clear();
+    _routePoints.clear(); // Clear route points instead of polyline points
     _distance = 0;
     _duration = '';
     _destination = null;
     _showClearButton = false;
+    _hasActiveRoute = false; // Clear active route flag
+    _remainingDistance = 0;
+    _remainingDuration = '';
   });
+}
+
+void _startRouteUpdates() {
+  _routeUpdateTimer?.cancel();
+  _routeUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    if (_hasActiveRoute && _destination != null && _currentPosition != null) {
+      _updateRouteProgress();
+    } else {
+      timer.cancel();
+    }
+  });
+}
+
+Future<void> _updateRouteProgress() async {
+  if (_currentPosition == null || _destination == null || !_hasActiveRoute) return;
+  
+  try {
+    // Calculate remaining distance and time to destination
+    final response = await http.get(
+      Uri.parse(
+        'https://router.project-osrm.org/route/v1/driving/'
+        '${_currentPosition!.longitude},${_currentPosition!.latitude};'
+        '${_destination!.longitude},${_destination!.latitude}?overview=false',
+      ),
+      headers: {'User-Agent': 'YourAppName/1.0'},
+    ).timeout(const Duration(seconds: 5));
+    
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      
+      if (data['routes'] != null && (data['routes'] as List).isNotEmpty) {
+        final route = data['routes'][0];
+        final distance = _safeParseDouble(route['distance']) ?? 0.0;
+        final duration = _safeParseDouble(route['duration']) ?? 0.0;
+        
+        if (mounted) {
+          setState(() {
+            _remainingDistance = distance / 1000;
+            _remainingDuration = _formatDuration(duration);
+          });
+          
+          // If we're very close to destination (less than 50 meters), consider arrived
+          if (distance < 50) {
+            _showSnackBar('You have arrived at your destination!');
+            _clearDirections();
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Silently handle errors in background updates
+    print('Error updating route progress: $e');
+  }
 }
 
 Future<void> _getDirections(LatLng destination) async {
@@ -920,19 +1003,15 @@ Future<void> _getDirections(LatLng destination) async {
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
       
-      // Check if routes exist
       if (data['routes'] == null || (data['routes'] as List).isEmpty) {
         _showSnackBar('No route found to destination');
         return;
       }
       
       final route = data['routes'][0];
-      
-      // Safely parse distance and duration with type conversion
       final distance = _safeParseDouble(route['distance']) ?? 0.0;
       final duration = _safeParseDouble(route['duration']) ?? 0.0;
       
-      // Safely parse coordinates
       List<LatLng> routePoints = [];
       try {
         final coordinates = route['geometry']?['coordinates'] as List?;
@@ -952,28 +1031,30 @@ Future<void> _getDirections(LatLng destination) async {
       
       if (mounted) {
         setState(() {
-          _distance = distance / 1000; // Convert to km
+          _distance = distance / 1000;
           _duration = _formatDuration(duration);
-          _polylinePoints = routePoints;
+          _routePoints = routePoints; // Use _routePoints instead of _polylinePoints
           _destination = destination;
           _showClearButton = true;
+          _hasActiveRoute = true; // Set active route flag
+          _remainingDistance = distance / 1000;
+          _remainingDuration = _formatDuration(duration);
         });
         
-        _mapController.fitBounds(
-          LatLngBounds(_currentPosition!, destination),
-          options: const FitBoundsOptions(padding: EdgeInsets.all(50.0)),
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: LatLngBounds(_currentPosition!, destination),
+            padding: const EdgeInsets.all(50.0),
+          ),
         );
+        
+        // Start real-time route updates
+        _startRouteUpdates();
       }
     } else {
       print('Directions API returned status: ${response.statusCode}');
       _showSnackBar('Failed to get directions (${response.statusCode})');
     }
-  } on TimeoutException catch (e) {
-    print('Directions timeout: $e');
-    _showSnackBar('Route request timed out - please try again');
-  } on SocketException catch (e) {
-    print('Network error during route request: $e');
-    _showSnackBar('Network error - check your connection');
   } catch (e) {
     print('Directions error: $e');
     _showSnackBar('Failed to get directions: ${e.toString()}');
@@ -1070,7 +1151,7 @@ void _showHotspotFilterDialog() {
                         context,
                         'Critical',
                         Icons.warning,
-                        Colors.red,
+                        const Color.fromARGB(255, 247, 26, 10),
                         filterService.showCritical,
                         (value) => filterService.toggleCritical(),
                       ),
@@ -1078,7 +1159,7 @@ void _showHotspotFilterDialog() {
                         context,
                         'High',
                         Icons.error,
-                        Colors.orange,
+                        const Color.fromARGB(255, 223, 106, 11),
                         filterService.showHigh,
                         (value) => filterService.toggleHigh(),
                       ),
@@ -1086,15 +1167,15 @@ void _showHotspotFilterDialog() {
                         context,
                         'Medium',
                         Icons.info,
-                        Colors.amber,
+                        const Color.fromARGB(167, 116, 66, 9),
                         filterService.showMedium,
                         (value) => filterService.toggleMedium(),
                       ),
                       _buildFilterToggle(
                         context,
                         'Low',
-                        Icons.check_circle,
-                        Colors.green,
+                        Icons.info_outline_rounded,
+                        const Color.fromARGB(255, 216, 187, 23),
                         filterService.showLow,
                         (value) => filterService.toggleLow(),
                       ),
@@ -1517,53 +1598,52 @@ Future<void> _getSafeRoute(LatLng destination) async {
   _showSnackBar('Calculating safest route...');
 
   try {
-    // First get the regular route
     final regularRoute = await _getRouteFromAPI(_currentPosition!, destination);
-    
-    // Check for unsafe segments near hotspots
     final unsafeSegments = _findUnsafeSegments(regularRoute);
     
+    List<LatLng> finalRoute;
+    
     if (unsafeSegments.isEmpty) {
-      // Route is already safe
-      setState(() {
-        _polylinePoints = regularRoute;
-        _destination = destination;
-        _showClearButton = true;
-      });
+      finalRoute = regularRoute;
       _showSnackBar('Route is already safe!');
-      return;
+    } else {
+      final waypoints = _generateAlternativeWaypoints(unsafeSegments);
+      final safeRoute = await _getRouteWithWaypoints(_currentPosition!, destination, waypoints);
+      
+      final newUnsafeSegments = _findUnsafeSegments(safeRoute);
+      if (newUnsafeSegments.length >= unsafeSegments.length) {
+        _showSnackBar('Could not find safer route - using regular route');
+        _getDirections(destination);
+        return;
+      }
+      
+      finalRoute = safeRoute;
+      _showSnackBar('Safe route calculated! Avoided ${unsafeSegments.length - newUnsafeSegments.length} hotspots');
     }
     
-    // Generate alternative waypoints to avoid hotspots
-    final waypoints = _generateAlternativeWaypoints(unsafeSegments);
-    final safeRoute = await _getRouteWithWaypoints(_currentPosition!, destination, waypoints);
-    
-    // Verify the new route is actually safer
-    final newUnsafeSegments = _findUnsafeSegments(safeRoute);
-    if (newUnsafeSegments.length >= unsafeSegments.length) {
-      // New route isn't better - fallback to regular
-      _showSnackBar('Could not find safer route - using regular route');
-      _getDirections(destination);
-      return;
-    }
-    
-    // Calculate distance and duration for the safe route
-    final distance = _calculateRouteDistance(safeRoute);
+    final distance = _calculateRouteDistance(finalRoute);
     final duration = _estimateRouteDuration(distance);
     
     setState(() {
-      _polylinePoints = safeRoute;
-      _distance = distance / 1000; // Convert to km
+      _routePoints = finalRoute; // Use _routePoints instead of _polylinePoints
+      _distance = distance / 1000;
       _duration = _formatDuration(duration);
       _destination = destination;
       _showClearButton = true;
+      _hasActiveRoute = true;
+      _remainingDistance = distance / 1000;
+      _remainingDuration = _formatDuration(duration);
     });
     
-    _mapController.fitBounds(
-      LatLngBounds(_currentPosition!, destination),
-      options: const FitBoundsOptions(padding: EdgeInsets.all(50.0)),
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds(_currentPosition!, destination),
+        padding: const EdgeInsets.all(50.0),
+      ),
     );
-    _showSnackBar('Safe route calculated! Avoided ${unsafeSegments.length - newUnsafeSegments.length} hotspots');
+    
+    // Start real-time route updates
+    _startRouteUpdates();
   } catch (e) {
     _showSnackBar('Error calculating safe route: ${e.toString()}');
     _getDirections(destination);
@@ -2533,166 +2613,220 @@ Future<void> _logout() async {
     }
   }
 
-  void _showProfileDialog() {
-    final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-                         Theme.of(context).platform == TargetPlatform.linux ||
-                         Theme.of(context).platform == TargetPlatform.windows ||
-                         kIsWeb;
+void _showProfileDialog() {
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+                       Theme.of(context).platform == TargetPlatform.linux ||
+                       Theme.of(context).platform == TargetPlatform.windows ||
+                       kIsWeb;
 
-    void toggleEditMode() {
+  // Only use dialog for desktop/web - mobile now uses the full screen approach
+  if (!isDesktopOrWeb) {
+    return; // Mobile will handle profile through _buildProfileScreen()
+  }
+
+  void toggleEditMode() {
+    setState(() {
+      _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
+    });
+    Navigator.pop(context);
+    _showProfileDialog();
+  }
+
+  Future<void> refreshProfile() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select()
+          .eq('email', user.email as Object)
+          .single();
+
+      if (mounted) {
+        setState(() {
+          _userProfile = response;
+          _isAdmin = response['role'] == 'admin';
+          _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
+          _profileScreen.initControllers();
+        });
+      }
+    }
+  }
+
+  void handleSuccess() {
+    refreshProfile().then((_) {
       setState(() {
-        _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
+        _profileScreen.isEditingProfile = false;
       });
       Navigator.pop(context);
       _showProfileDialog();
-    }
-
-    Future<void> refreshProfile() async {
-      final user = _authService.currentUser;
-      if (user != null) {
-        final response = await Supabase.instance.client
-            .from('users')
-            .select()
-            .eq('email', user.email as Object)
-            .single();
-
-        if (mounted) {
-          setState(() {
-            _userProfile = response;
-            _isAdmin = response['role'] == 'admin';
-            _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
-            _profileScreen.initControllers();
-          });
-        }
-      }
-    }
-
-    void handleSuccess() {
-      refreshProfile().then((_) {
-        setState(() {
-          _profileScreen.isEditingProfile = false;
-        });
-        Navigator.pop(context);
-        _showProfileDialog();
-      });
-    }
-
-    if (isDesktopOrWeb) {
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          insetPadding: const EdgeInsets.all(20),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: 600,
-              maxHeight: MediaQuery.of(context).size.height * 0.8,
-            ),
-            child: _profileScreen.isEditingProfile
-                ? _profileScreen.buildEditProfileForm(
-                    context,
-                    isDesktopOrWeb,
-                    toggleEditMode,
-                    onSuccess: handleSuccess,
-                  )
-                : _profileScreen.buildProfileView(context, isDesktopOrWeb, toggleEditMode),
-          ),
-        ),
-      ).then((_) {
-        if (!_profileScreen.isEditingProfile) {
-          setState(() => _currentTab = MainTab.map);
-        }
-      });
-    } else {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        builder: (context) => Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-          ),
-          child: _profileScreen.isEditingProfile
-              ? _profileScreen.buildEditProfileForm(
-                  context,
-                  isDesktopOrWeb,
-                  toggleEditMode,
-                  onSuccess: handleSuccess,
-                )
-              : _profileScreen.buildProfileView(context, isDesktopOrWeb, toggleEditMode),
-        ),
-      ).then((_) {
-        if (!_profileScreen.isEditingProfile) {
-          setState(() => _currentTab = MainTab.map);
-        }
-      });
-    }
+    });
   }
+
+  // Desktop/Web dialog view only
+  showDialog(
+    context: context,
+    builder: (context) => Dialog(
+      insetPadding: const EdgeInsets.all(20),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 600,
+          maxHeight: MediaQuery.of(context).size.height * 0.8,
+        ),
+        child: _profileScreen.isEditingProfile
+            ? _profileScreen.buildEditProfileForm(
+                context,
+                isDesktopOrWeb,
+                toggleEditMode,
+                onSuccess: handleSuccess,
+              )
+            : _profileScreen.buildProfileView(context, isDesktopOrWeb, toggleEditMode),
+      ),
+    ),
+  ).then((_) {
+    if (!_profileScreen.isEditingProfile) {
+      setState(() => _currentTab = MainTab.map);
+    }
+  });
+}
 
 
 
 
 
 Widget _buildBottomNavBar() {
-  return BottomNavigationBar(
-    currentIndex: _currentTab.index,
-    onTap: (index) {
-      setState(() {
-        _currentTab = MainTab.values[index];
-      });
-
-      if (_currentTab == MainTab.profile) {
-        _showProfileDialog();
-      } 
-      
-    },
-    items: [
-      const BottomNavigationBarItem(
-        icon: Icon(Icons.map),
-        label: 'Map',
-      ),
-      BottomNavigationBarItem(
-        icon: Stack(
-          children: [
-            const Icon(Icons.notifications),
-            if (_unreadNotificationCount > 0)
-              Positioned(
-                right: 0,
-                top: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  constraints: const BoxConstraints(
-                    minWidth: 16,
-                    minHeight: 16,
-                  ),
-                  child: Text(
-                    _unreadNotificationCount > 99 ? '99+' : '$_unreadNotificationCount',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
+  return Container(
+    decoration: BoxDecoration(
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.1),
+          blurRadius: 20,
+          offset: const Offset(0, -5),
+        ),
+      ],
+    ),
+    child: ClipRRect(
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.95),
+          border: Border(
+            top: BorderSide(
+              color: Colors.grey.withOpacity(0.2),
+              width: 0.5,
+            ),
+          ),
+        ),
+        child: BottomNavigationBar(
+          currentIndex: _currentTab.index,
+          onTap: (index) {
+            setState(() {
+              _currentTab = MainTab.values[index];
+              if (_currentTab == MainTab.profile) {
+                _profileScreen.isEditingProfile = false;
+              }
+            });
+          },
+          items: [
+            BottomNavigationBarItem(
+              icon: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _currentTab == MainTab.map
+                      ? Colors.blue.withOpacity(0.1)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  _currentTab == MainTab.map ? Icons.map_rounded : Icons.map_outlined,
+                  size: 24,
                 ),
               ),
+              label: 'Map',
+            ),
+            BottomNavigationBarItem(
+              icon: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _currentTab == MainTab.notifications
+                      ? Colors.blue.withOpacity(0.1)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Stack(
+                  clipBehavior: Clip.none, // Allow badge to overflow
+                  children: [
+                    Icon(
+                      _currentTab == MainTab.notifications
+                          ? Icons.notifications_rounded
+                          : Icons.notifications_outlined,
+                      size: 24,
+                    ),
+                    if (_unreadNotificationCount > 0)
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            _unreadNotificationCount > 99 ? '99+' : '$_unreadNotificationCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              height: 1.1,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              label: 'Notifications',
+            ),
+            BottomNavigationBarItem(
+              icon: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _currentTab == MainTab.profile
+                      ? Colors.blue.withOpacity(0.1)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  _currentTab == MainTab.profile ? Icons.person_rounded : Icons.person_outline_rounded,
+                  size: 24,
+                ),
+              ),
+              label: 'Profile',
+            ),
           ],
+          selectedItemColor: Colors.blue.shade600,
+          unselectedItemColor: Colors.grey.shade600,
+          showUnselectedLabels: true,
+          type: BottomNavigationBarType.fixed,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          selectedFontSize: 12,
+          unselectedFontSize: 12,
+          selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
-        label: 'Notifications',
       ),
-      const BottomNavigationBarItem(
-        icon: Icon(Icons.person),
-        label: 'Profile',
-      ),
-    ],
-    selectedItemColor: Colors.blue,
-    unselectedItemColor: Colors.grey,
-    showUnselectedLabels: true,
-    type: BottomNavigationBarType.fixed,
+    ),
   );
 }
+
 
 Widget _buildFloatingActionButtons() {
   return Column(
@@ -2705,14 +2839,14 @@ Widget _buildFloatingActionButtons() {
         child: FloatingActionButton(
           heroTag: 'filterHotspots',
           onPressed: _showHotspotFilterDialog,
-          backgroundColor: Colors.blue.shade700,
+          backgroundColor: const Color.fromARGB(255, 107, 109, 109),
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           mini: true,
           child: const Icon(Icons.filter_alt),
         ),
       ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 4),
       
       // Clear Directions button (only visible when there's a route)
       if (_showClearButton)
@@ -2730,18 +2864,34 @@ Widget _buildFloatingActionButtons() {
             ),
           ),
         ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 4),
       
-      // My Location button (always visible)
+      // My Location button (always visible) - Google Maps style
       Tooltip(
         message: 'My Location',
         child: FloatingActionButton(
           heroTag: 'myLocation',
-          onPressed: _getCurrentLocation,
+          onPressed: () async {
+            setState(() {
+              _locationButtonPressed = true;
+            });
+            await _getCurrentLocation();
+            // Reset the state after a short delay
+            Future.delayed(const Duration(seconds: 2), () {
+              if (mounted) {
+                setState(() {
+                  _locationButtonPressed = false;
+                });
+              }
+            });
+          },
           backgroundColor: Colors.white,
-          foregroundColor: Colors.blue.shade700,
+          foregroundColor: _locationButtonPressed ? Colors.blue.shade600 : Colors.grey.shade600,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: const Icon(Icons.my_location),
+          child: Icon(
+            _locationButtonPressed ? Icons.my_location : Icons.location_searching,
+            color: _locationButtonPressed ? Colors.blue.shade600 : Colors.grey.shade600,
+          ),
         ),
       ),
     ],
@@ -2777,7 +2927,7 @@ Widget _buildNotificationsScreen() {
                   margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                   color: notification['is_read'] ? null : Colors.blue[50],
                   child: ListTile(
-                    leading: _getNotificationIcon(notification['type']),
+                    leading: _getNotificationIcon(notification),
                     title: Text(notification['title']),
                     subtitle: Text(notification['message']),
                     trailing: Text(
@@ -2799,7 +2949,35 @@ Widget _buildNotificationsScreen() {
   );
 }
 
-Icon _getNotificationIcon(String type) {
+Widget _getNotificationIcon(Map<String, dynamic> notification) {
+  final type = notification['type'];
+  
+  // For report notifications, get the crime level from the related hotspot
+  if (type == 'report' && notification['hotspot_id'] != null) {
+    final relatedHotspot = _hotspots.firstWhere(
+      (hotspot) => hotspot['id'] == notification['hotspot_id'],
+      orElse: () => {},
+    );
+    
+    if (relatedHotspot.isNotEmpty) {
+      final crimeLevel = relatedHotspot['crime_type']?['level'] ?? 'unknown';
+      
+      switch (crimeLevel) {
+        case 'critical':
+          return const Icon(Icons.warning_rounded, color: Color.fromARGB(255, 247, 26, 10));
+        case 'high':
+          return const Icon(Icons.error_rounded, color: Color.fromARGB(255, 223, 106, 11));
+        case 'medium':
+          return const Icon(Icons.info_rounded, color: Color.fromARGB(155, 202, 130, 49));
+        case 'low':
+          return const Icon(Icons.info_outline_rounded, color: Color.fromARGB(255, 216, 187, 23));
+        default:
+          return const Icon(Icons.report, color: Colors.orange);
+      }
+    }
+  }
+  
+  // Default icons for other notification types
   switch (type) {
     case 'report':
       return const Icon(Icons.report, color: Colors.orange);
@@ -2849,211 +3027,421 @@ void _handleNotificationTap(Map<String, dynamic> notification) {
   
 
 Widget _buildMap() {
-  return FlutterMap(
-    mapController: _mapController,
-    options: MapOptions(
-      center: _currentPosition ?? const LatLng(14.5995, 120.9842),
-      zoom: 15.0,
-      maxZoom: 19.0,
-      minZoom: 3.0,
-      onTap: (tapPosition, latLng) {
-        FocusScope.of(context).unfocus();
-        setState(() {
-          _destination = latLng;
-        });
-        _showLocationOptions(latLng);
-      },
-      onPositionChanged: (MapPosition position, bool hasGesture) {
-        if (hasGesture && position.zoom != null && position.zoom! > 19) {
-          _mapController.move(position.center!, 19.0);
-        }
-      },
-      interactiveFlags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-    ),
+  return Stack(
     children: [
-      TileLayer(
-        urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-        userAgentPackageName: 'com.example.zecure',
-        maxZoom: 19,
-        fallbackUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      ),
-      
-      // Polyline layer should come before markers to appear underneath
-      if (_polylinePoints.isNotEmpty)
-        PolylineLayer(
-          polylines: [
-            Polyline(
-              points: _polylinePoints,
-              color: Colors.blue,
-              strokeWidth: 4,
+      // Main Map with enhanced styling
+      Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 20,
+              spreadRadius: 2,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
-      
-      // Main markers layer (current position and destination)
-      MarkerLayer(
-        markers: [
-          if (_currentPosition != null)
-            Marker(
-              point: _currentPosition!,
-              width: 40,
-              height: 40,
-              builder: (ctx) => const Icon(
-                Icons.location_on,
-                color: Colors.red, // Always green since we're always tracking
-                size: 40,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _currentPosition ?? const LatLng(14.5995, 120.9842),
+              initialZoom: 15.0,
+              maxZoom: 19.0,
+              minZoom: 3.0,
+              onTap: (tapPosition, latLng) {
+                FocusScope.of(context).unfocus();
+                setState(() {
+                  _destination = latLng;
+                });
+                _showLocationOptions(latLng);
+              },
+              onMapEvent: (MapEvent mapEvent) {
+                if (mapEvent is MapEventMove && mapEvent.camera.zoom > 19) {
+                  _mapController.move(mapEvent.camera.center, 19.0);
+                }
+              },
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
               ),
             ),
-          if (_destination != null)
-            Marker(
-              point: _destination!,
-              width: 40,
-              height: 40,
-              builder: (ctx) => const Icon(
-                Icons.location_pin,
-                color: Colors.blue,
-                size: 40,
-              ),
-            ),
-        ],
-      ),
-
-Consumer<HotspotFilterService>(
-  builder: (context, filterService, child) {
-    return MarkerLayer(
-      markers: _hotspots.where((hotspot) {
-        final currentUserId = _userProfile?['id'];
-        final isAdmin = _isAdmin;
-        final status = hotspot['status'] ?? 'approved';
-        final activeStatus = hotspot['active_status'] ?? 'active';
-        final createdBy = hotspot['created_by'];
-        final reportedBy = hotspot['reported_by'];
-        final isOwnHotspot = currentUserId != null && 
-                         (currentUserId == createdBy || currentUserId == reportedBy);
-
-        // Admin view - show all hotspots based on filters
-        if (isAdmin) {
-          return filterService.shouldShowHotspot(hotspot);
-        }
-
-        // Non-admin view rules:
-        // 1. Show active+approved hotspots that match crime type filters
-        if (activeStatus == 'active' && 
-            status == 'approved' && 
-            filterService.shouldShowHotspot(hotspot)) {
-          return true;
-        }
-
-        // 2. Always show user's own hotspots regardless of status
-        if (isOwnHotspot) {
-          // Apply filter service settings for pending/rejected if needed
-          if (status == 'pending' && !filterService.showPending) return false;
-          if (status == 'rejected' && !filterService.showRejected) return false;
-          return true;
-        }
-
-        return false;
-      }).map((hotspot) {
-        final coords = hotspot['location']['coordinates'];
-        final point = LatLng(coords[1], coords[0]);
-        final status = hotspot['status'] ?? 'approved';
-        final activeStatus = hotspot['active_status'] ?? 'active';
-        final crimeLevel = hotspot['crime_type']['level'];
-        final isActive = activeStatus == 'active';
-        final isOwnHotspot = _userProfile?['id'] != null && 
-                         (_userProfile?['id'] == hotspot['created_by'] || 
-                          _userProfile?['id'] == hotspot['reported_by']);
-        final isSelected = _selectedHotspot != null && _selectedHotspot!['id'] == hotspot['id'];
-
-        // Determine marker appearance
-        Color markerColor;
-        IconData markerIcon;
-        double opacity = 1.0;
-
-        if (status == 'pending') {
-          markerColor = Colors.deepPurple;
-          markerIcon = Icons.question_mark;
-        } else if (status == 'rejected') {
-          markerColor = Colors.grey;
-          markerIcon = Icons.block;
-          // Make rejected markers semi-transparent unless it's the user's own
-          opacity = isOwnHotspot ? 1.0 : 0.6;
-        } else {
-          // For approved hotspots
-          switch (crimeLevel) {
-            case 'critical':
-              markerColor = Colors.red;
-              markerIcon = Icons.warning;
-              break;
-            case 'high':
-              markerColor = Colors.orange;
-              markerIcon = Icons.error;
-              break;
-            case 'medium':
-              markerColor = Colors.yellow;
-              markerIcon = Icons.info;
-              break;
-            case 'low':
-              markerColor = Colors.green;
-              markerIcon = Icons.check_circle;
-              break;
-            default:
-              markerColor = Colors.blue;
-              markerIcon = Icons.location_pin;
-          }
-
-          // Apply inactive styling
-          if (!isActive) {
-            markerColor = markerColor.withOpacity(0.3);
-          }
-        }
-
-        return Marker(
-          point: point,
-          width: isSelected ? 70 : 60, // Slightly larger when selected
-          height: isSelected ? 70 : 60,
-          builder: (ctx) => Stack(
-            alignment: Alignment.center,
             children: [
-              // Highlight ring for selected hotspot
-              if (isSelected)
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.blue.withOpacity(0.5),
-                      width: 3,
+              // Enhanced Tile Layer
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.zecure',
+                maxZoom: 19,
+                fallbackUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+              ),
+
+              // UPDATED: Only show route polylines, not tracking polylines
+              if (_routePoints.isNotEmpty && _hasActiveRoute) ...[
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.black.withOpacity(0.2),
+                      strokeWidth: 6,
                     ),
-                  ),
+                  ],
                 ),
-              // Main marker with pulsing effect
-              Opacity(
-                opacity: opacity,
-                child: PulsingHotspotMarker(
-                  markerColor: markerColor, // Keep original color
-                  markerIcon: markerIcon,
-                  isActive: isActive && status != 'rejected',
-                  pulseScale: isSelected ? 1.2 : 1.0,
-                  onTap: () {
-                    setState(() {
-                      _selectedHotspot = hotspot;
-                    });
-                    _showHotspotDetails(hotspot);
-                  },
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.blue.shade600,
+                      strokeWidth: 4,
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.white,
+                    ),
+                  ],
                 ),
+              ],
+
+              // Enhanced Polyline layer with better styling (original)
+              if (_polylinePoints.isNotEmpty) ...[
+                // Shadow polyline for depth
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _polylinePoints,
+                      color: Colors.black.withOpacity(0.2),
+                      strokeWidth: 6,
+                    ),
+                  ],
+                ),
+                // Main polyline with enhanced styling
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _polylinePoints,
+                      color: Colors.blue.shade600,
+                      strokeWidth: 4,
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.white,
+                    ),
+                  ],
+                ),
+              ],
+
+              // Enhanced Main markers layer (current position and destination)
+              MarkerLayer(
+                markers: [
+                  if (_currentPosition != null)
+                    Marker(
+                      point: _currentPosition!,
+                      width: 60,
+                      height: 60,
+                      child: _buildEnhancedCurrentLocationMarker(),
+                    ),
+                  if (_destination != null)
+                    Marker(
+                      point: _destination!,
+                      width: 50,
+                      height: 50,
+                      child: _buildEnhancedDestinationMarker(),
+                    ),
+                ],
+              ),
+              Consumer<HotspotFilterService>(
+                builder: (context, filterService, child) {
+                  return MarkerLayer(
+                    markers: _hotspots.where((hotspot) {
+                      final currentUserId = _userProfile?['id'];
+                      final isAdmin = _isAdmin;
+                      final status = hotspot['status'] ?? 'approved';
+                      final activeStatus = hotspot['active_status'] ?? 'active';
+                      final createdBy = hotspot['created_by'];
+                      final reportedBy = hotspot['reported_by'];
+                      final isOwnHotspot = currentUserId != null &&
+                                       (currentUserId == createdBy || currentUserId == reportedBy);
+                      // Admin view - show all hotspots based on filters
+                      if (isAdmin) {
+                        return filterService.shouldShowHotspot(hotspot);
+                      }
+                      // Non-admin view rules:
+                      // 1. Show active+approved hotspots that match crime type filters
+                      if (activeStatus == 'active' &&
+                          status == 'approved' &&
+                          filterService.shouldShowHotspot(hotspot)) {
+                        return true;
+                      }
+                      // 2. Always show user's own hotspots regardless of status
+                      if (isOwnHotspot) {
+                        // Apply filter service settings for pending/rejected if needed
+                        if (status == 'pending' && !filterService.showPending) return false;
+                        if (status == 'rejected' && !filterService.showRejected) return false;
+                        return true;
+                      }
+                      return false;
+                    }).map((hotspot) {
+                      final coords = hotspot['location']['coordinates'];
+                      final point = LatLng(coords[1], coords[0]);
+                      final status = hotspot['status'] ?? 'approved';
+                      final activeStatus = hotspot['active_status'] ?? 'active';
+                      final crimeLevel = hotspot['crime_type']['level'];
+                      final isActive = activeStatus == 'active';
+                      final isOwnHotspot = _userProfile?['id'] != null &&
+                                       (_userProfile?['id'] == hotspot['created_by'] ||
+                                        _userProfile?['id'] == hotspot['reported_by']);
+                      final isSelected = _selectedHotspot != null && _selectedHotspot!['id'] == hotspot['id'];
+                      // Determine marker appearance
+                      Color markerColor;
+                      IconData markerIcon;
+                      double opacity = 1.0;
+                      if (status == 'pending') {
+                        markerColor = Colors.deepPurple;
+                        markerIcon = Icons.question_mark_rounded;
+                      } else if (status == 'rejected') {
+                        markerColor = Colors.grey;
+                        markerIcon = Icons.block_rounded;
+                        // Make rejected markers semi-transparent unless it's the user's own
+                        opacity = isOwnHotspot ? 1.0 : 0.6;
+                      } else {
+                        // For approved hotspots
+                        switch (crimeLevel) {
+                          case 'critical':
+                            markerColor = const Color.fromARGB(255, 247, 26, 10);
+                            markerIcon = Icons.warning_rounded;
+                            break;
+                          case 'high':
+                            markerColor = const Color.fromARGB(255, 223, 106, 11);
+                            markerIcon = Icons.error_rounded;
+                            break;
+                          case 'medium':
+                            markerColor = const Color.fromARGB(155, 202, 130, 49);
+                            markerIcon = Icons.info_rounded;
+                            break;
+                          case 'low':
+                            markerColor = const Color.fromARGB(255, 216, 187, 23);
+                            markerIcon = Icons.info_outline_rounded;
+                            break;
+                          default:
+                            markerColor = Colors.blue;
+                            markerIcon = Icons.location_pin;
+                        }
+                        // Apply inactive styling
+                        if (!isActive) {
+                          markerColor = markerColor.withOpacity(0.3);
+                        }
+                      }
+                      return Marker(
+                        point: point,
+                        width: isSelected ? 80 : 70,
+                        height: isSelected ? 80 : 70,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Enhanced highlight ring for selected hotspot
+                            if (isSelected)
+                              Container(
+                                width: 90,
+                                height: 90,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.blue.withOpacity(0.6),
+                                    width: 3,
+                                  ),
+                                ),
+                              ),
+                            // Main marker with pulsing effect
+                            Opacity(
+                              opacity: opacity,
+                              child: PulsingHotspotMarker(
+                                markerColor: markerColor,
+                                markerIcon: markerIcon,
+                                isActive: isActive && status != 'rejected',
+                                pulseScale: isSelected ? 1.2 : 1.0,
+                                onTap: () {
+                                  setState(() {
+                                    _selectedHotspot = hotspot;
+                                  });
+                                  _showHotspotDetails(hotspot);
+                                },
+                              ),
+                            ),
+
+                            // Status indicator dot for pending/rejected
+                            if (status == 'pending' || status == 'rejected')
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Container(
+                                  width: 16,
+                                  height: 16,
+                                  decoration: BoxDecoration(
+                                    color: status == 'pending' ? Colors.orange : Colors.grey,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white, width: 2),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  );
+                },
               ),
             ],
           ),
-        );
-      }).toList(),
-    );
-  },
-),
+        ),
+      ),
+
+      // ADD: Real-time route info overlay
+      if (_hasActiveRoute && _remainingDistance > 0)
+        Positioned(
+          top: MediaQuery.of(context).padding.top + 80,
+          left: 16,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade600,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.navigation, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  '${_remainingDistance.toStringAsFixed(1)} km • $_remainingDuration',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+      // Cool overlay effects for map corners
+      Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        child: Container(
+          height: 2,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.blue.withOpacity(0.3),
+                Colors.transparent,
+                Colors.blue.withOpacity(0.3),
+              ],
+            ),
+          ),
+        ),
+      ),
     ],
   );
 }
+
+
+// Revamped Enhanced Current Location Marker
+Widget _buildEnhancedCurrentLocationMarker() {
+  return Stack(
+    alignment: Alignment.center,
+    children: [
+      // Pulsing outer ring
+      Container(
+        width: 65,
+        height: 65,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.blue.withOpacity(0.15),
+        ),
+      ),
+
+      // Second ring for depth
+      Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.blue.withOpacity(0.25),
+          border: Border.all(
+            color: Colors.white,
+            width: 2,
+          ),
+        ),
+      ),
+
+      // Main circle background
+      Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
+          border: Border.all(
+            color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
+            width: 2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+      ),
+
+      // Human silhouette icon
+      Icon(
+        Icons.person,
+        size: 18,
+        color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
+      ),
+    ],
+  );
+}
+
+
+
+// Enhanced Destination Marker - bright red pin with white outline
+Widget _buildEnhancedDestinationMarker() {
+  return const Stack(
+    alignment: Alignment.center,
+    children: [
+      Icon(
+        Icons.location_pin,
+        color: Colors.white, // Outline
+        size: 40,
+      ),
+      Icon(
+        Icons.location_pin,
+        color: Colors.red, // Bright red for visibility
+        size: 35,
+      ),
+    ],
+  );
+}
+
+
+
+
+// Helper method to get heading stream (you'll need to implement this)
 
 
 
@@ -3470,118 +3858,325 @@ Future<void> _deleteHotspot(int id) async {
 
 Widget _buildSearchBar({bool isWeb = false}) {
   return Container(
-    width: isWeb ? double.infinity : double.infinity, // full width inside SizedBox on desktop
-    height: 40,
+    width: double.infinity,
+    height: 48,
     margin: const EdgeInsets.symmetric(vertical: 4),
     decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(8),
+      color: Colors.white.withOpacity(0.95),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: Colors.grey.withOpacity(0.2),
+        width: 1,
+      ),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withOpacity(0.1),
-          blurRadius: 6,
+          color: Colors.black.withOpacity(0.08),
+          blurRadius: 12,
           offset: const Offset(0, 2),
+        ),
+        BoxShadow(
+          color: Colors.white.withOpacity(0.8),
+          blurRadius: 8,
+          offset: const Offset(0, -1),
         ),
       ],
     ),
     child: TypeAheadField<LocationSuggestion>(
       controller: _searchController,
       suggestionsCallback: _searchLocations,
-      itemBuilder: (context, suggestion) => ListTile(
-        leading: const Icon(Icons.location_on),
-        title: Text(
-          suggestion.displayName,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+      itemBuilder: (context, suggestion) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.location_on_rounded,
+                color: Colors.blue.shade600,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                suggestion.displayName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
       onSelected: _onSuggestionSelected,
-builder: (context, controller, focusNode) => SizedBox(
-  height: 40, // match container height
-  child: TextField(
-    controller: controller,
-    focusNode: focusNode,
-    decoration: InputDecoration(
-      hintText: 'Search location...',
-      border: InputBorder.none,
-      contentPadding: const EdgeInsets.only(left: 16, right: 16, top: 10, bottom: 10),
-      isDense: true,
-      prefixIcon: const Padding(
-        padding: EdgeInsets.only(left: 8, right: 8),
-        child: Icon(Icons.search, size: 20),
-      ),
-      suffixIcon: _searchController.text.isNotEmpty
-          ? IconButton(
-              icon: const Icon(Icons.clear, size: 20),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () {
-                _searchController.clear();
-                FocusScope.of(context).unfocus();
-              },
-            )
-          : null,
+      builder: (context, controller, focusNode) => SizedBox(
+        height: 48,
+        child: TextField(
+          controller: controller,
+          focusNode: focusNode,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+          ),
+          decoration: InputDecoration(
+            hintText: 'Search location...',
+            hintStyle: TextStyle(
+              color: Colors.grey.shade500,
+              fontSize: 16,
+              fontWeight: FontWeight.w400,
+            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            prefixIcon: Padding(
+              padding: const EdgeInsets.only(left: 16, right: 12),
+              child: Icon(
+                Icons.search_rounded,
+                color: Colors.grey.shade500,
+                size: 22,
+              ),
+            ),
+            suffixIcon: _searchController.text.isNotEmpty
+                ? Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.clear_rounded,
+                          color: Colors.grey.shade600,
+                          size: 18,
+                        ),
+                      ),
+                      onPressed: () {
+                        _searchController.clear();
+                        FocusScope.of(context).unfocus();
+                      },
+                    ),
+                  )
+                : null,
           ),
         ),
       ),
     ),
   );
 }
+
 
 @override
 Widget build(BuildContext context) {
   final isWeb = kIsWeb || MediaQuery.of(context).size.width >= 800;
 
-  return Scaffold(
-    appBar: AppBar(
-      automaticallyImplyLeading: false,
-      title: isWeb
-          ? SizedBox(
-              width: 400,
-              child: _buildSearchBar(isWeb: true),
-            )
-          : _buildSearchBar(isWeb: false),
-      centerTitle: true,
-      actions: [
-        // Removed notification bell - only show login/logout
-        if (_userProfile == null)
-          IconButton(
-            icon: const Icon(Icons.login),
-            onPressed: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (context) => const LoginScreen()),
-              );
-            },
-          ),
-        if (_userProfile != null)
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _showLogoutConfirmation,
-          ),
-      ],
+  return WillPopScope(
+    onWillPop: _handleWillPop,
+    child: Scaffold(
+      body: _buildCurrentScreen(isWeb),
+      floatingActionButton: _currentTab == MainTab.map ? _buildFloatingActionButtons() : null,
+      bottomNavigationBar: _userProfile != null ? _buildBottomNavBar() : null,
     ),
-    body: _buildCurrentScreen(),
-    floatingActionButton: _currentTab == MainTab.map ? _buildFloatingActionButtons() : null,
-    bottomNavigationBar: _userProfile != null ? _buildBottomNavBar() : null,
   );
 }
 
-Widget _buildCurrentScreen() {
+
+Future<bool> _handleWillPop() async {
+  // Check if we're on profile tab and in edit mode
+  if (_currentTab == MainTab.profile && _profileScreen.isEditingProfile == true) {
+    // Let the profile screen handle the back button
+    return true;
+  }
+  
+  // If not on map tab, switch to map tab
+  if (_currentTab != MainTab.map) {
+    setState(() {
+      _currentTab = MainTab.map;
+    });
+    return false;
+  }
+  
+  // Check if we can pop (has previous routes)
+  final canPop = Navigator.of(context).canPop();
+  
+  // If we can pop, pop the route (this will handle the landing page case)
+  if (canPop) {
+    Navigator.of(context).pop();
+    return false;
+  }
+  
+  // If this is the root route, show exit confirmation
+  final shouldExit = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Exit App?'),
+      content: const Text('Do you want to exit the application?'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('No'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Exit App', style: TextStyle(color: Colors.red)),
+        ),
+      ],
+    ),
+  ) ?? false;
+  
+  return shouldExit;
+}
+
+
+Widget _buildCurrentScreen(bool isWeb) {
   switch (_currentTab) {
     case MainTab.map:
       return Stack(
         children: [
+          // Full screen map
           _buildMap(),
+          
+          // Loading indicator
           if (_isLoading && _currentPosition == null)
             const Center(child: CircularProgressIndicator()),
+          
+          // Top bar with search and login/logout button - properly aligned
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16, // Account for status bar
+            left: 16,
+            right: 16,
+            child: Row(
+              children: [
+                // Search bar takes up most space
+                Expanded(
+                  child: _buildSearchBar(isWeb: isWeb),
+                ),
+                const SizedBox(width: 12), // Space between search and button
+                // Login/logout button - properly aligned with search bar
+                Container(
+                  width: 45, // Match search bar height
+                  height: 45, // Match search bar height
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 12,
+                        offset: const Offset(0, 2),
+                      ),
+                      BoxShadow(
+                        color: Colors.white.withOpacity(0.8),
+                        blurRadius: 8,
+                        offset: const Offset(0, -1),
+                      ),
+                    ],
+                  ),
+                  child: IconButton(
+                    iconSize: 22,
+                    padding: EdgeInsets.zero,
+                    icon: Icon(
+                      _userProfile == null ? Icons.login : Icons.logout,
+                      color: Colors.grey.shade700,
+                    ),
+                    onPressed: _userProfile == null 
+                      ? () {
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(builder: (context) => const LoginScreen()),
+                          );
+                        }
+                      : _showLogoutConfirmation,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       );
     case MainTab.notifications:
       return _buildNotificationsScreen();
     case MainTab.profile:
-      return Container(); }
+      return _buildProfileScreen(); // New method for profile screen
+  }
 }
+
+// Replace your _buildProfileScreen() method with this fixed version
+
+Widget _buildProfileScreen() {
+  if (_userProfile == null) {
+    return const Center(
+      child: Text('Please login to view profile'),
+    );
+  }
+
+  final isDesktopOrWeb =
+      Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
+
+  void toggleEditMode() {
+    setState(() {
+      _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
+    });
+  }
+
+  Future<void> refreshProfile() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select()
+          .eq('email', user.email as Object)
+          .single();
+
+      if (mounted) {
+        setState(() {
+          _userProfile = response;
+          _isAdmin = response['role'] == 'admin';
+          _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
+          _profileScreen.initControllers();
+        });
+      }
+    }
+  }
+
+  void handleSuccess() {
+    refreshProfile().then((_) {
+      setState(() {
+        _profileScreen.isEditingProfile = false;
+      });
+    });
+  }
+
+  // REMOVED the outer SingleChildScrollView and extra padding
+  // The ProfileScreen handles its own scrolling internally
+  return Scaffold(
+    body: SafeArea(
+      child: _profileScreen.isEditingProfile
+          ? _profileScreen.buildEditProfileForm(
+              context,
+              isDesktopOrWeb,
+              toggleEditMode,
+              onSuccess: handleSuccess,
+            )
+          : _profileScreen.buildProfileView(
+              context,
+              isDesktopOrWeb,
+              toggleEditMode,
+            ),
+    ),
+  );
+}
+
 
 
 Future<List<LocationSuggestion>> _searchLocations(String query) async {
@@ -3643,18 +4238,21 @@ Future<List<LocationSuggestion>> _searchLocations(String query) async {
   }
 }
 
-  void _onSuggestionSelected(LocationSuggestion suggestion) {
-    final newPosition = LatLng(suggestion.lat, suggestion.lon);
-    if (mounted) {
-      setState(() {
-        _currentTab = MainTab.map;
-        _destination = newPosition;
-      });
-      _mapController.move(newPosition, 15.0);
-      _searchController.text = suggestion.displayName;
-      _showLocationOptions(newPosition);
-    }
+void _onSuggestionSelected(LocationSuggestion suggestion) {
+  final newPosition = LatLng(suggestion.lat, suggestion.lon);
+  if (mounted) {
+    setState(() {
+      _currentTab = MainTab.map;
+      _destination = newPosition;
+    });
+    _mapController.move(newPosition, 15.0);
+    _searchController.text = suggestion.displayName;
+    _showLocationOptions(newPosition);
   }
+}
+}
+
+extension on MapController {
 }
 
 class LocationSuggestion {
