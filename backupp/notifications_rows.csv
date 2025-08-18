@@ -1,0 +1,8 @@
+id,user_id,title,message,type,hotspot_id,is_read,created_at,updated_at,unique_key
+14b80ae5-0baf-4a2f-820e-66f1d7f9a95e,3dfe890a-f769-46fa-813d-e63466099104,New Crime Report,New Drug Crime report awaiting review,report,374,false,2025-08-17 13:08:26.487595+00,2025-08-17 13:08:26.487595+00,
+53f807c3-f7ff-462a-8880-397c10fbfc88,3dfe890a-f769-46fa-813d-e63466099104,New Crime Report,New Bombing Threat report awaiting review,report,370,true,2025-08-17 13:02:44.110382+00,2025-08-17 13:02:44.110382+00,
+98f097d1-e7f2-4e7c-a5ea-63cd20956edd,c015813a-f00c-42f4-8871-67bdf2a0f312,Report Approved,Your report about Public Disturbance has been approved,approval,373,false,2025-08-17 13:08:51.740145+00,2025-08-17 13:08:51.740145+00,
+c82fddf8-7d72-4b3a-b120-7eff16eeec84,c015813a-f00c-42f4-8871-67bdf2a0f312,Report Approved,Your report about Gang Activity has been approved,approval,368,true,2025-08-17 12:59:08.421702+00,2025-08-17 12:59:08.421702+00,
+dab0f236-bf85-4c45-b766-83d7671f3513,3dfe890a-f769-46fa-813d-e63466099104,New Crime Report,New Public Disturbance report awaiting review,report,373,true,2025-08-17 13:07:42.401841+00,2025-08-17 13:07:42.401841+00,
+f40a0994-2f3d-4c4d-a107-8f108a52beff,3dfe890a-f769-46fa-813d-e63466099104,New Crime Report,New Gang Activity report awaiting review,report,368,true,2025-08-17 12:58:55.597978+00,2025-08-17 12:58:55.597978+00,
+fae9dcca-1f98-428a-b2ab-b213479a0c90,c015813a-f00c-42f4-8871-67bdf2a0f312,Report Rejected,Your report was rejected. Reason: False alarm,rejection,370,true,2025-08-17 13:03:01.052877+00,2025-08-17 13:03:01.052877+00,

@@ -1,0 +1,28 @@
+id,name,level,category,description
+1,Homicide,critical,Violent,"Murder, attempted murder, or fatal violence"
+2,Kidnapping,critical,Violent,Abduction or unlawful confinement of persons
+3,Armed Violence,critical,Violent,Violence involving weapons or serious bodily harm
+4,Terrorism,critical,Violent,Terrorist activities or threats
+5,Robbery,high,Violent,"Taking property through force, intimidation, or threat"
+6,Assault,high,Violent,"Physical attack, threats, or unwanted physical contact"
+7,Sexual Crime,high,Violent,"Sexual assault, harassment, or related offenses"
+8,Drug Crime,high,Drug,"Drug trafficking, manufacturing, or large-scale possession"
+9,Gang Activity,high,Violent,"Gang-related violence, turf wars, or organized crime"
+10,Domestic Violence,high,Violent,Violence between family members or intimate partners
+11,Theft,medium,Property,"Stealing of personal property, vehicles, or belongings"
+12,Burglary,medium,Property,Unlawful entry into buildings or homes
+13,Extortion,medium,Financial,Threats or coercion for money or favors
+14,Illegal Gambling,medium,Public Order,Unlawful gambling operations
+15,Prostitution,medium,Public Order,Illegal sex trade activities
+16,Traffic Crime,high,Traffic,"Reckless driving, hit-and-run, or dangerous road behavior"
+17,Drunk Driving,high,Traffic,Operating vehicles under influence of alcohol or drugs
+18,Suspicious Activity,medium,Alert,Unusual behavior that may indicate criminal planning
+19,Police Activity,medium,Alert,Ongoing law enforcement operations or raids
+20,Missing Person,critical,Alert,"Missing person reports, especially vulnerable individuals"
+21,Public Disturbance,low,Alert,"Large gatherings, riots, or public disorder"
+22,Emergency Incident,high,Alert,"Fires, accidents, or other emergency situations"
+23,Insurgency Activity,critical,Violent,Rebel or insurgent group activities
+24,Bombing Threat,critical,Violent,Explosive devices or bomb threats
+25,Piracy,high,Violent,Maritime piracy or sea-based criminal activity
+26,Smuggling,medium,Drug,Illegal transportation of goods or contraband
+27,General Crime,low,Alert,Other criminal activities or safety concerns

@@ -641,7 +641,7 @@ Widget _buildProfileInfoItem(
 }) {
   return Container(
     margin: EdgeInsets.only(bottom: isLast ? 0 : 16),
-    padding: const EdgeInsets.all(15),
+    padding: const EdgeInsets.all(8),
     decoration: BoxDecoration(
       color: Colors.grey.shade50,
       borderRadius: BorderRadius.circular(12),

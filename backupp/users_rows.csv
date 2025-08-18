@@ -1,0 +1,5 @@
+id,email,username,first_name,last_name,middle_name,ext_name,bday,gender,contact_number,role,created_at,updated_at
+3dfe890a-f769-46fa-813d-e63466099104,venchansalido@gmail.com,venchansalido,Venard Jhon,Salido,Cabahug,,1994-05-12,Male,09351363586,admin,2025-08-05 00:06:21.249888+00,2025-08-16 22:07:29.471089+00
+5a418a23-31d9-42a6-87bc-86d6377029ea,aladeen@gmail.com,aladeen,Aladeen,Madafakir,,,1974-04-06,LGBTQ+,09231085637,user,2025-08-06 13:33:44.808269+00,2025-08-11 05:25:24.767367+00
+c015813a-f00c-42f4-8871-67bdf2a0f312,borat@gmail.com,borat,Borat,Sagdiyev,,,1969-08-05,Male,09058316455,user,2025-08-05 00:23:40.665049+00,2025-08-13 11:52:49.643025+00
+d906ccc7-b17d-49e2-abf7-9de5fd604a41,test@gmail.com,test,Test,Only,,,2007-08-16,Female,09215605888,user,2025-08-11 01:04:03.254518+00,2025-08-11 01:04:04.043734+00

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../services/search_filter_service.dart';
 
 void main() {
   runApp(const MyApp());
@@ -42,7 +43,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Map<String, dynamic> _reportStats = {};
   Map<String, dynamic> _activityStats = {};
   List<Map<String, dynamic>> _hotspotData = [];
+  List<Map<String, dynamic>> _usersData = [];
+  List<Map<String, dynamic>> _reportsData = [];
   bool _isLoading = true;
+  
 
   // Animation controllers
   late AnimationController _fadeController;
@@ -52,12 +56,51 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   late Animation<Offset> _slideAnimation;
   late Animation<double> _chartAnimation;
 
-  @override
-  void initState() {
-    super.initState();
-    _initAnimations();
-    _loadDashboardData();
-  }
+  // Add these new variables to your _AdminDashboardScreenState class
+  bool _isSidebarOpen = false;
+  bool _showFilters = false;
+  String _currentPage = 'dashboard';
+  late AnimationController _sidebarController;
+  late Animation<double> _sidebarAnimation;
+
+  // NEW VARIABLES FOR SEARCH AND FILTERING
+
+// User page search and filter variables
+final TextEditingController _userSearchController = TextEditingController();
+String _selectedUserRole = 'All Roles';
+String _selectedUserGender = 'All Genders';
+String _userSortBy = 'date_joined';
+bool _userSortAscending = false;
+List<Map<String, dynamic>> _filteredUsersData = [];
+
+// Report page search and filter variables
+final TextEditingController _reportSearchController = TextEditingController();
+String _selectedReportStatus = 'All Status';
+String _selectedReportLevel = 'All Levels';
+String _selectedReportCategory = 'All Categories';
+String _selectedActivityStatus = 'All Activity';
+String _reportSortBy = 'date';
+bool _reportSortAscending = false;
+List<Map<String, dynamic>> _filteredReportsData = [];
+
+// Dynamic filter options
+List<String> _availableRoles = ['All Roles'];
+List<String> _availableGenders = ['All Genders'];
+List<String> _availableStatuses = ['All Status'];
+List<String> _availableLevels = ['All Levels'];
+List<String> _availableCategories = ['All Categories'];
+List<String> _availableActivityStatuses = ['All Activity'];
+
+@override
+void initState() {
+  super.initState();
+  _initAnimations();
+  _loadDashboardData();
+  
+  // Add listeners for search controllers
+  _userSearchController.addListener(_filterUsers);
+  _reportSearchController.addListener(_filterReports);
+}
 
   void _initAnimations() {
     _fadeController = AnimationController(
@@ -96,14 +139,136 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       parent: _chartController,
       curve: Curves.elasticOut,
     ));
+
+    _sidebarController = AnimationController(
+  duration: const Duration(milliseconds: 300),
+  vsync: this,
+  );
+
+  _sidebarAnimation = Tween<double>(
+    begin: 0.0,
+    end: 1.0,
+  ).animate(CurvedAnimation(
+    parent: _sidebarController,
+    curve: Curves.easeInOut,
+  ));
   }
 
-  @override
-  void dispose() {
-    _fadeController.dispose();
-    _slideController.dispose();
-    _chartController.dispose();
-    super.dispose();
+@override
+void dispose() {
+  _fadeController.dispose();
+  _slideController.dispose();
+  _chartController.dispose();
+  _sidebarController.dispose();
+  _userSearchController.dispose();  // Add this
+  _reportSearchController.dispose();  // Add this
+  super.dispose();
+}
+
+// Add these new methods for filtering:
+
+  void _filterUsers() {
+    setState(() {
+      _filteredUsersData = SearchAndFilterService.filterUsers(
+        users: _usersData,
+        searchQuery: _userSearchController.text,
+        roleFilter: _selectedUserRole,
+        genderFilter: _selectedUserGender,
+        sortBy: _userSortBy,
+        ascending: _userSortAscending,
+      );
+    });
+  }
+
+  void _filterReports() {
+    setState(() {
+      _filteredReportsData = SearchAndFilterService.filterReports(
+        reports: _reportsData,
+        searchQuery: _reportSearchController.text,
+        statusFilter: _selectedReportStatus,
+        levelFilter: _selectedReportLevel,
+        categoryFilter: _selectedReportCategory,
+        activityFilter: _selectedActivityStatus,
+        sortBy: _reportSortBy,
+        ascending: _reportSortAscending,
+        startDate: _startDate,
+        endDate: _endDate,
+      );
+    });
+  }
+
+  void _updateUserFilter(String filterType, String value) {
+    setState(() {
+      switch (filterType) {
+        case 'role':
+          _selectedUserRole = value;
+          break;
+        case 'gender':
+          _selectedUserGender = value;
+          break;
+        case 'sort':
+          if (_userSortBy == value) {
+            _userSortAscending = !_userSortAscending;
+          } else {
+            _userSortBy = value;
+            _userSortAscending = true;
+          }
+          break;
+      }
+    });
+    _filterUsers();
+  }
+
+  void _updateReportFilter(String filterType, String value) {
+    setState(() {
+      switch (filterType) {
+        case 'status':
+          _selectedReportStatus = value;
+          break;
+        case 'level':
+          _selectedReportLevel = value;
+          break;
+        case 'category':
+          _selectedReportCategory = value;
+          break;
+        case 'activity':
+          _selectedActivityStatus = value;
+          break;
+        case 'sort':
+          if (_reportSortBy == value) {
+            _reportSortAscending = !_reportSortAscending;
+          } else {
+            _reportSortBy = value;
+            _reportSortAscending = true;
+          }
+          break;
+      }
+    });
+    _filterReports();
+  }
+
+  void _clearUserFilters() {
+    setState(() {
+      _userSearchController.clear();
+      _selectedUserRole = 'All Roles';
+      _selectedUserGender = 'All Genders';
+      _userSortBy = 'date_joined';
+      _userSortAscending = false;
+    });
+    _filterUsers();
+  }
+
+  void _clearReportFilters() {
+    setState(() {
+      _reportSearchController.clear();
+      _selectedReportStatus = 'All Status';
+      _selectedReportLevel = 'All Levels';
+      _selectedReportCategory = 'All Categories';
+      _selectedActivityStatus = 'All Activity';
+      _reportSortBy = 'date';
+      _reportSortAscending = false;
+    });
+    _filterReports();
   }
 
   Future<void> _loadDashboardData() async {
@@ -133,6 +298,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       });
     }
   }
+
+  
 
   Future<void> _loadUserStats() async {
     try {
@@ -355,89 +522,1754 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color.fromARGB(255, 220, 234, 248), // Almost white with hint of blue
-              Color.fromARGB(255, 190, 198, 207), // Light slate gray
-            ],
-          ),
+@override
+Widget build(BuildContext context) {
+  return Scaffold(
+    body: Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color.fromARGB(255, 220, 234, 248),
+            Color.fromARGB(255, 190, 198, 207),
+          ],
         ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              _buildModernAppBar(),
-              Expanded(
-                child: _isLoading
-                    ? _buildLoadingState()
-                    : FadeTransition(
-                        opacity: _fadeAnimation,
-                        child: SlideTransition(
-                          position: _slideAnimation,
-                          child: _buildDashboardContent(),
-                        ),
-                      ),
+      ),
+      child: SafeArea(
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                _buildModernAppBar(),
+                Expanded(
+                  child: _buildCurrentPage(),
+                ),
+              ],
+            ),
+            _buildSidebar(),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+// Import this at the top of your file if not already imported
+// import 'package:flutter/material.dart';
+// import '../screens/profile_screen.dart';
+
+// Fixed sidebar widget that handles keyboard properly
+Widget _buildSidebar() {
+  return AnimatedBuilder(
+    animation: _sidebarAnimation,
+    builder: (context, child) {
+      return Stack(
+        children: [
+          // Backdrop
+          if (_isSidebarOpen)
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isSidebarOpen = false;
+                });
+                _sidebarController.reverse();
+              },
+              child: Container(
+                width: double.infinity,
+                height: double.infinity,
+                color: Colors.black.withOpacity(0.3 * _sidebarAnimation.value),
               ),
+            ),
+          // Sidebar - Fixed height and proper layout
+          Transform.translate(
+            offset: Offset(-320.0 + (320.0 * _sidebarAnimation.value), 0.0),
+            child: Container(
+              width: 320,
+              height: double.infinity,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.only(
+                  topRight: Radius.circular(24),
+                  bottomRight: Radius.circular(24),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 20,
+                    offset: Offset(4, 0),
+                    spreadRadius: 0,
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  // Logo section with new gradient
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color.fromARGB(255, 92, 118, 165), Color.fromARGB(255, 61, 91, 131)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.only(
+                        topRight: Radius.circular(24),
+                      ),
+                    ),
+                    child: GestureDetector(
+                      onTap: () {
+                        _navigateToPage('dashboard');
+                      },
+                      child: Column(
+                        children: [
+                          // Logo container with improved styling
+                          Container(
+                            width: 70,
+                            height: 70,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.08),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4),
+                                  spreadRadius: 0,
+                                ),
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(20),
+                              child: Image.asset(
+                                'assets/images/zecure.png',
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return const Icon(
+                                    Icons.security_rounded,
+                                    color: Color(0xFF4F8EF7),
+                                    size: 35,
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'ZECURE',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text(
+                              'Admin Panel',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  // Navigation items - Scrollable middle section
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 8),
+                          
+                          // Navigation Items
+                          _buildNavItem(
+                            icon: Icons.dashboard_rounded,
+                            title: 'Dashboard',
+                            isActive: _currentPage == 'dashboard',
+                            onTap: () => _navigateToPage('dashboard'),
+                          ),
+                          const SizedBox(height: 4),
+                          _buildNavItem(
+                            icon: Icons.people_rounded,
+                            title: 'User Management',
+                            isActive: _currentPage == 'users',
+                            onTap: () => _navigateToPage('users'),
+                          ),
+                          const SizedBox(height: 4),
+                          _buildNavItem(
+                            icon: Icons.report_gmailerrorred_rounded,
+                            title: 'Reports & Analytics',
+                            isActive: _currentPage == 'reports',
+                            onTap: () => _navigateToPage('reports'),
+                          ),
+                          
+                          // Extra space to push content up when scrolling
+                          const SizedBox(height: 100),
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  // Fixed bottom section
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Divider
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                          height: 1,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE5E7EB),
+                            borderRadius: BorderRadius.circular(1),
+                          ),
+                        ),
+                        
+                        // Back to Profile Button
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(16),
+                              onTap: () {
+                                setState(() {
+                                  _isSidebarOpen = false;
+                                });
+                                _sidebarController.reverse();
+                                
+                                // Simply go back to previous screen (ProfileScreen)
+                                Navigator.of(context).pop();
+                              },
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      const Color(0xFF4F8EF7).withOpacity(0.1),
+                                      const Color(0xFF6FA8F5).withOpacity(0.05),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFF4F8EF7).withOpacity(0.2),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 36,
+                                      height: 36,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF4F8EF7).withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: const Icon(
+                                        Icons.arrow_back_rounded,
+                                        color: Color(0xFF4F8EF7),
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Back to Profile',
+                                            style: TextStyle(
+                                              color: Color(0xFF374151),
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          Text(
+                                            'Return to main profile',
+                                            style: TextStyle(
+                                              color: Color(0xFF6B7280),
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.chevron_right_rounded,
+                                      color: Color(0xFF9CA3AF),
+                                      size: 18,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+Widget _buildNavItem({
+  required IconData icon,
+  required String title,
+  required bool isActive,
+  required VoidCallback onTap,
+}) {
+  return Container(
+    margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: isActive 
+                ? const Color(0xFF4F8EF7).withOpacity(0.1) 
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+            border: isActive 
+                ? Border.all(color: const Color(0xFF4F8EF7).withOpacity(0.2), width: 1)
+                : null,
+          ),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: isActive 
+                      ? const Color(0xFF4F8EF7).withOpacity(0.15)
+                      : const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: !isActive 
+                      ? Border.all(color: const Color(0xFFE5E7EB), width: 1)
+                      : null,
+                ),
+                child: Icon(
+                  icon,
+                  color: isActive 
+                      ? const Color(0xFF4F8EF7) 
+                      : const Color(0xFF6B7280),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: isActive 
+                        ? const Color(0xFF374151) 
+                        : const Color(0xFF6B7280),
+                    fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              if (isActive)
+                Container(
+                  width: 4,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4F8EF7),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
             ],
           ),
         ),
       ),
-    );
+    ),
+  );
+}
+
+void _navigateToPage(String page) {
+  setState(() {
+    _currentPage = page;
+    _isSidebarOpen = false;
+  });
+  _sidebarController.reverse();
+  
+  // Load data based on page
+  if (page == 'users') {
+    _loadUsersData();
+  } else if (page == 'reports') {
+    _loadReportsData();
+  }
+}
+
+Widget _buildCurrentPage() {
+  switch (_currentPage) {
+    case 'users':
+      return _buildUsersPage();
+    case 'reports':
+      return _buildReportsPage();
+    default:
+      return _isLoading
+          ? _buildLoadingState()
+          : FadeTransition(
+              opacity: _fadeAnimation,
+              child: SlideTransition(
+                position: _slideAnimation,
+                child: _buildDashboardContent(),
+              ),
+            );
+  }
+}
+
+// Add data loading methods
+  Future<void> _loadUsersData() async {
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('*')
+          .order('created_at', ascending: false);
+      
+      setState(() {
+        _usersData = List<Map<String, dynamic>>.from(response);
+        
+        // Update available filter options
+        _availableRoles = SearchAndFilterService.getUniqueRoles(_usersData);
+        _availableGenders = SearchAndFilterService.getUniqueGenders(_usersData);
+        
+        // Initialize filtered data
+        _filteredUsersData = List.from(_usersData);
+      });
+      
+      _filterUsers();
+    } catch (e) {
+      print('Error loading users data: $e');
+    }
   }
 
-  Widget _buildModernAppBar() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF334155),
-              borderRadius: BorderRadius.circular(15),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
+  Future<void> _loadReportsData() async {
+    try {
+      final response = await Supabase.instance.client
+          .from('hotspot')
+          .select('''
+            *,
+            crime_type(name, level, category),
+            users!hotspot_created_by_fkey(first_name, last_name, email),
+            reporter:users!hotspot_reported_by_fkey(first_name, last_name, email)
+          ''')
+          .order('created_at', ascending: false);
+      
+      setState(() {
+        _reportsData = List<Map<String, dynamic>>.from(response);
+        
+        // Update available filter options
+        _availableStatuses = SearchAndFilterService.getUniqueStatuses(_reportsData);
+        _availableLevels = SearchAndFilterService.getUniqueLevels(_reportsData);
+        _availableCategories = SearchAndFilterService.getUniqueCategories(_reportsData);
+        _availableActivityStatuses = SearchAndFilterService.getUniqueActivityStatuses(_reportsData);
+        
+        // Initialize filtered data
+        _filteredReportsData = List.from(_reportsData);
+      });
+      
+      _filterReports();
+    } catch (e) {
+      print('Error loading reports data: $e');
+    }
+  }
+
+Widget _buildUsersPage() {
+  return Column(
+    children: [
+      // Search and Filter Bar
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+          ),
+        ),
+        child: Column(
+          children: [
+            // Main Search Row
+            Row(
+              children: [
+                // Expanded Search Bar
+                Expanded(
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: TextField(
+                      controller: _userSearchController,
+                      onChanged: (value) {
+                        // This is the missing piece - trigger filtering when user types
+                        _filterUsers();
+                      },
+                      decoration: const InputDecoration(
+                        hintText: 'Search users by name, email, or username...',
+                        hintStyle: TextStyle(
+                          color: Color(0xFF9CA3AF),
+                          fontSize: 14,
+                        ),
+                        prefixIcon: Icon(
+                          Icons.search,
+                          color: Color(0xFF9CA3AF),
+                          size: 20,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      ),
+                    ),
+                  ),
                 ),
+                const SizedBox(width: 12),
+                
+                // Filter Toggle Button
+                Container(
+                  height: 44,
+                  width: 44,
+                  decoration: BoxDecoration(
+                    color: _showFilters ? const Color(0xFF6366F1) : const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _showFilters ? const Color(0xFF6366F1) : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _showFilters = !_showFilters;
+                      });
+                    },
+                    icon: Icon(
+                      Icons.tune,
+                      color: _showFilters ? Colors.white : const Color(0xFF6B7280),
+                      size: 20,
+                    ),
+                    tooltip: 'Toggle Filters',
+                  ),
+                ),
+                
+                // Clear Filters Button
+                if (_userSearchController.text.isNotEmpty || 
+                    _selectedUserRole != 'All Roles' || 
+                    _selectedUserGender != 'All Genders')
+                  Container(
+                    margin: const EdgeInsets.only(left: 8),
+                    height: 44,
+                    width: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF87171).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFF87171).withOpacity(0.3)),
+                    ),
+                    child: IconButton(
+                      onPressed: _clearUserFilters,
+                      icon: const Icon(
+                        Icons.clear,
+                        color: Color(0xFFF87171),
+                        size: 20,
+                      ),
+                      tooltip: 'Clear Filters',
+                    ),
+                  ),
               ],
             ),
-            child: const Icon(
-              Icons.dashboard,
+            
+            // Collapsible Filters Row
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              height: _showFilters ? 60 : 0,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 300),
+                opacity: _showFilters ? 1.0 : 0.0,
+                child: _showFilters ? Container(
+                  margin: const EdgeInsets.only(top: 16),
+                  child: Row(
+                    children: [
+                      // Role Filter Dropdown
+                      Expanded(
+                        child: Container(
+                          height: 44,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: DropdownButton<String>(
+                            value: _selectedUserRole,
+                            underline: const SizedBox(),
+                            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                            isExpanded: true,
+                            items: _availableRoles.map((role) {
+                              return DropdownMenuItem(
+                                value: role,
+                                child: Text(role),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                _updateUserFilter('role', value);
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      
+                      // Gender Filter Dropdown
+                      Expanded(
+                        child: Container(
+                          height: 44,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: DropdownButton<String>(
+                            value: _selectedUserGender,
+                            underline: const SizedBox(),
+                            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                            isExpanded: true,
+                            items: _availableGenders.map((gender) {
+                              return DropdownMenuItem(
+                                value: gender,
+                                child: Text(gender),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                _updateUserFilter('gender', value);
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ) : const SizedBox(),
+              ),
+            ),
+          ],
+        ),
+      ),
+      
+      // Full Width Table
+      Expanded(
+        child: Container(
+          width: double.infinity,
+          color: const Color(0xFFFAFAFA),
+          child: SingleChildScrollView(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columnSpacing: 32,
+                horizontalMargin: 24,
+                headingRowHeight: 56,
+                dataRowHeight: 72,
+                headingRowColor: WidgetStateProperty.all(Colors.white),
+                headingTextStyle: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF374151),
+                ),
+                dataTextStyle: const TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF111827),
+                ),
+                border: const TableBorder(
+                  horizontalInside: BorderSide(color: Color(0xFFF3F4F6), width: 1),
+                ),
+                columns: [
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.person, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('USER'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateUserFilter('sort', 'name'),
+                          child: Icon(
+                            _userSortBy == 'name'
+                                ? (_userSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _userSortBy == 'name' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateUserFilter('sort', 'name'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.email, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('EMAIL'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateUserFilter('sort', 'email'),
+                          child: Icon(
+                            _userSortBy == 'email'
+                                ? (_userSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _userSortBy == 'email' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateUserFilter('sort', 'email'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.alternate_email, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('USERNAME'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateUserFilter('sort', 'username'),
+                          child: Icon(
+                            _userSortBy == 'username'
+                                ? (_userSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _userSortBy == 'username' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateUserFilter('sort', 'username'),
+                  ),
+                  const DataColumn(
+                    label: Row(
+                      children: [
+                        Icon(Icons.phone, size: 16, color: Color(0xFF6B7280)),
+                        SizedBox(width: 8),
+                        Text('CONTACT'),
+                      ],
+                    ),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.wc, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('GENDER'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateUserFilter('sort', 'gender'),
+                          child: Icon(
+                            _userSortBy == 'gender'
+                                ? (_userSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _userSortBy == 'gender' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateUserFilter('sort', 'gender'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.admin_panel_settings, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('ROLE'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateUserFilter('sort', 'role'),
+                          child: Icon(
+                            _userSortBy == 'role'
+                                ? (_userSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _userSortBy == 'role' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateUserFilter('sort', 'role'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.calendar_today, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('JOINED'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateUserFilter('sort', 'date_joined'),
+                          child: Icon(
+                            _userSortBy == 'date_joined'
+                                ? (_userSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _userSortBy == 'date_joined' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateUserFilter('sort', 'date_joined'),
+                  ),
+                ],
+                rows: _filteredUsersData.map((user) {
+                  return DataRow(
+                    color: WidgetStateProperty.all(Colors.white),
+                    cells: [
+                      // User Info (Removed ID)
+                      DataCell(
+                        Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: _getGenderColor(user['gender']).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: _getGenderColor(user['gender']).withOpacity(0.2),
+                                ),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  _getInitials('${user['first_name'] ?? ''} ${user['last_name'] ?? ''}'),
+                                  style: TextStyle(
+                                    color: _getGenderColor(user['gender']),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                '${user['first_name'] ?? ''} ${user['last_name'] ?? ''}'.trim(),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Email
+                      DataCell(
+                        Text(
+                          user['email'] ?? 'No email',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      // Username
+                      DataCell(
+                        Text(
+                          user['username'] ?? 'No username',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      // Contact
+                      DataCell(
+                        Text(
+                          user['contact_number'] ?? 'No contact',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      // Gender Badge
+                      DataCell(
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _getGenderColor(user['gender']).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: _getGenderColor(user['gender']).withOpacity(0.3),
+                            ),
+                          ),
+                          child: Text(
+                            user['gender'] ?? 'N/A',
+                            style: TextStyle(
+                              color: _getGenderColor(user['gender']),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Role Badge
+                      DataCell(
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: user['role'] == 'admin' 
+                                ? const Color(0xFFDC2626).withOpacity(0.1)
+                                : const Color(0xFF059669).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: user['role'] == 'admin' 
+                                  ? const Color(0xFFDC2626).withOpacity(0.3)
+                                  : const Color(0xFF059669).withOpacity(0.3),
+                            ),
+                          ),
+                          child: Text(
+                            (user['role'] ?? 'user').toUpperCase(),
+                            style: TextStyle(
+                              color: user['role'] == 'admin' 
+                                  ? const Color(0xFFDC2626)
+                                  : const Color(0xFF059669),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Join Date
+                      DataCell(
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              user['created_at'] != null
+                                  ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['created_at']))
+                                  : 'Unknown',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Text(
+                              user['created_at'] != null
+                                  ? _getTimeAgo(DateTime.parse(user['created_at']))
+                                  : '',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+Widget _buildReportsPage() {
+  return Column(
+    children: [
+      // Search and Filter Bar
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+          ),
+        ),
+        child: Column(
+          children: [
+            // Main Search Row
+            Row(
+              children: [
+                // Expanded Search Bar
+                Expanded(
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: TextField(
+                      controller: _reportSearchController,
+                      // Remove the onChanged callback since we have the listener
+                      decoration: const InputDecoration(
+                        hintText: 'Search reports by ID, crime type, or reporter...',
+                        hintStyle: TextStyle(
+                          color: Color(0xFF9CA3AF),
+                          fontSize: 14,
+                        ),
+                        prefixIcon: Icon(
+                          Icons.search,
+                          color: Color(0xFF9CA3AF),
+                          size: 20,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                
+                // Filter Toggle Button
+                Container(
+                  height: 44,
+                  width: 44,
+                  decoration: BoxDecoration(
+                    color: _showFilters ? const Color(0xFF6366F1) : const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _showFilters ? const Color(0xFF6366F1) : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _showFilters = !_showFilters;
+                      });
+                    },
+                    icon: Icon(
+                      Icons.tune,
+                      color: _showFilters ? Colors.white : const Color(0xFF6B7280),
+                      size: 20,
+                    ),
+                    tooltip: 'Toggle Filters',
+                  ),
+                ),
+                
+                // Clear Filters Button
+                if (_reportSearchController.text.isNotEmpty || 
+                    _selectedReportStatus != 'All Status' || 
+                    _selectedReportLevel != 'All Levels' ||
+                    _selectedReportCategory != 'All Categories' ||
+                    _selectedActivityStatus != 'All Activity')
+                  Container(
+                    margin: const EdgeInsets.only(left: 8),
+                    height: 44,
+                    width: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF87171).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFF87171).withOpacity(0.3)),
+                    ),
+                    child: IconButton(
+                      onPressed: _clearReportFilters,
+                      icon: const Icon(
+                        Icons.clear,
+                        color: Color(0xFFF87171),
+                        size: 20,
+                      ),
+                      tooltip: 'Clear Filters',
+                    ),
+                  ),
+              ],
+            ),
+            
+            // Collapsible Filters Row - FIXED OVERFLOW ISSUE
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              height: _showFilters ? 120 : 0,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 300),
+                opacity: _showFilters ? 1.0 : 0.0,
+                child: _showFilters ? Container(
+                  margin: const EdgeInsets.only(top: 16),
+                  child: SingleChildScrollView( // Add scrollable wrapper
+                    child: Column(
+                      children: [
+                        // First row of filters
+                        Row(
+                          children: [
+                            // Status Filter
+                            Expanded(
+                              child: Container(
+                                height: 44,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF9FAFB),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                                ),
+                                child: DropdownButton<String>(
+                                  value: _selectedReportStatus,
+                                  underline: const SizedBox(),
+                                  icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                                  isExpanded: true,
+                                  // Add overflow handling
+                                  menuMaxHeight: 200,
+                                  items: _availableStatuses.map((status) {
+                                    return DropdownMenuItem(
+                                      value: status,
+                                      child: Text(
+                                        status,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    );
+                                  }).toList(),
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      _updateReportFilter('status', value);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            
+                            // Crime Level Filter
+                            Expanded(
+                              child: Container(
+                                height: 44,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF9FAFB),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                                ),
+                                child: DropdownButton<String>(
+                                  value: _selectedReportLevel,
+                                  underline: const SizedBox(),
+                                  icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                                  isExpanded: true,
+                                  menuMaxHeight: 200,
+                                  items: _availableLevels.map((level) {
+                                    return DropdownMenuItem(
+                                      value: level,
+                                      child: Text(
+                                        level,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    );
+                                  }).toList(),
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      _updateReportFilter('level', value);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        // Second row of filters
+                        Row(
+                          children: [
+                            // Category Filter
+                            Expanded(
+                              child: Container(
+                                height: 44,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF9FAFB),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                                ),
+                                child: DropdownButton<String>(
+                                  value: _selectedReportCategory,
+                                  underline: const SizedBox(),
+                                  icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                                  isExpanded: true,
+                                  menuMaxHeight: 200,
+                                  items: _availableCategories.map((category) {
+                                    return DropdownMenuItem(
+                                      value: category,
+                                      child: Text(
+                                        category,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    );
+                                  }).toList(),
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      _updateReportFilter('category', value);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            
+                            // Activity Status Filter
+                            Expanded(
+                              child: Container(
+                                height: 44,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF9FAFB),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                                ),
+                                child: DropdownButton<String>(
+                                  value: _selectedActivityStatus,
+                                  underline: const SizedBox(),
+                                  icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                                  isExpanded: true,
+                                  menuMaxHeight: 200,
+                                  items: _availableActivityStatuses.map((activity) {
+                                    return DropdownMenuItem(
+                                      value: activity,
+                                      child: Text(
+                                        activity,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    );
+                                  }).toList(),
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      _updateReportFilter('activity', value);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ) : const SizedBox(),
+              ),
+            ),
+          ],
+        ),
+      ),
+      
+      // Full Width Table
+      Expanded(
+        child: Container(
+          width: double.infinity,
+          color: const Color(0xFFFAFAFA),
+          child: SingleChildScrollView(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columnSpacing: 32,
+                horizontalMargin: 24,
+                headingRowHeight: 56,
+                dataRowHeight: 80,
+                headingRowColor: WidgetStateProperty.all(Colors.white),
+                headingTextStyle: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF374151),
+                ),
+                dataTextStyle: const TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF111827),
+                ),
+                border: const TableBorder(
+                  horizontalInside: BorderSide(color: Color(0xFFF3F4F6), width: 1),
+                ),
+                columns: [
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.tag, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('REPORT ID'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateReportFilter('sort', 'id'),
+                          child: Icon(
+                            _reportSortBy == 'id'
+                                ? (_reportSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _reportSortBy == 'id' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateReportFilter('sort', 'id'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.gavel, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('CRIME TYPE'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateReportFilter('sort', 'crime_type'),
+                          child: Icon(
+                            _reportSortBy == 'crime_type'
+                                ? (_reportSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _reportSortBy == 'crime_type' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateReportFilter('sort', 'crime_type'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.priority_high, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('LEVEL'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateReportFilter('sort', 'level'),
+                          child: Icon(
+                            _reportSortBy == 'level'
+                                ? (_reportSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _reportSortBy == 'level' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateReportFilter('sort', 'level'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.assignment, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('STATUS'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateReportFilter('sort', 'status'),
+                          child: Icon(
+                            _reportSortBy == 'status'
+                                ? (_reportSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _reportSortBy == 'status' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateReportFilter('sort', 'status'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.person, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('REPORTER'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateReportFilter('sort', 'reporter'),
+                          child: Icon(
+                            _reportSortBy == 'reporter'
+                                ? (_reportSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _reportSortBy == 'reporter' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateReportFilter('sort', 'reporter'),
+                  ),
+                  DataColumn(
+                    label: Row(
+                      children: [
+                        const Icon(Icons.schedule, size: 16, color: Color(0xFF6B7280)),
+                        const SizedBox(width: 8),
+                        const Text('DATE & TIME'),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _updateReportFilter('sort', 'date'),
+                          child: Icon(
+                            _reportSortBy == 'date'
+                                ? (_reportSortAscending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down)
+                                : Icons.unfold_more,
+                            size: 16,
+                            color: _reportSortBy == 'date' ? const Color(0xFF6366F1) : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                    onSort: (columnIndex, ascending) => _updateReportFilter('sort', 'date'),
+                  ),
+                ],
+                rows: _filteredReportsData.map((report) {
+                  return DataRow(
+                    color: WidgetStateProperty.all(Colors.white),
+                    cells: [
+                      // Report ID
+                      DataCell(
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: _getCrimeLevelColor(report['crime_type']?['level']),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '#${report['id']}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                    color: Color(0xFF6366F1),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              report['crime_type']?['category'] ?? 'Unknown',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Crime Type
+                      DataCell(
+                        Text(
+                          report['crime_type']?['name'] ?? 'Unknown Crime',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      // Crime Level
+                      DataCell(
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _getCrimeLevelColor(report['crime_type']?['level']).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: _getCrimeLevelColor(report['crime_type']?['level']).withOpacity(0.3),
+                            ),
+                          ),
+                          child: Text(
+                            (report['crime_type']?['level'] ?? 'N/A').toUpperCase(),
+                            style: TextStyle(
+                              color: _getCrimeLevelColor(report['crime_type']?['level']),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Status
+                      DataCell(
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _getStatusColor(report['status']).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: _getStatusColor(report['status']).withOpacity(0.3),
+                                ),
+                              ),
+                              child: Text(
+                                (report['status'] ?? 'pending').toUpperCase(),
+                                style: TextStyle(
+                                  color: _getStatusColor(report['status']),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _getActivityColor(report['active_status']).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(3),
+                                border: Border.all(
+                                  color: _getActivityColor(report['active_status']).withOpacity(0.3),
+                                ),
+                              ),
+                              child: Text(
+                                (report['active_status'] ?? 'active').toUpperCase(),
+                                style: TextStyle(
+                                  color: _getActivityColor(report['active_status']),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Reporter
+                      DataCell(
+                        Row(
+                          children: [
+                            Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF6366F1).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: const Color(0xFF6366F1).withOpacity(0.2),
+                                ),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  _getInitials(report['reporter'] != null
+                                      ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'
+                                      : 'Admin'),
+                                  style: const TextStyle(
+                                    color: Color(0xFF6366F1),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    report['reporter'] != null
+                                        ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'.trim()
+                                        : 'Admin',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  if (report['reporter'] != null)
+                                    Text(
+                                      report['reporter']['email'] ?? '',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF6B7280),
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Date & Time
+                      DataCell(
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              report['created_at'] != null
+                                  ? DateFormat('MMM d, yyyy').format(DateTime.parse(report['created_at']))
+                                  : 'Unknown',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Text(
+                              report['created_at'] != null
+                                  ? DateFormat('HH:mm').format(DateTime.parse(report['created_at']))
+                                  : '',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                            Text(
+                              report['created_at'] != null
+                                  ? _getTimeAgo(DateTime.parse(report['created_at']))
+                                  : '',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF9CA3AF),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+// Helper methods (add these if you don't have them):
+String _getInitials(String name) {
+  if (name.isEmpty) return 'U';
+  final words = name.trim().split(' ');
+  if (words.length == 1) return words[0][0].toUpperCase();
+  return '${words[0][0]}${words[1][0]}'.toUpperCase();
+}
+
+String _getTimeAgo(DateTime dateTime) {
+  final now = DateTime.now();
+  final difference = now.difference(dateTime);
+  
+  if (difference.inDays > 7) {
+    return '${(difference.inDays / 7).floor()}w ago';
+  } else if (difference.inDays > 0) {
+    return '${difference.inDays}d ago';
+  } else if (difference.inHours > 0) {
+    return '${difference.inHours}h ago';
+  } else if (difference.inMinutes > 0) {
+    return '${difference.inMinutes}m ago';
+  } else {
+    return 'Just now';
+  }
+}
+
+// Add helper methods
+Color _getGenderColor(String? gender) {
+  switch (gender?.toLowerCase()) {
+    case 'male':
+      return const Color(0xFF3B82F6);
+    case 'female':
+      return const Color(0xFFEC4899);
+    case 'lgbtq+':
+      return const Color(0xFF8B5CF6);
+    default:
+      return const Color(0xFF6B7280);
+  }
+}
+
+Color _getCrimeLevelColor(String? level) {
+  switch (level?.toLowerCase()) {
+    case 'critical':
+      return const Color(0xFFDC2626);
+    case 'high':
+      return const Color(0xFFEA580C);
+    case 'medium':
+      return const Color(0xFFD97706);
+    case 'low':
+      return const Color(0xFF65A30D);
+    default:
+      return const Color(0xFF6B7280);
+  }
+}
+
+Widget _buildModernAppBar() {
+  return Container(
+    padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF334155),
+            borderRadius: BorderRadius.circular(15),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: GestureDetector(
+            onTap: () {
+              setState(() {
+                _isSidebarOpen = !_isSidebarOpen;
+              });
+              if (_isSidebarOpen) {
+                _sidebarController.forward();
+              } else {
+                _sidebarController.reverse();
+              }
+            },
+            child: AnimatedIcon(
+              icon: AnimatedIcons.menu_close,
+              progress: _sidebarAnimation,
               color: Colors.white,
               size: 24,
             ),
           ),
-          const SizedBox(width: 15),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Admin Dashboard',
-                  style: TextStyle(
-                    color: Color(0xFF1E293B),
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+        ),
+        const SizedBox(width: 15),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _getPageTitle(),
+                style: const TextStyle(
+                  color: Color(0xFF1E293B),
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
                 ),
-                Text(
-                  'Crime Analytics & Reports',
-                  style: TextStyle(
-                    color: Color(0xFF475569),
-                    fontSize: 14,
-                  ),
+              ),
+              Text(
+                _getPageSubtitle(),
+                style: const TextStyle(
+                  color: Color(0xFF475569),
+                  fontSize: 14,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+        ),
+        if (_currentPage == 'dashboard')
           Container(
             decoration: BoxDecoration(
               color: const Color(0xFF334155),
@@ -461,10 +2293,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               tooltip: 'Refresh Data',
             ),
           ),
-        ],
-      ),
-    );
+      ],
+    ),
+  );
+}
+
+// Add these helper methods
+String _getPageTitle() {
+  switch (_currentPage) {
+    case 'users':
+      return 'User Management';
+    case 'reports':
+      return 'Report Management';
+    default:
+      return 'Admin Dashboard';
   }
+}
+
+String _getPageSubtitle() {
+  switch (_currentPage) {
+    case 'users':
+      return 'Manage system users';
+    case 'reports':
+      return 'Manage crime reports';
+    default:
+      return 'Crime Analytics & Reports';
+  }
+}
 
   Widget _buildLoadingState() {
     return const Center(
@@ -1119,6 +2974,13 @@ Widget _buildCrimeLevelsChart() {
     });
   }
 
+  // Check if there's any actual data (all values are 0 means no data)
+  int totalCrimes = levelData.values.fold(0, (sum, value) => sum + value);
+  
+  if (totalCrimes == 0) {
+    return _buildEmptyCard('No crime severity data available');
+  }
+
   Map<String, Color> levelColors = {
     'critical': const Color.fromARGB(255, 247, 26, 10),
     'high': const Color.fromARGB(255, 223, 106, 11),
@@ -1158,7 +3020,7 @@ Widget _buildCrimeLevelsChart() {
               return PieChart(
                 PieChartData(
                   sections: levelData.entries.map((entry) {
-                    double percentage = (entry.value / (_crimeStats['total'] ?? 1)) * 100;
+                    double percentage = (entry.value / totalCrimes) * 100;
                     double animatedValue = entry.value.toDouble() * _chartAnimation.value;
                     return PieChartSectionData(
                       color: levelColors[entry.key] ?? Colors.grey,
@@ -1253,14 +3115,19 @@ Widget _buildCrimeCategoriesChart() {
     return _buildEmptyCard('No crime category data available');
   }
 
-  List<Color> colors = [
-    const Color(0xFFDC2626),
-    const Color(0xFF2563EB),
-    const Color(0xFF059669),
-    const Color(0xFF7C3AED),
-    const Color(0xFFEA580C),
-    const Color(0xFF0891B2),
-  ];
+  // Color mapping based on your filter section
+  Map<String, Color> categoryColors = {
+    'Property': Colors.blue,
+    'Violent': Colors.red,
+    'Drug': Colors.purple,
+    'Public Order': Colors.orange,
+    'Financial': Colors.green,
+    'Traffic': Colors.blueGrey,
+    'Alert': Colors.deepPurple,
+    // Fallback colors for any other categories
+    'default1': const Color(0xFF0891B2),
+    'default2': const Color.fromARGB(255, 185, 163, 36),
+  };
 
   // Get max value for scaling
   int maxValue = categoryData.values.isEmpty ? 1 : categoryData.values.reduce((a, b) => a > b ? a : b);
@@ -1295,8 +3162,8 @@ Widget _buildCrimeCategoriesChart() {
           builder: (context, child) {
             return Column(
               children: categoryData.entries.map((entry) {
-                int index = categoryData.keys.toList().indexOf(entry.key);
-                Color barColor = colors[index % colors.length];
+                // Get color based on category name, with fallback
+                Color barColor = categoryColors[entry.key] ?? Colors.grey;
                 double progress = (entry.value / maxValue) * _chartAnimation.value;
                 
                 return Padding(
@@ -1511,154 +3378,130 @@ Widget _buildReportStatusChart() {
 }
 
 
-  Widget _buildActivityStatusChart() {
-    final totalActivities = _activityStats['total'] ?? 0;
-    Map<String, int> activityData = _activityStats['status'] ?? {};
-    activityData.removeWhere((key, value) => value == 0);
+Widget _buildActivityStatusChart() {
+  final totalActivities = _activityStats['total'] ?? 0;
+  Map<String, int> activityData = _activityStats['status'] ?? {};
+  activityData.removeWhere((key, value) => value == 0);
 
-    if (totalActivities == 0) {
-      return _buildEmptyCard('No activity status data available');
-    }
+  if (totalActivities == 0) {
+    return _buildEmptyCard('No activity status data available');
+  }
 
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+  return Container(
+    padding: const EdgeInsets.all(24),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 10,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Reports by Activity Status',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937),
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          const Text(
-            'Reports by Activity Status',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1F2937),
-            ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Total: $totalActivities reports',
+          style: const TextStyle(
+            fontSize: 14,
+            color: Color(0xFF6B7280),
           ),
-          const SizedBox(height: 20),
-          SizedBox(
-            height: 200,
-            child: AnimatedBuilder(
-              animation: _chartAnimation,
-              builder: (context, child) {
-                return BarChart(
-                  BarChartData(
-                    alignment: BarChartAlignment.spaceAround,
-                    maxY: activityData.values.isEmpty 
-                        ? 10 
-                        : activityData.values.reduce((a, b) => a > b ? a : b).toDouble() * 1.2,
-                    barGroups: activityData.entries.map((entry) {
-                      int index = activityData.keys.toList().indexOf(entry.key);
-                      double animatedHeight = entry.value.toDouble() * _chartAnimation.value;
-                      
-                      return BarChartGroupData(
-                        x: index,
-                        barRods: [
-                          BarChartRodData(
-                            toY: animatedHeight,
-                            color: _getActivityColor(entry.key),
-                            width: 40,
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-                            gradient: LinearGradient(
-                              colors: [
-                                _getActivityColor(entry.key),
-                                _getActivityColor(entry.key).withOpacity(0.7),
-                              ],
-                              begin: Alignment.bottomCenter,
-                              end: Alignment.topCenter,
-                            ),
+        ),
+        const SizedBox(height: 24),
+        ...activityData.entries.map((entry) {
+          double percentage = (entry.value / totalActivities) * 100;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _getActivityIcon(entry.key),
+                          color: _getActivityColor(entry.key),
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          entry.key.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
                           ),
-                        ],
-                      );
-                    }).toList(),
-                    titlesData: FlTitlesData(
-                      leftTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: true, reservedSize: 40),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      '${entry.value} (${percentage.toStringAsFixed(1)}%)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: _getActivityColor(entry.key),
                       ),
-                      bottomTitles: AxisTitles(
-                        sideTitles: SideTitles(
-                          showTitles: true,
-                          getTitlesWidget: (value, meta) {
-                            List<String> keys = activityData.keys.toList();
-                            if (value.toInt() >= 0 && value.toInt() < keys.length) {
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 8.0),
-                                child: Text(
-                                  keys[value.toInt()].toUpperCase(),
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF6B7280),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                AnimatedBuilder(
+                  animation: _chartAnimation,
+                  builder: (context, child) {
+                    return Container(
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return Stack(
+                            children: [
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 300),
+                                width: constraints.maxWidth * (percentage / 100) * _chartAnimation.value,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(4),
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      _getActivityColor(entry.key).withOpacity(0.8),
+                                      _getActivityColor(entry.key),
+                                    ],
                                   ),
                                 ),
-                              );
-                            }
-                            return const Text('');
-                          },
-                        ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
-                      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                      rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    ),
-                    gridData: FlGridData(
-                      show: true,
-                      drawVerticalLine: false,
-                      horizontalInterval: 1,
-                      getDrawingHorizontalLine: (value) {
-                        return const FlLine(
-                          color: Color(0xFFE5E7EB),
-                          strokeWidth: 1,
-                        );
-                      },
-                    ),
-                    borderData: FlBorderData(show: false),
-                  ),
-                );
-              },
+                    );
+                  },
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 16.0,
-            runSpacing: 8.0,
-            alignment: WrapAlignment.center,
-            children: activityData.entries.map((entry) {
-              return Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: _getActivityColor(entry.key),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${entry.key.toUpperCase()}: ${entry.value}',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF6B7280),
-                    ),
-                  ),
-                ],
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
+          );
+        }),
+      ],
+    ),
+  );
+}
+
 
  Widget _buildHotspotTrendSection() {
     return Column(
@@ -2121,7 +3964,7 @@ Widget _buildStatItem(String label, String value, Color color) {
       case 'approved':
         return const Color(0xFF059669);
       case 'pending':
-        return const Color(0xFFD97706);
+        return const Color.fromARGB(255, 72, 74, 199);
       case 'rejected':
         return const Color(0xFFDC2626);
       default:
@@ -2139,4 +3982,9 @@ Widget _buildStatItem(String label, String value, Color color) {
         return const Color(0xFF6B7280);
     }
   }
+}
+
+IconData? _getActivityIcon(String key) {
+  return null;
+
 }

@@ -1,0 +1,201 @@
+crime_type
+
+Disable RLS
+
+Create policy
+
+ALL
+
+
+Admin manage crime types
+Applied to: authenticated role
+
+SELECT
+
+
+Public read crime types
+Applied to: anon, authenticated roles
+
+hotspot
+
+Disable RLS
+
+Create policy
+
+ALL
+
+
+Admin full access
+Applied to: public role
+
+ALL
+
+
+Admin full access to hotspots
+Applied to: authenticated role
+
+SELECT
+
+
+Read approved active hotspots
+Applied to: authenticated role
+
+SELECT
+
+
+Read approved active hotspots for public
+Applied to: authenticated role
+
+ALL
+
+
+User manage own pending
+Applied to: public role
+
+SELECT
+
+
+User read approved
+Applied to: public role
+
+ALL
+
+
+Users can manage their own pending hotspots
+Applied to: public role
+
+SELECT
+
+
+Users can read approved hotspots
+Applied to: public role
+
+INSERT
+
+
+Users can report hotspots
+Applied to: authenticated role
+
+DELETE
+
+
+Users delete own pending hotspots
+Applied to: authenticated role
+
+DELETE
+
+
+Users delete own rejected hotspots
+Applied to: authenticated role
+
+SELECT
+
+
+Users read own hotspots
+Applied to: authenticated role
+
+SELECT
+
+
+Users read own hotspots including rejected
+Applied to: authenticated role
+
+UPDATE
+
+
+Users update own pending hotspots
+Applied to: authenticated role
+
+notifications
+
+Disable RLS
+
+Create policy
+
+SELECT
+
+
+Admins can view all notifications
+Applied to: public role
+
+INSERT
+
+
+Allow insert notifications from server
+Applied to: public role
+
+UPDATE
+
+
+Users can update their own notifications
+Applied to: public role
+
+SELECT
+
+
+Users can view their own notifications
+Applied to: public role
+
+spatial_ref_sys
+
+Enable RLS
+
+Create policy
+
+Warning:
+Row Level Security is disabled. Your table is publicly readable and writable.
+No policies created yet
+
+users
+
+Disable RLS
+
+Create policy
+
+SELECT
+
+
+Allow auth system access
+Applied to: anon, authenticated roles
+
+INSERT
+
+
+Allow user registration
+Applied to: anon, authenticated roles
+
+SELECT
+
+
+Enable gender read access
+Applied to: public role
+
+INSERT
+
+
+Enable insert for new users
+Applied to: public role
+
+DELETE
+
+
+Users can delete own account
+Applied to: authenticated role
+
+UPDATE
+
+
+Users can update own profile
+Applied to: authenticated role
+
+UPDATE
+
+
+Users can update their own profile
+Applied to: public role
+
+SELECT
+
+
+Users can view their own profile
+Applied to: public role
