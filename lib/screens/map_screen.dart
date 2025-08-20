@@ -26,6 +26,7 @@ import 'package:zecure/desktop/add_hotspot_form_desktop.dart';
 import 'package:zecure/desktop/hotspot_details_desktop.dart';
 import 'package:zecure/desktop/edit_hotspot_form_desktop.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
+import 'package:zecure/screens/hotlines_screen.dart';
 
 
 
@@ -3942,9 +3943,37 @@ Widget _buildSearchBar({bool isWeb = false}) {
                 size: 22,
               ),
             ),
-            suffixIcon: _searchController.text.isNotEmpty
-                ? Padding(
-                    padding: const EdgeInsets.only(right: 8),
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Emergency contacts button - ALWAYS visible
+                IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.phone_in_talk_rounded, // ✅ better emergency icon
+                      color: Colors.grey.shade600,
+                      size: 18,
+                    ),
+                  ),
+                  padding: EdgeInsets.zero,
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const HotlinesScreen()),
+                    );
+                  },
+                  tooltip: 'Emergency Hotlines',
+                ),
+
+                // Clear button - only visible when text is present
+                if (_searchController.text.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4), // reduced for closer alignment
                     child: IconButton(
                       icon: Container(
                         padding: const EdgeInsets.all(4),
@@ -3963,14 +3992,20 @@ Widget _buildSearchBar({bool isWeb = false}) {
                         FocusScope.of(context).unfocus();
                       },
                     ),
-                  )
-                : null,
+                  ),
+
+                // If no text, add some padding to balance the emergency button
+                if (_searchController.text.isEmpty)
+                  const SizedBox(width: 8), // smaller than before
+              ],
+            ),
           ),
         ),
       ),
     ),
   );
 }
+
 
 
 @override
