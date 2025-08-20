@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
@@ -308,41 +310,42 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  Widget _buildEnhancedFeaturesSection(bool isWeb, double screenWidth) {
-    final features = _getFeatures();
-    
-    return Container(
-      width: double.infinity,
-      margin: EdgeInsets.symmetric(vertical: isWeb ? 30 : 20),
-      child: Column(
-        children: [
-          // Section Title
-          Text(
-            'How Zecure Keeps You Safe',
-            style: GoogleFonts.poppins(
-              fontSize: isWeb ? 28 : 24,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey.shade800,
-            ),
-            textAlign: TextAlign.center,
+Widget _buildEnhancedFeaturesSection(bool isWeb, double screenWidth) {
+  final features = _getFeatures();
+  
+  return Container(
+    width: double.infinity,
+    margin: EdgeInsets.symmetric(vertical: isWeb ? 30 : 20),
+    child: Column(
+      children: [
+        // Section Title
+        Text(
+          'How Zecure Keeps You Safe',
+          style: GoogleFonts.poppins(
+            fontSize: isWeb ? 28 : 24,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey.shade800,
           ),
-          
-          const SizedBox(height: 8),
-          
-          Text(
-            'Discover powerful features designed for your safety',
-            style: GoogleFonts.poppins(
-              fontSize: isWeb ? 16 : 14,
-              color: Colors.grey.shade600,
-            ),
-            textAlign: TextAlign.center,
+          textAlign: TextAlign.center,
+        ),
+        
+        const SizedBox(height: 8),
+        
+        Text(
+          'Discover powerful features designed for your safety',
+          style: GoogleFonts.poppins(
+            fontSize: isWeb ? 16 : 14,
+            color: Colors.grey.shade600,
           ),
-          
-          SizedBox(height: isWeb ? 30 : 25),
-          
-          // Carousel Section with expanded width
-          SizedBox(
-            width: double.infinity,
+          textAlign: TextAlign.center,
+        ),
+        
+        SizedBox(height: isWeb ? 30 : 25),
+        
+        // Carousel Section with responsive width
+        Center(
+          child: SizedBox(
+            width: isWeb ? math.min(screenWidth * 0.7, 800) : double.infinity,
             height: isWeb ? 280 : 220,
             child: PageView.builder(
               controller: _pageController,
@@ -376,87 +379,88 @@ class _LandingScreenState extends State<LandingScreen>
               },
             ),
           ),
-          
-          const SizedBox(height: 18),
-          
-          // Pagination Dots
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(features.length, (index) {
-              return GestureDetector(
-                onTap: () {
-                  _pageController.animateToPage(
-                    index,
+        ),
+        
+        const SizedBox(height: 18),
+        
+        // Pagination Dots
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(features.length, (index) {
+            return GestureDetector(
+              onTap: () {
+                _pageController.animateToPage(
+                  index,
+                  duration: const Duration(milliseconds: 600),
+                  curve: Curves.easeInOut,
+                );
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: _currentPage == index ? 24 : 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: _currentPage == index 
+                    ? Colors.blue.shade600 
+                    : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            );
+          }),
+        ),
+        
+        const SizedBox(height: 15),
+        
+        // Auto-play controls
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+              onPressed: () {
+                _stopAutoPlay();
+                if (_currentPage > 0) {
+                  _pageController.previousPage(
                     duration: const Duration(milliseconds: 600),
                     curve: Curves.easeInOut,
                   );
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  width: _currentPage == index ? 24 : 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: _currentPage == index 
-                      ? Colors.blue.shade600 
-                      : Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              );
-            }),
-          ),
-          
-          const SizedBox(height: 15),
-          
-          // Auto-play controls
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                onPressed: () {
+                }
+              },
+              icon: Icon(Icons.chevron_left, color: Colors.blue.shade600),
+            ),
+            IconButton(
+              onPressed: () {
+                if (_autoPlayTimer?.isActive == true) {
                   _stopAutoPlay();
-                  if (_currentPage > 0) {
-                    _pageController.previousPage(
-                      duration: const Duration(milliseconds: 600),
-                      curve: Curves.easeInOut,
-                    );
-                  }
-                },
-                icon: Icon(Icons.chevron_left, color: Colors.blue.shade600),
+                } else {
+                  _startAutoPlay();
+                }
+                setState(() {});
+              },
+              icon: Icon(
+                _autoPlayTimer?.isActive == true ? Icons.pause : Icons.play_arrow,
+                color: Colors.blue.shade600,
               ),
-              IconButton(
-                onPressed: () {
-                  if (_autoPlayTimer?.isActive == true) {
-                    _stopAutoPlay();
-                  } else {
-                    _startAutoPlay();
-                  }
-                  setState(() {});
-                },
-                icon: Icon(
-                  _autoPlayTimer?.isActive == true ? Icons.pause : Icons.play_arrow,
-                  color: Colors.blue.shade600,
-                ),
-              ),
-              IconButton(
-                onPressed: () {
-                  _stopAutoPlay();
-                  if (_currentPage < features.length - 1) {
-                    _pageController.nextPage(
-                      duration: const Duration(milliseconds: 600),
-                      curve: Curves.easeInOut,
-                    );
-                  }
-                },
-                icon: Icon(Icons.chevron_right, color: Colors.blue.shade600),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+            ),
+            IconButton(
+              onPressed: () {
+                _stopAutoPlay();
+                if (_currentPage < features.length - 1) {
+                  _pageController.nextPage(
+                    duration: const Duration(milliseconds: 600),
+                    curve: Curves.easeInOut,
+                  );
+                }
+              },
+              icon: Icon(Icons.chevron_right, color: Colors.blue.shade600),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
 
 Widget _buildEnhancedFeatureCard(Map<String, dynamic> feature, bool isWeb, double screenWidth) {
   return Container(
@@ -476,6 +480,7 @@ Widget _buildEnhancedFeatureCard(Map<String, dynamic> feature, bool isWeb, doubl
       borderRadius: BorderRadius.circular(20),
       boxShadow: [
         BoxShadow(
+          // ignore: deprecated_member_use
           color: Colors.black.withOpacity(0.08),
           blurRadius: 20,
           spreadRadius: -2,
@@ -614,6 +619,7 @@ Widget _buildEnhancedFeatureCard(Map<String, dynamic> feature, bool isWeb, doubl
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
+                        // ignore: deprecated_member_use
                         color: Colors.blue.withOpacity(0.3),
                         blurRadius: 20,
                         offset: const Offset(0, 10),
@@ -621,13 +627,13 @@ Widget _buildEnhancedFeatureCard(Map<String, dynamic> feature, bool isWeb, doubl
                     ],
                   ),
                   child: ElevatedButton(
-onPressed: () {
-  Navigator.pushAndRemoveUntil(
-    context,
-    MaterialPageRoute(builder: (context) => const LoginScreen()),
-    (Route<dynamic> route) => false, // Remove all previous routes
-  );
-},
+                    onPressed: () {
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        MaterialPageRoute(builder: (context) => const LoginScreen()),
+                        (Route<dynamic> route) => false, // Remove all previous routes
+                      );
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.transparent,
                       shadowColor: Colors.transparent,

@@ -117,21 +117,20 @@ class HotspotDetailsDesktop extends StatelessWidget {
                     // Time
                     _infoRow('Time', formattedTime),
                     const Divider(height: 24),
-                    // Active Status (admin only)
-                    if (isAdmin)
-                      _infoRow(
-                        'Active Status',
-                        activeStatus.toUpperCase(),
-                        color: activeStatus == 'active' ? Colors.green : Colors.grey,
-                        icon: activeStatus == 'active' 
-                            ? Icons.check_circle 
-                            : Icons.cancel,
-                        iconColor: activeStatus == 'active' ? Colors.green : Colors.grey,
-                      ),
+                    // Active Status - SHOW FOR EVERYONE (not just admins)
+                    _infoRow(
+                      'Status',
+                      activeStatus.toUpperCase(),
+                      color: activeStatus == 'active' ? Colors.green : Colors.grey,
+                      icon: activeStatus == 'active' 
+                          ? Icons.check_circle 
+                          : Icons.cancel,
+                      iconColor: activeStatus == 'active' ? Colors.green : Colors.grey,
+                    ),
                     // Status (if not approved)
                     if (status != 'approved')
                       _infoRow(
-                        'Status',
+                        'Review Status',
                         status.toUpperCase(),
                         color: status == 'pending' ? Colors.orange : Colors.red,
                         icon: status == 'pending' 

@@ -27,6 +27,7 @@ import 'package:zecure/desktop/hotspot_details_desktop.dart';
 import 'package:zecure/desktop/edit_hotspot_form_desktop.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
+import 'package:zecure/desktop/desktop_sidebar.dart';
 
 
 
@@ -42,6 +43,7 @@ class MapScreen extends StatefulWidget {
 }
 
 enum MainTab { map, notifications, profile }
+enum TravelMode { walking, driving, cycling }
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
@@ -49,7 +51,11 @@ class _MapScreenState extends State<MapScreen> {
   final _authService = AuthService(Supabase.instance.client);
 
  
+  TravelMode _selectedTravelMode = TravelMode.driving;
+  bool _showTravelModeSelector = false;
 
+  // Side bar for Desktop
+  bool _isSidebarVisible = true;
 
   // Location state
   LatLng? _currentPosition;
@@ -62,15 +68,20 @@ class _MapScreenState extends State<MapScreen> {
   // ADD: New variables for route tracking
   List<LatLng> _routePoints = []; // Only for directions/safe routes
   bool _hasActiveRoute = false;
-  double _remainingDistance = 0;
-  String _remainingDuration = '';
   Timer? _routeUpdateTimer;
   
-static const LocationSettings _locationSettings = LocationSettings(
-  accuracy: LocationAccuracy.high,
-  distanceFilter: 5, // Only update if moved 5+ meters
-  // timeLimit: Duration(seconds: 30), // REMOVE THIS LINE
-);
+  static const LocationSettings _locationSettings = LocationSettings(
+    accuracy: LocationAccuracy.high,
+    distanceFilter: 5, // Only update if moved 5+ meters
+    // timeLimit: Duration(seconds: 30), // REMOVE THIS LINE
+  );
+
+
+  // NEARBY ALERT 
+  List<Map<String, dynamic>> _nearbyHotspots = [];
+  bool _showProximityAlert = false;
+  Timer? _proximityCheckTimer;
+  static const double _alertDistanceMeters = 500.0;
 
   
   // Directions state
@@ -168,8 +179,100 @@ void dispose() {
   _notificationsChannel?.unsubscribe();
   _reconnectionTimer?.cancel(); 
   _routeUpdateTimer?.cancel();
+  _proximityCheckTimer?.cancel(); 
   super.dispose();
 }
+
+
+void _startProximityMonitoring() {
+  _proximityCheckTimer?.cancel();
+  _proximityCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+    _checkProximityToHotspots();
+  });
+}
+
+
+
+// Main method to check proximity to active hotspots
+void _checkProximityToHotspots() {
+  if (_currentPosition == null || !mounted) {
+    print('DEBUG: Cannot check proximity - position: $_currentPosition, mounted: $mounted');
+    return;
+  }
+
+  print('DEBUG: Checking proximity from position: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
+  print('DEBUG: Total hotspots to check: ${_hotspots.length}');
+  
+  final nearbyHotspots = <Map<String, dynamic>>[];
+  
+  for (final hotspot in _hotspots) {
+    // Only check active, approved hotspots
+    final status = hotspot['status'] ?? 'approved';
+    final activeStatus = hotspot['active_status'] ?? 'active';
+    final crimeTypeName = hotspot['crime_type']?['name'] ?? 'Unknown';
+    final crimeLevel = hotspot['crime_type']?['level'] ?? 'medium';
+    
+    print('DEBUG: Checking hotspot ${hotspot['id']} ($crimeTypeName - $crimeLevel) - status: $status, active: $activeStatus');
+    
+    if (status != 'approved' || activeStatus != 'active') {
+      print('DEBUG: Skipping hotspot ${hotspot['id']} - not approved/active');
+      continue;
+    }
+
+    final coords = hotspot['location']['coordinates'];
+    final hotspotPosition = LatLng(coords[1], coords[0]);
+    final distance = _calculateDistance(_currentPosition!, hotspotPosition);
+    
+    // Get alert distance based on crime level (for Option 2)
+    // final alertDistance = _alertDistances[crimeLevel] ?? 200.0;
+    
+    // For Option 1, just use the constant:
+    final alertDistance = _alertDistanceMeters;
+    
+    print('DEBUG: Hotspot ${hotspot['id']} ($crimeTypeName - $crimeLevel) distance: ${distance.toStringAsFixed(1)}m (threshold: ${alertDistance.toStringAsFixed(0)}m)');
+    
+    if (distance <= alertDistance) {
+      print('DEBUG: ✅ Hotspot ${hotspot['id']} ($crimeTypeName) is within range! Adding to nearby list.');
+      nearbyHotspots.add({
+        ...hotspot,
+        'distance': distance,
+      });
+    } else {
+      print('DEBUG: ❌ Hotspot ${hotspot['id']} ($crimeTypeName) is too far (${distance.toStringAsFixed(1)}m > ${alertDistance.toStringAsFixed(0)}m)');
+    }
+  }
+
+  print('DEBUG: Found ${nearbyHotspots.length} nearby hotspots');
+
+  // Sort by distance (closest first)
+  nearbyHotspots.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
+
+  // Always update state based on what we found
+  final hasNearbyHotspots = nearbyHotspots.isNotEmpty;
+  final previousAlertState = _showProximityAlert;
+  
+  if (mounted) {
+    setState(() {
+      _nearbyHotspots = nearbyHotspots;
+      _showProximityAlert = hasNearbyHotspots;
+    });
+    
+    // Log state changes
+    if (_showProximityAlert != previousAlertState) {
+      if (_showProximityAlert) {
+        final closestDistance = nearbyHotspots.first['distance'] as double;
+        print('DEBUG: 🚨 ALERT ACTIVATED - ${nearbyHotspots.length} crimes nearby (closest: ${closestDistance.toStringAsFixed(1)}m)');
+        HapticFeedback.lightImpact(); // Haptic feedback when alert appears
+      } else {
+        print('DEBUG: ✅ ALERT CLEARED - moved away from danger zone');
+      }
+    }
+    
+    print('DEBUG: Updated state - showAlert: $_showProximityAlert, nearbyCount: ${_nearbyHotspots.length}');
+  }
+}
+
+// Helper method to compare lists
 
 
 void _setupNotificationsRealtime() {
@@ -914,6 +1017,9 @@ void _startLiveLocation() {
       }
     },
   );
+  
+  // START proximity monitoring
+  _startProximityMonitoring();
 }
 
 void _clearDirections() {
@@ -925,8 +1031,6 @@ void _clearDirections() {
     _destination = null;
     _showClearButton = false;
     _hasActiveRoute = false; // Clear active route flag
-    _remainingDistance = 0;
-    _remainingDuration = '';
   });
 }
 
@@ -961,12 +1065,9 @@ Future<void> _updateRouteProgress() async {
       if (data['routes'] != null && (data['routes'] as List).isNotEmpty) {
         final route = data['routes'][0];
         final distance = _safeParseDouble(route['distance']) ?? 0.0;
-        final duration = _safeParseDouble(route['duration']) ?? 0.0;
         
         if (mounted) {
           setState(() {
-            _remainingDistance = distance / 1000;
-            _remainingDuration = _formatDuration(duration);
           });
           
           // If we're very close to destination (less than 50 meters), consider arrived
@@ -1038,8 +1139,6 @@ Future<void> _getDirections(LatLng destination) async {
           _destination = destination;
           _showClearButton = true;
           _hasActiveRoute = true; // Set active route flag
-          _remainingDistance = distance / 1000;
-          _remainingDuration = _formatDuration(duration);
         });
         
         _mapController.fitCamera(
@@ -1632,8 +1731,6 @@ Future<void> _getSafeRoute(LatLng destination) async {
       _destination = destination;
       _showClearButton = true;
       _hasActiveRoute = true;
-      _remainingDistance = distance / 1000;
-      _remainingDuration = _formatDuration(duration);
     });
     
     _mapController.fitCamera(
@@ -1661,10 +1758,197 @@ double _calculateRouteDistance(List<LatLng> route) {
 }
 
 // Helper to estimate duration based on distance (assuming 50km/h average speed)
-double _estimateRouteDuration(double distanceMeters) {
-  const averageSpeed = 50.0 / 3.6; // 50 km/h to m/s
-  return distanceMeters / averageSpeed; // duration in seconds
+  double _estimateRouteDuration(double distanceMeters) {
+    double averageSpeedKmh;
+    
+    switch (_selectedTravelMode) {
+      case TravelMode.walking:
+        averageSpeedKmh = 5.0; // 5 km/h walking speed
+        break;
+      case TravelMode.cycling:
+        averageSpeedKmh = 15.0; // 15 km/h cycling speed  
+        break;
+      case TravelMode.driving:
+        averageSpeedKmh = 40.0; // 40 km/h average driving speed (considering traffic, stops, etc.)
+        break;
+    }
+    
+    final distanceKm = distanceMeters / 1000;
+    return (distanceKm / averageSpeedKmh) * 3600; // duration in seconds
+  }
+
+  // ADD: Method to get travel mode icon
+  IconData _getTravelModeIcon(TravelMode mode) {
+    switch (mode) {
+      case TravelMode.walking:
+        return Icons.directions_walk;
+      case TravelMode.cycling:
+        return Icons.directions_bike;
+      case TravelMode.driving:
+        return Icons.directions_car;
+    }
+  }
+
+  // ADD: Method to get travel mode label
+  String _getTravelModeLabel(TravelMode mode) {
+    switch (mode) {
+      case TravelMode.walking:
+        return 'Walking';
+      case TravelMode.cycling:
+        return 'Cycling';
+      case TravelMode.driving:
+        return 'Driving';
+    }
+  }
+
+
+Widget _buildFloatingDurationWidget() {
+  // Only show if there's a destination and we have calculated distance
+  if (_destination == null || _currentPosition == null || _distance <= 0) {
+    return const SizedBox.shrink();
+  }
+
+  // Calculate duration using existing method
+  final distanceMeters = _distance * 1000; // Convert km to meters
+  final durationSeconds = _estimateRouteDuration(distanceMeters);
+  final formattedDuration = _formatDuration(durationSeconds);
+
+  return Positioned(
+    bottom: 10, // Position above bottom nav bar
+    left: 16, // Bottom left corner
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Travel mode selector (when visible) - minimized size
+        if (_showTravelModeSelector)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12), // Reduced padding
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10), // Smaller radius
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 6, // Reduced blur
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Travel Mode',
+                  style: TextStyle(
+                    fontSize: 14, // Smaller font
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8), // Reduced spacing
+                Row(
+                  mainAxisSize: MainAxisSize.min, // Minimize row width
+                  children: TravelMode.values.map((mode) {
+                    final isSelected = _selectedTravelMode == mode;
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _selectedTravelMode = mode;
+                          _showTravelModeSelector = false;
+                        });
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.only(right: 8), // Space between buttons
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), // Smaller padding
+                        decoration: BoxDecoration(
+                          color: isSelected ? Colors.blue.shade100 : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(6), // Smaller radius
+                          border: Border.all(
+                            color: isSelected ? Colors.blue.shade300 : Colors.grey.shade300,
+                            width: 1,
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _getTravelModeIcon(mode),
+                              color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
+                              size: 18, // Smaller icon
+                            ),
+                            const SizedBox(height: 2), // Reduced spacing
+                            Text(
+                              _getTravelModeLabel(mode),
+                              style: TextStyle(
+                                color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                fontSize: 10, // Smaller font
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        
+        // Duration display widget - minimized
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _showTravelModeSelector = !_showTravelModeSelector;
+            });
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Smaller padding
+            decoration: BoxDecoration(
+              color: Colors.blue.shade600,
+              borderRadius: BorderRadius.circular(10), // Smaller radius
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 6, // Reduced blur
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _getTravelModeIcon(_selectedTravelMode),
+                  color: Colors.white,
+                  size: 16, // Smaller icon
+                ),
+                const SizedBox(width: 6), // Reduced spacing
+                Text(
+                  '${_distance.toStringAsFixed(1)} km • $formattedDuration',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12, // Smaller font
+                  ),
+                ),
+                const SizedBox(width: 6), // Reduced spacing
+                Icon(
+                  _showTravelModeSelector ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                  color: Colors.white,
+                  size: 14, // Smaller icon
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
+
 
 void _showAddHotspotForm(LatLng position) async {
   final isDesktop = MediaQuery.of(context).size.width >= 600;
@@ -3299,41 +3583,7 @@ Widget _buildMap() {
         ),
       ),
 
-      // ADD: Real-time route info overlay
-      if (_hasActiveRoute && _remainingDistance > 0)
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 80,
-          left: 16,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.blue.shade600,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.navigation, color: Colors.white, size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  '${_remainingDistance.toStringAsFixed(1)} km • $_remainingDuration',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+    
 
       // Cool overlay effects for map corners
       Positioned(
@@ -3857,9 +4107,16 @@ Future<void> _deleteHotspot(int id) async {
   }
 }
 
+bool get isLargeScreen {
+  final mediaQuery = MediaQuery.of(context);
+  return mediaQuery.size.width > 600; // Adjust threshold as needed
+}
+
 Widget _buildSearchBar({bool isWeb = false}) {
+  final bool isDesktop = isLargeScreen;
+  
   return Container(
-    width: double.infinity,
+    width: isDesktop ? 600 : double.infinity,
     height: 48,
     margin: const EdgeInsets.symmetric(vertical: 4),
     decoration: BoxDecoration(
@@ -3955,7 +4212,7 @@ Widget _buildSearchBar({bool isWeb = false}) {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Icon(
-                      Icons.phone_in_talk_rounded, // ✅ better emergency icon
+                      Icons.phone_in_talk_rounded,
                       color: Colors.grey.shade600,
                       size: 18,
                     ),
@@ -3973,7 +4230,7 @@ Widget _buildSearchBar({bool isWeb = false}) {
                 // Clear button - only visible when text is present
                 if (_searchController.text.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(right: 4), // reduced for closer alignment
+                    padding: const EdgeInsets.only(right: 4),
                     child: IconButton(
                       icon: Container(
                         padding: const EdgeInsets.all(4),
@@ -3996,7 +4253,7 @@ Widget _buildSearchBar({bool isWeb = false}) {
 
                 // If no text, add some padding to balance the emergency button
                 if (_searchController.text.isEmpty)
-                  const SizedBox(width: 8), // smaller than before
+                  const SizedBox(width: 8),
               ],
             ),
           ),
@@ -4008,20 +4265,93 @@ Widget _buildSearchBar({bool isWeb = false}) {
 
 
 
+
+
+
+
+
 @override
 Widget build(BuildContext context) {
-  final isWeb = kIsWeb || MediaQuery.of(context).size.width >= 800;
+  // Check if it's web or a large desktop screen
+  final bool isDesktop = MediaQuery.of(context).size.width >= 800;
 
   return WillPopScope(
     onWillPop: _handleWillPop,
     child: Scaffold(
-      body: _buildCurrentScreen(isWeb),
-      floatingActionButton: _currentTab == MainTab.map ? _buildFloatingActionButtons() : null,
-      bottomNavigationBar: _userProfile != null ? _buildBottomNavBar() : null,
+      // Use desktop or mobile layout depending on screen size
+      body: isDesktop ? _buildResponsiveDesktopLayout() : _buildCurrentScreen(isDesktop),
+      
+      // Show FAB only if map tab is active
+      floatingActionButton: _currentTab == MainTab.map 
+          ? _buildFloatingActionButtons() 
+          : null,
+
+      // Bottom navigation bar - show on mobile OR when desktop sidebar is hidden and user is logged in
+      bottomNavigationBar: _buildResponsiveBottomNav(isDesktop),
     ),
   );
 }
 
+// New responsive desktop layout
+Widget _buildResponsiveDesktopLayout() {
+  return Stack(
+    children: [
+      Row(
+        children: [
+          // Responsive sidebar - automatically handles desktop/mobile logic
+          ResponsiveNavigation(
+            currentIndex: _currentTab.index,
+            onTap: (index) {
+              setState(() {
+                _currentTab = MainTab.values[index];
+                if (_currentTab == MainTab.profile) {
+                  _profileScreen.isEditingProfile = false;
+                }
+              });
+            },
+            unreadNotificationCount: _unreadNotificationCount,
+            isSidebarVisible: _isSidebarVisible,
+            isUserLoggedIn: _userProfile != null,
+            onToggle: () {
+              setState(() {
+                _isSidebarVisible = !_isSidebarVisible;
+              });
+            },
+          ),
+          
+          // Main content area
+          Expanded(
+            child: _buildCurrentScreen(true),
+          ),
+        ],
+      ),
+      
+      // Responsive toggle button
+      ResponsiveSidebarToggle(
+        isSidebarVisible: _isSidebarVisible,
+        isUserLoggedIn: _userProfile != null,
+        currentTab: _currentTab.index,
+        onToggle: () {
+          setState(() {
+            _isSidebarVisible = !_isSidebarVisible;
+          });
+        },
+      ),
+    ],
+  );
+}
+
+// Responsive bottom navigation - only shows on actual mobile screens
+Widget? _buildResponsiveBottomNav(bool isDesktop) {
+  // Only show bottom nav on mobile screens AND when user is logged in
+  // Don't show on desktop even when sidebar is hidden
+  if (isDesktop || _userProfile == null) {
+    return null;
+  }
+
+  // Use your existing bottom nav bar design for mobile only
+  return _buildBottomNavBar();
+}
 
 Future<bool> _handleWillPop() async {
   // Check if we're on profile tab and in edit mode
@@ -4070,7 +4400,138 @@ Future<bool> _handleWillPop() async {
 }
 
 
-Widget _buildCurrentScreen(bool isWeb) {
+Widget _buildProximityAlert() {
+  if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
+    return const SizedBox.shrink();
+  }
+
+  final closestHotspot = _nearbyHotspots.first;
+  final crimeType = closestHotspot['crime_type'];
+  final distance = (closestHotspot['distance'] as double).round();
+  final level = crimeType['level'] ?? 'unknown';
+  
+  // Determine alert color and icon based on crime level
+  Color alertColor;
+  IconData alertIcon;
+  Color textColor = Colors.white;
+  
+  switch (level) {
+    case 'critical':
+      alertColor = const Color.fromARGB(255, 247, 26, 10);
+      alertIcon = Icons.warning_rounded;
+      break;
+    case 'high':
+      alertColor = const Color.fromARGB(255, 223, 106, 11);
+      alertIcon = Icons.error_rounded;
+      break;
+    case 'medium':
+      alertColor = const Color.fromARGB(155, 202, 130, 49);
+      alertIcon = Icons.info_rounded;
+      break;
+    case 'low':
+      alertColor = const Color.fromARGB(255, 216, 187, 23);
+      alertIcon = Icons.info_outline_rounded;
+      textColor = Colors.black;
+      break;
+    default:
+      alertColor = Colors.orange;
+      alertIcon = Icons.warning_outlined;
+  }
+
+  return AnimatedContainer(
+    duration: const Duration(milliseconds: 300),
+    curve: Curves.easeInOut,
+    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+    padding: const EdgeInsets.all(10),
+    width: isLargeScreen ? 600 : null, // Constrain width on large screens
+    alignment: isLargeScreen ? Alignment.topCenter : null, // Center on large screens
+    decoration: BoxDecoration(
+      color: alertColor,
+      borderRadius: BorderRadius.circular(10),
+      boxShadow: [
+        BoxShadow(
+          color: alertColor.withOpacity(0.3),
+          blurRadius: 6,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Row(
+      children: [
+          // Smaller alert icon
+          Container(
+            padding: const EdgeInsets.all(5), // Reduced padding
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              alertIcon,
+              color: textColor,
+              size: 16, // Reduced size
+            ),
+          ),
+          
+          const SizedBox(width: 8), // Reduced spacing
+          
+          // Alert content with smaller text
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '⚠️ Crime Alert',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13, // Reduced font size
+                  ),
+                ),
+                const SizedBox(height: 1), // Reduced spacing
+                Text(
+                  '${crimeType['name']} nearby (~${distance}m)',
+                  style: TextStyle(
+                    color: textColor.withOpacity(0.9),
+                    fontSize: 11, // Reduced font size
+                  ),
+                ),
+                if (_nearbyHotspots.length > 1)
+                  Text(
+                    '+${_nearbyHotspots.length - 1} more in area',
+                    style: TextStyle(
+                      color: textColor.withOpacity(0.8),
+                      fontSize: 9, // Reduced font size
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          
+          // Smaller details button
+          IconButton(
+            onPressed: () {
+              _showHotspotDetails(closestHotspot);
+            },
+            icon: Icon(
+              Icons.info_outline_rounded,
+              color: textColor,
+              size: 16, // Reduced size
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28), // Smaller constraints
+            tooltip: 'Details',
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+// Update your _buildCurrentScreen method to handle desktop layout better
+Widget _buildCurrentScreen(bool isDesktop) {
   switch (_currentTab) {
     case MainTab.map:
       return Stack(
@@ -4082,66 +4543,80 @@ Widget _buildCurrentScreen(bool isWeb) {
           if (_isLoading && _currentPosition == null)
             const Center(child: CircularProgressIndicator()),
           
-          // Top bar with search and login/logout button - properly aligned
+          // Top bar with search + login/logout
           Positioned(
-            top: MediaQuery.of(context).padding.top + 16, // Account for status bar
-            left: 16,
-            right: 16,
-            child: Row(
-              children: [
-                // Search bar takes up most space
-                Expanded(
-                  child: _buildSearchBar(isWeb: isWeb),
-                ),
-                const SizedBox(width: 12), // Space between search and button
-                // Login/logout button - properly aligned with search bar
-                Container(
-                  width: 45, // Match search bar height
-                  height: 45, // Match search bar height
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
-                        blurRadius: 12,
-                        offset: const Offset(0, 2),
+            top: MediaQuery.of(context).padding.top + 16,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                width: isDesktop ? 600 : double.infinity,
+                margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16),
+                child: Row(
+                  children: [
+                    Expanded(child: _buildSearchBar(isWeb: isDesktop)),
+                    const SizedBox(width: 12),
+                    Container(
+                      width: 45,
+                      height: 45,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.08),
+                            blurRadius: 12,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
                       ),
-                      BoxShadow(
-                        color: Colors.white.withOpacity(0.8),
-                        blurRadius: 8,
-                        offset: const Offset(0, -1),
+                      child: IconButton(
+                        iconSize: 22,
+                        padding: EdgeInsets.zero,
+                        icon: Icon(
+                          _userProfile == null ? Icons.login : Icons.logout,
+                          color: Colors.grey.shade700,
+                        ),
+                        onPressed: _userProfile == null 
+                            ? () {
+                                Navigator.pushReplacement(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                                );
+                              }
+                            : _showLogoutConfirmation,
                       ),
-                    ],
-                  ),
-                  child: IconButton(
-                    iconSize: 22,
-                    padding: EdgeInsets.zero,
-                    icon: Icon(
-                      _userProfile == null ? Icons.login : Icons.logout,
-                      color: Colors.grey.shade700,
                     ),
-                    onPressed: _userProfile == null 
-                      ? () {
-                          Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(builder: (context) => const LoginScreen()),
-                          );
-                        }
-                      : _showLogoutConfirmation,
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
+          
+          // Proximity Alert positioned below search bar
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 80,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: isDesktop ? 600 : double.infinity),
+                child: _buildProximityAlert(),
+              ),
+            ),
+          ),
+
+          // Floating duration widget at bottom
+          _buildFloatingDurationWidget(),
         ],
       );
     case MainTab.notifications:
       return _buildNotificationsScreen();
     case MainTab.profile:
-      return _buildProfileScreen(); // New method for profile screen
+      return _buildProfileScreen();
   }
 }
+
 
 // Replace your _buildProfileScreen() method with this fixed version
 
