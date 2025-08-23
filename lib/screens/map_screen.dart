@@ -22,9 +22,7 @@ import 'package:zecure/services/hotspot_filter_service.dart';
 import 'package:zecure/desktop/report_hotspot_form_desktop.dart' show ReportHotspotFormDesktop;
 import 'package:zecure/desktop/hotspot_filter_dialog_desktop.dart';
 import 'package:zecure/desktop/location_options_dialog_desktop.dart';
-import 'package:zecure/desktop/add_hotspot_form_desktop.dart';
-import 'package:zecure/desktop/hotspot_details_desktop.dart';
-import 'package:zecure/desktop/edit_hotspot_form_desktop.dart';
+import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
@@ -44,18 +42,67 @@ class MapScreen extends StatefulWidget {
 
 enum MainTab { map, notifications, profile }
 enum TravelMode { walking, driving, cycling }
+enum MapType {
+  standard, satellite, terrain, topographic, dark }
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
   final _authService = AuthService(Supabase.instance.client);
+  MapType _currentMapType = MapType.standard;
+
+  Map<MapType, Map<String, dynamic>> get mapConfigurations => {
+    MapType.standard: {
+      'name': 'Standard',
+      'urlTemplate': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      'fallbackUrl': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      'attribution': '© OpenStreetMap contributors',
+    },
+    MapType.terrain: {
+      'name': 'Terrain',
+      'urlTemplate': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+      'fallbackUrl': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+      'attribution': '© OpenTopoMap (CC-BY-SA)',
+    },
+    MapType.satellite: {
+      'name': 'Satellite',
+      'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      'fallbackUrl': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      'attribution': '© Esri',
+    },
+    MapType.topographic: {
+      'name': 'Topographic',
+      'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+      'fallbackUrl': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+      'attribution': '© Esri',
+    },
+    MapType.dark: {
+      'name': 'Dark',
+      'urlTemplate': 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
+      'fallbackUrl': 'https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
+      'attribution': '© CartoDB',
+    },
+    
+  };
 
  
   TravelMode _selectedTravelMode = TravelMode.driving;
   bool _showTravelModeSelector = false;
+  bool _showMapTypeSelector = false;
+
+
+
+  //MAP ROTATION
+  double _currentMapRotation = 0.0;
+  bool _isRotationLocked = false;
+  bool _showRotationFeedback = false;
+
+  
 
   // Side bar for Desktop
   bool _isSidebarVisible = true;
+
+  // Photo upload state
 
   // Location state
   LatLng? _currentPosition;
@@ -802,6 +849,226 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
     }
   }
 }
+
+Future<void> _handlePhotoUpdates({
+  required int hotspotId,
+  required Map<String, dynamic>? existingPhoto,
+  required XFile? newPhoto,
+  required bool deleteExisting,
+}) async {
+  try {
+    // If user wants to delete existing photo
+    if (deleteExisting && existingPhoto != null) {
+      await PhotoService.deletePhoto(existingPhoto);
+      print('Existing photo deleted for hotspot $hotspotId');
+    }
+    
+    // If user selected a new photo
+    if (newPhoto != null) {
+      // If there's an existing photo and we're not explicitly deleting it, delete it first
+      if (existingPhoto != null && !deleteExisting) {
+        await PhotoService.deletePhoto(existingPhoto);
+        print('Replaced existing photo for hotspot $hotspotId');
+      }
+      
+      // Upload new photo
+      await PhotoService.uploadPhoto(
+        imageFile: newPhoto,
+        hotspotId: hotspotId,
+        userId: _userProfile!['id'],
+      );
+      print('New photo uploaded for hotspot $hotspotId');
+    }
+  } catch (e) {
+    print('Error handling photo updates: $e');
+    throw Exception('Failed to update photos: $e');
+  }
+}
+
+// 3. Build edit photo section widget
+Widget _buildEditPhotoSection({
+  required Map<String, dynamic>? existingPhoto,
+  required XFile? newSelectedPhoto,
+  required bool isUploadingPhoto,
+  required bool deleteExistingPhoto,
+  required Function(XFile?, bool) onPhotoChanged,
+  required Function(bool) onDeleteExistingToggle,
+}) {
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      border: Border.all(color: Colors.grey.shade300),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Photo Management',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 8),
+        
+        // Show existing photo if available and not marked for deletion
+        if (existingPhoto != null && !deleteExistingPhoto && newSelectedPhoto == null) ...[
+          const Text('Current Photo:', style: TextStyle(fontWeight: FontWeight.w500)),
+          const SizedBox(height: 8),
+          Stack(
+            children: [
+              Container(
+                height: 150,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    existingPhoto['photo_url'],
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Center(child: Text('Error loading image'));
+                    },
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: CircleAvatar(
+                  backgroundColor: Colors.red,
+                  radius: 16,
+                  child: IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.white, size: 16),
+                    onPressed: () {
+                      onDeleteExistingToggle(true);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
+        
+        // Show new selected photo
+        if (newSelectedPhoto != null) ...[
+          const Text('New Photo:', style: TextStyle(fontWeight: FontWeight.w500)),
+          const SizedBox(height: 8),
+          Stack(
+            children: [
+              Container(
+                height: 150,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: kIsWeb
+                      ? Image.network(
+                          newSelectedPhoto.path,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Center(child: Text('Error loading image'));
+                          },
+                        )
+                      : Image.file(
+                          File(newSelectedPhoto.path),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Center(child: Text('Error loading image'));
+                          },
+                        ),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: CircleAvatar(
+                  backgroundColor: Colors.red,
+                  radius: 16,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 16),
+                    onPressed: () {
+                      onPhotoChanged(null, false);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
+        
+        // Photo action buttons
+        if (newSelectedPhoto == null) ...[
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isUploadingPhoto
+                      ? null
+                      : () async {
+                          onPhotoChanged(null, true);
+                          try {
+                            final photo = await PhotoService.pickImage();
+                            onPhotoChanged(photo, false);
+                            if (photo != null) {
+                              onDeleteExistingToggle(false); // Reset delete flag
+                            }
+                          } catch (e) {
+                            onPhotoChanged(null, false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Error taking photo: $e')),
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.camera_alt),
+                  label: const Text('Take Photo'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isUploadingPhoto
+                      ? null
+                      : () async {
+                          onPhotoChanged(null, true);
+                          try {
+                            final photo = await PhotoService.pickImageFromGallery();
+                            onPhotoChanged(photo, false);
+                            if (photo != null) {
+                              onDeleteExistingToggle(false); // Reset delete flag
+                            }
+                          } catch (e) {
+                            onPhotoChanged(null, false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Error selecting photo: $e')),
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.photo_library),
+                  label: const Text('Gallery'),
+                ),
+              ),
+            ],
+          ),
+        ],
+        
+        if (isUploadingPhoto)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+      ],
+    ),
+  );
+}
+
 
 
 bool _shouldNonAdminSeeHotspot(Map<String, dynamic> hotspot) {
@@ -1581,14 +1848,30 @@ double _calculateDistance(LatLng point1, LatLng point2) {
 }
 
 Future<List<LatLng>> _getRouteFromAPI(LatLng start, LatLng end) async {
-  final response = await http.get(
-    Uri.parse(
+  // Check if running on web
+  final isWeb = kIsWeb;
+  
+  String baseUrl;
+  if (isWeb) {
+    // Use CORS proxy for web
+    baseUrl = 'https://api.allorigins.win/raw?url=';
+    final encodedUrl = Uri.encodeComponent(
       'https://router.project-osrm.org/route/v1/driving/'
       '${start.longitude},${start.latitude};'
-      '${end.longitude},${end.latitude}?overview=full&geometries=geojson',
-    ),
-    headers: {
-      'User-Agent': 'YourAppName/1.0',
+      '${end.longitude},${end.latitude}?overview=full&geometries=geojson'
+    );
+    baseUrl += encodedUrl;
+  } else {
+    // Direct API call for mobile
+    baseUrl = 'https://router.project-osrm.org/route/v1/driving/'
+        '${start.longitude},${start.latitude};'
+        '${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+  }
+
+  final response = await http.get(
+    Uri.parse(baseUrl),
+    headers: isWeb ? {} : {
+      'User-Agent': 'Zecure/1.0',
     },
   ).timeout(const Duration(seconds: 15));
 
@@ -1616,12 +1899,20 @@ Future<List<LatLng>> _getRouteFromAPI(LatLng start, LatLng end) async {
   throw Exception('Failed to get route (${response.statusCode})');
 }
 
+
 List<LatLng> _findUnsafeSegments(List<LatLng> route) {
   final unsafeSegments = <LatLng>[];
-  const safeDistance = 100.0; // 100 meters
+  const safeDistance = 150.0; // Increased from 100m to 150m for better avoidance
+  
+  // Filter hotspots to only include active + approved ones
+  final activeApprovedHotspots = _hotspots.where((hotspot) {
+    final status = hotspot['status'] ?? 'approved';
+    final activeStatus = hotspot['active_status'] ?? 'active';
+    return status == 'approved' && activeStatus == 'active';
+  }).toList();
   
   for (final point in route) {
-    for (final hotspot in _hotspots) {
+    for (final hotspot in activeApprovedHotspots) {
       final coords = hotspot['location']['coordinates'];
       final hotspotLatLng = LatLng(coords[1], coords[0]);
       if (_calculateDistance(point, hotspotLatLng) < safeDistance) {
@@ -1635,17 +1926,97 @@ List<LatLng> _findUnsafeSegments(List<LatLng> route) {
 
 List<LatLng> _generateAlternativeWaypoints(List<LatLng> unsafePoints) {
   final waypoints = <LatLng>[];
-  const offset = 0.002; // ~200m
+  const offset = 0.003; // Reduced from 0.005 to create closer alternatives
   
-  for (final point in unsafePoints) {
-    // Add points around the unsafe segment
-    waypoints.add(LatLng(point.latitude + offset, point.longitude));
-    waypoints.add(LatLng(point.latitude - offset, point.longitude));
-    waypoints.add(LatLng(point.latitude, point.longitude + offset));
-    waypoints.add(LatLng(point.latitude, point.longitude - offset));
+  // Group nearby unsafe points
+  final groupedPoints = _groupNearbyPoints(unsafePoints, 150.0); // Reduced from 200m
+  
+  for (final pointGroup in groupedPoints) {
+    final centerLat = pointGroup.map((p) => p.latitude).reduce((a, b) => a + b) / pointGroup.length;
+    final centerLng = pointGroup.map((p) => p.longitude).reduce((a, b) => a + b) / pointGroup.length;
+    final center = LatLng(centerLat, centerLng);
+    
+    // Only add ONE strategic waypoint per unsafe area, not four
+    // Choose the waypoint that's most likely to create a reasonable detour
+    final strategicWaypoint = _findBestAvoidancePoint(center, offset);
+    if (strategicWaypoint != null) {
+      waypoints.add(strategicWaypoint);
+    }
   }
   
   return waypoints;
+}
+
+LatLng? _findBestAvoidancePoint(LatLng center, double offset) {
+  // Calculate direction from current position to destination
+  if (_currentPosition == null || _destination == null) return null;
+  
+  final toDestinationLat = _destination!.latitude - _currentPosition!.latitude;
+  final toDestinationLng = _destination!.longitude - _currentPosition!.longitude;
+  
+  // Create waypoint perpendicular to the main route direction
+  final perpLat = -toDestinationLng * (offset / 2); // Perpendicular direction
+  final perpLng = toDestinationLat * (offset / 2);
+  
+  // Try both sides and pick the one farther from hotspots
+  final option1 = LatLng(center.latitude + perpLat, center.longitude + perpLng);
+  final option2 = LatLng(center.latitude - perpLat, center.longitude - perpLng);
+  
+  // Check which option is safer
+  final option1Distance = _getMinDistanceToHotspots(option1);
+  final option2Distance = _getMinDistanceToHotspots(option2);
+  
+  return option1Distance > option2Distance ? option1 : option2;
+}
+
+// Helper to get minimum distance to any active hotspot
+double _getMinDistanceToHotspots(LatLng point) {
+  final activeApprovedHotspots = _hotspots.where((hotspot) {
+    final status = hotspot['status'] ?? 'approved';
+    final activeStatus = hotspot['active_status'] ?? 'active';
+    return status == 'approved' && activeStatus == 'active';
+  }).toList();
+  
+  double minDistance = double.infinity;
+  for (final hotspot in activeApprovedHotspots) {
+    final coords = hotspot['location']['coordinates'];
+    final hotspotLatLng = LatLng(coords[1], coords[0]);
+    final distance = _calculateDistance(point, hotspotLatLng);
+    if (distance < minDistance) {
+      minDistance = distance;
+    }
+  }
+  return minDistance;
+}
+
+List<List<LatLng>> _groupNearbyPoints(List<LatLng> points, double distanceThreshold) {
+  final groups = <List<LatLng>>[];
+  final processedPoints = <bool>[];
+  
+  // Initialize all points as unprocessed
+  for (int i = 0; i < points.length; i++) {
+    processedPoints.add(false);
+  }
+  
+  for (int i = 0; i < points.length; i++) {
+    if (processedPoints[i]) continue;
+    
+    final group = <LatLng>[points[i]];
+    processedPoints[i] = true;
+    
+    // Find all nearby points and add them to the same group
+    for (int j = i + 1; j < points.length; j++) {
+      if (!processedPoints[j] && 
+          _calculateDistance(points[i], points[j]) < distanceThreshold) {
+        group.add(points[j]);
+        processedPoints[j] = true;
+      }
+    }
+    
+    groups.add(group);
+  }
+  
+  return groups;
 }
 
 Future<List<LatLng>> _getRouteWithWaypoints(
@@ -1653,26 +2024,46 @@ Future<List<LatLng>> _getRouteWithWaypoints(
   LatLng end, 
   List<LatLng> waypoints
 ) async {
-  // Convert waypoints to string format for API
-  final waypointsStr = waypoints.map((p) => '${p.longitude},${p.latitude}').join(';');
+  final limitedWaypoints = waypoints.take(2).toList();
   
-  final response = await http.get(
-    Uri.parse(
+  if (limitedWaypoints.isEmpty) {
+    return await _getRouteFromAPI(start, end);
+  }
+  
+  final waypointsStr = limitedWaypoints.map((p) => '${p.longitude},${p.latitude}').join(';');
+  final isWeb = kIsWeb;
+  
+  String baseUrl;
+  if (isWeb) {
+    // Use CORS proxy for web
+    baseUrl = 'https://api.allorigins.win/raw?url=';
+    final encodedUrl = Uri.encodeComponent(
       'https://router.project-osrm.org/route/v1/driving/'
       '${start.longitude},${start.latitude};'
       '$waypointsStr;'
-      '${end.longitude},${end.latitude}?overview=full&geometries=geojson',
-    ),
-    headers: {
-      'User-Agent': 'YourAppName/1.0',
+      '${end.longitude},${end.latitude}?overview=full&geometries=geojson&continue_straight=false&alternatives=false'
+    );
+    baseUrl += encodedUrl;
+  } else {
+    // Direct API call for mobile
+    baseUrl = 'https://router.project-osrm.org/route/v1/driving/'
+        '${start.longitude},${start.latitude};'
+        '$waypointsStr;'
+        '${end.longitude},${end.latitude}?overview=full&geometries=geojson&continue_straight=false&alternatives=false';
+  }
+
+  final response = await http.get(
+    Uri.parse(baseUrl),
+    headers: isWeb ? {} : {
+      'User-Agent': 'Zecure/1.0',
     },
-  ).timeout(const Duration(seconds: 20)); // Longer timeout for complex routes
+  ).timeout(const Duration(seconds: 20));
 
   if (response.statusCode == 200) {
     final data = json.decode(response.body);
     
     if (data['routes'] == null || (data['routes'] as List).isEmpty) {
-      throw Exception('No safe route found');
+      throw Exception('No safe route found with waypoints');
     }
     
     final route = data['routes'][0];
@@ -1689,8 +2080,10 @@ Future<List<LatLng>> _getRouteWithWaypoints(
       return LatLng(lat, lng);
     }).toList();
   }
-  throw Exception('Failed to get safe route (${response.statusCode})');
+  throw Exception('Failed to get safe route with waypoints (${response.statusCode})');
 }
+
+
 
 Future<void> _getSafeRoute(LatLng destination) async {
   if (_currentPosition == null) return;
@@ -1698,6 +2091,7 @@ Future<void> _getSafeRoute(LatLng destination) async {
   _showSnackBar('Calculating safest route...');
 
   try {
+    // Get regular route first
     final regularRoute = await _getRouteFromAPI(_currentPosition!, destination);
     final unsafeSegments = _findUnsafeSegments(regularRoute);
     
@@ -1707,25 +2101,25 @@ Future<void> _getSafeRoute(LatLng destination) async {
       finalRoute = regularRoute;
       _showSnackBar('Route is already safe!');
     } else {
-      final waypoints = _generateAlternativeWaypoints(unsafeSegments);
-      final safeRoute = await _getRouteWithWaypoints(_currentPosition!, destination, waypoints);
+      // Try multiple strategies for finding safe route
+      finalRoute = await _findBestSafeRoute(_currentPosition!, destination, unsafeSegments);
       
-      final newUnsafeSegments = _findUnsafeSegments(safeRoute);
-      if (newUnsafeSegments.length >= unsafeSegments.length) {
-        _showSnackBar('Could not find safer route - using regular route');
-        _getDirections(destination);
-        return;
+      // Verify the final route is actually safer
+      final newUnsafeSegments = _findUnsafeSegments(finalRoute);
+      if (newUnsafeSegments.isEmpty) {
+        _showSnackBar('Safe route found! ');
+      } else if (newUnsafeSegments.length < unsafeSegments.length) {
+        _showSnackBar('Safer route found! ');
+      } else {
+        _showSnackBar('Could not find safer route - using regular route.');
       }
-      
-      finalRoute = safeRoute;
-      _showSnackBar('Safe route calculated! Avoided ${unsafeSegments.length - newUnsafeSegments.length} hotspots');
     }
     
     final distance = _calculateRouteDistance(finalRoute);
     final duration = _estimateRouteDuration(distance);
     
     setState(() {
-      _routePoints = finalRoute; // Use _routePoints instead of _polylinePoints
+      _routePoints = finalRoute;
       _distance = distance / 1000;
       _duration = _formatDuration(duration);
       _destination = destination;
@@ -1740,12 +2134,96 @@ Future<void> _getSafeRoute(LatLng destination) async {
       ),
     );
     
-    // Start real-time route updates
     _startRouteUpdates();
   } catch (e) {
     _showSnackBar('Error calculating safe route: ${e.toString()}');
+    // Fallback to regular directions if safe route fails
     _getDirections(destination);
   }
+}
+
+Future<List<LatLng>> _findBestSafeRoute(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  // Strategy 1: Try minimal waypoints first
+  try {
+    final minimalWaypoints = _generateAlternativeWaypoints(unsafeSegments);
+    if (minimalWaypoints.length <= 2) { // Only use if we have few waypoints
+      final route = await _getRouteWithWaypoints(start, destination, minimalWaypoints);
+      final stillUnsafeSegments = _findUnsafeSegments(route);
+      if (stillUnsafeSegments.isEmpty || stillUnsafeSegments.length < unsafeSegments.length * 0.5) {
+        return route;
+      }
+    }
+  } catch (e) {
+    print('Minimal waypoints strategy failed: $e');
+  }
+  
+  // Strategy 2: Direct intermediate points
+  try {
+    final intermediatePoints = await _findSafeIntermediatePoints(start, destination);
+    if (intermediatePoints.length <= 1) { // Prefer single intermediate point
+      final route = await _getRouteWithWaypoints(start, destination, intermediatePoints);
+      final stillUnsafeSegments = _findUnsafeSegments(route);
+      if (stillUnsafeSegments.length < unsafeSegments.length) {
+        return route;
+      }
+    }
+  } catch (e) {
+    print('Intermediate points strategy failed: $e');
+  }
+  
+  // Strategy 3: If all else fails, use regular route with warning
+  return await _getRouteFromAPI(start, destination);
+}
+
+Future<List<LatLng>> _findSafeIntermediatePoints(LatLng start, LatLng destination) async {
+  final intermediatePoints = <LatLng>[];
+  
+  // Get active approved hotspots
+  final activeApprovedHotspots = _hotspots.where((hotspot) {
+    final status = hotspot['status'] ?? 'approved';
+    final activeStatus = hotspot['active_status'] ?? 'active';
+    return status == 'approved' && activeStatus == 'active';
+  }).toList();
+  
+  // Create a grid of potential waypoints between start and destination
+  final latDiff = destination.latitude - start.latitude;
+  final lngDiff = destination.longitude - start.longitude;
+  
+  // Create waypoints at 1/3 and 2/3 of the way
+  for (double fraction in [0.33, 0.67]) {
+    final baseLat = start.latitude + (latDiff * fraction);
+    final baseLng = start.longitude + (lngDiff * fraction);
+    
+    // Try points in different directions from the base point
+    final offsets = [
+      [0.01, 0.01],   // Northeast
+      [0.01, -0.01],  // Northwest  
+      [-0.01, 0.01],  // Southeast
+      [-0.01, -0.01], // Southwest
+    ];
+    
+    for (final offset in offsets) {
+      final candidatePoint = LatLng(baseLat + offset[0], baseLng + offset[1]);
+      
+      // Check if this point is far enough from all hotspots
+      bool isSafe = true;
+      for (final hotspot in activeApprovedHotspots) {
+        final coords = hotspot['location']['coordinates'];
+        final hotspotLatLng = LatLng(coords[1], coords[0]);
+        if (_calculateDistance(candidatePoint, hotspotLatLng) < 300.0) { // 300m buffer
+          isSafe = false;
+          break;
+        }
+      }
+      
+      if (isSafe) {
+        intermediatePoints.add(candidatePoint);
+        break; // Found a safe point for this fraction, move to next
+      }
+    }
+  }
+  
+  return intermediatePoints;
 }
 
 // Helper to calculate total distance of a route in meters
@@ -1820,19 +2298,19 @@ Widget _buildFloatingDurationWidget() {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Travel mode selector (when visible) - minimized size
+        // Travel mode selector (when visible) - FURTHER MINIMIZED
         if (_showTravelModeSelector)
           Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.all(12), // Reduced padding
+            margin: const EdgeInsets.only(bottom: 6), // Reduced from 8
+            padding: const EdgeInsets.all(8), // Reduced from 12
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(10), // Smaller radius
+              borderRadius: BorderRadius.circular(8), // Reduced from 10
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 6, // Reduced blur
-                  offset: const Offset(0, 2),
+                  color: Colors.black.withOpacity(0.08), // Reduced opacity
+                  blurRadius: 4, // Reduced from 6
+                  offset: const Offset(0, 1), // Reduced from (0, 2)
                 ),
               ],
             ),
@@ -1843,13 +2321,13 @@ Widget _buildFloatingDurationWidget() {
                 const Text(
                   'Travel Mode',
                   style: TextStyle(
-                    fontSize: 14, // Smaller font
+                    fontSize: 12, // Reduced from 14
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(height: 8), // Reduced spacing
+                const SizedBox(height: 6), // Reduced from 8
                 Row(
-                  mainAxisSize: MainAxisSize.min, // Minimize row width
+                  mainAxisSize: MainAxisSize.min,
                   children: TravelMode.values.map((mode) {
                     final isSelected = _selectedTravelMode == mode;
                     return GestureDetector(
@@ -1860,11 +2338,11 @@ Widget _buildFloatingDurationWidget() {
                         });
                       },
                       child: Container(
-                        margin: const EdgeInsets.only(right: 8), // Space between buttons
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), // Smaller padding
+                        margin: const EdgeInsets.only(right: 6), // Reduced from 8
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), // Reduced padding
                         decoration: BoxDecoration(
                           color: isSelected ? Colors.blue.shade100 : Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(6), // Smaller radius
+                          borderRadius: BorderRadius.circular(4), // Reduced from 6
                           border: Border.all(
                             color: isSelected ? Colors.blue.shade300 : Colors.grey.shade300,
                             width: 1,
@@ -1876,15 +2354,15 @@ Widget _buildFloatingDurationWidget() {
                             Icon(
                               _getTravelModeIcon(mode),
                               color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
-                              size: 18, // Smaller icon
+                              size: 16, // Reduced from 18
                             ),
-                            const SizedBox(height: 2), // Reduced spacing
+                            const SizedBox(height: 1), // Reduced from 2
                             Text(
                               _getTravelModeLabel(mode),
                               style: TextStyle(
                                 color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
                                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                                fontSize: 10, // Smaller font
+                                fontSize: 9, // Reduced from 10
                               ),
                             ),
                           ],
@@ -1897,7 +2375,7 @@ Widget _buildFloatingDurationWidget() {
             ),
           ),
         
-        // Duration display widget - minimized
+        // Duration display widget - further minimized
         GestureDetector(
           onTap: () {
             setState(() {
@@ -1905,15 +2383,15 @@ Widget _buildFloatingDurationWidget() {
             });
           },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Smaller padding
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), // Reduced padding
             decoration: BoxDecoration(
               color: Colors.blue.shade600,
-              borderRadius: BorderRadius.circular(10), // Smaller radius
+              borderRadius: BorderRadius.circular(8), // Reduced from 10
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
-                  blurRadius: 6, // Reduced blur
-                  offset: const Offset(0, 2),
+                  color: Colors.black.withOpacity(0.12), // Reduced opacity
+                  blurRadius: 4, // Reduced from 6
+                  offset: const Offset(0, 1), // Reduced from (0, 2)
                 ),
               ],
             ),
@@ -1923,22 +2401,22 @@ Widget _buildFloatingDurationWidget() {
                 Icon(
                   _getTravelModeIcon(_selectedTravelMode),
                   color: Colors.white,
-                  size: 16, // Smaller icon
+                  size: 14, // Reduced from 16
                 ),
-                const SizedBox(width: 6), // Reduced spacing
+                const SizedBox(width: 4), // Reduced from 6
                 Text(
                   '${_distance.toStringAsFixed(1)} km • $formattedDuration',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
-                    fontSize: 12, // Smaller font
+                    fontSize: 11, // Reduced from 12
                   ),
                 ),
-                const SizedBox(width: 6), // Reduced spacing
+                const SizedBox(width: 4), // Reduced from 6
                 Icon(
                   _showTravelModeSelector ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
                   color: Colors.white,
-                  size: 14, // Smaller icon
+                  size: 12, // Reduced from 14
                 ),
               ],
             ),
@@ -1950,216 +2428,498 @@ Widget _buildFloatingDurationWidget() {
 }
 
 
-void _showAddHotspotForm(LatLng position) async {
-  final isDesktop = MediaQuery.of(context).size.width >= 600;
+  void _showAddHotspotForm(LatLng position) async {
+    final isDesktop = MediaQuery.of(context).size.width >= 600;
 
-  try {
-    // Fetch crime types from Supabase including category
-    final crimeTypesResponse = await Supabase.instance.client
-        .from('crime_type')
-        .select('*')
-        .order('name');
+    try {
+      final crimeTypesResponse = await Supabase.instance.client
+          .from('crime_type')
+          .select('*')
+          .order('name');
 
-    if (crimeTypesResponse.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No crime types available.')),
-      );
-      return;
-    }
+      if (crimeTypesResponse.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No crime types available.')),
+        );
+        return;
+      }
 
-    final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
-    final formKey = GlobalKey<FormState>();
-    final descriptionController = TextEditingController();
-    final dateController = TextEditingController();
-    final timeController = TextEditingController();
+      final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
+      final formKey = GlobalKey<FormState>();
+      final descriptionController = TextEditingController();
+      final dateController = TextEditingController();
+      final timeController = TextEditingController();
 
-    String selectedCrimeType = crimeTypes[0]['name'];
-    int selectedCrimeId = crimeTypes[0]['id'];
-    // ignore: unused_local_variable
-    String selectedCategory = crimeTypes[0]['category'];
+      String selectedCrimeType = crimeTypes[0]['name'];
+      int selectedCrimeId = crimeTypes[0]['id'];
+      
+      // Photo state for this form
+      XFile? selectedPhoto;
+      bool isUploadingPhoto = false;
 
-    final now = DateTime.now();
-    dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-    timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+      final now = DateTime.now();
+      dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
 
-    void onSubmit() async {
-      if (formKey.currentState!.validate()) {
-        try {
-          final dateTime = DateTime(
-            int.parse(dateController.text.split('-')[0]),
-            int.parse(dateController.text.split('-')[1]),
-            int.parse(dateController.text.split('-')[2]),
-            int.parse(timeController.text.split(':')[0]),
-            int.parse(timeController.text.split(':')[1]),
-          );
-
-          await _saveHotspot(
-            selectedCrimeId.toString(),
-            descriptionController.text,
-            position,
-            dateTime,
-          );
-
-          await _loadHotspots();
-
-          if (mounted) {
-            Navigator.pop(context);
-            _showSnackBar('Crime reported successfully');
-          }
-        } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Failed to save crime report: ${e.toString()}'),
-                duration: const Duration(seconds: 5),
-              ),
+      void onSubmit() async {
+        if (formKey.currentState!.validate()) {
+          try {
+            final dateTime = DateTime(
+              int.parse(dateController.text.split('-')[0]),
+              int.parse(dateController.text.split('-')[1]),
+              int.parse(dateController.text.split('-')[2]),
+              int.parse(timeController.text.split(':')[0]),
+              int.parse(timeController.text.split(':')[1]),
             );
+
+            // Save hotspot first
+            final hotspotId = await _saveHotspot(
+              selectedCrimeId.toString(),
+              descriptionController.text,
+              position,
+              dateTime,
+            );
+
+            // Upload photo if selected
+            if (selectedPhoto != null && hotspotId != null) {
+              try {
+                await PhotoService.uploadPhoto(
+                  imageFile: selectedPhoto!,
+                  hotspotId: hotspotId,
+                  userId: _userProfile!['id'],
+                );
+              } catch (e) {
+                print('Photo upload failed: $e');
+                if (mounted) {
+                  _showSnackBar('Crime saved but photo upload failed: ${e.toString()}');
+                }
+              }
+            }
+
+            await _loadHotspots();
+
+            if (mounted) {
+              Navigator.pop(context);
+              _showSnackBar('Crime reported successfully');
+            }
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Failed to save crime report: ${e.toString()}'),
+                  duration: const Duration(seconds: 5),
+                ),
+              );
+            }
           }
         }
       }
-    }
 
-    if (isDesktop) {
-      showDialog(
-        context: context,
-        builder: (context) {
-          return AddHotspotFormDesktop(
-            formKey: formKey,
-            descriptionController: descriptionController,
-            dateController: dateController,
-            timeController: timeController,
-            crimeTypes: crimeTypes,
-            selectedCrimeType: selectedCrimeType,
-            onCrimeTypeChanged: (value) {
-              final selected = crimeTypes.firstWhere((c) => c['name'] == value);
-              selectedCrimeType = value;
-              selectedCrimeId = selected['id'];
-              selectedCategory = selected['category'];
-            },
-            onSubmit: onSubmit,
-          );
-        },
-      );
-    } else {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        builder: (context) {
-          return SingleChildScrollView(
-            child: Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-                left: 16,
-                right: 16,
-                top: 16,
+      if (isDesktop) {
+        // Desktop dialog - you'll need to update your AddHotspotFormDesktop to include photo
+        showDialog(
+          context: context,
+          builder: (context) {
+            return StatefulBuilder(
+              builder: (context, setState) => AlertDialog(
+                title: const Text('Add Crime Incident'),
+                content: SizedBox(
+                  width: 400,
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Crime type dropdown
+                        DropdownButtonFormField<String>(
+                          value: selectedCrimeType,
+                          decoration: const InputDecoration(
+                            labelText: 'Crime Type',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: crimeTypes.map((crimeType) {
+                            return DropdownMenuItem<String>(
+                              value: crimeType['name'],
+                              child: Text(
+                                '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                                style: const TextStyle(fontSize: 14),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              final selected = crimeTypes.firstWhere((c) => c['name'] == value);
+                              selectedCrimeType = value;
+                              selectedCrimeId = selected['id'];
+                            }
+                          },
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Please select a crime type';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // Description field
+                        TextFormField(
+                          controller: descriptionController,
+                          decoration: const InputDecoration(
+                            labelText: 'Description (optional)',
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLines: 3,
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // Photo section
+                        _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                          setState(() {
+                            selectedPhoto = photo;
+                            isUploadingPhoto = uploading;
+                          });
+                        }),
+                        const SizedBox(height: 16),
+                        
+                        // Date and time fields
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: dateController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Date',
+                                  border: OutlineInputBorder(),
+                                ),
+                                readOnly: true,
+                                onTap: () async {
+                                  DateTime? pickedDate = await showDatePicker(
+                                    context: context,
+                                    initialDate: now,
+                                    firstDate: DateTime(2000),
+                                    lastDate: DateTime(2101),
+                                  );
+                                  if (pickedDate != null) {
+                                    dateController.text =
+                                        "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                  }
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextFormField(
+                                controller: timeController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Time',
+                                  border: OutlineInputBorder(),
+                                ),
+                                readOnly: true,
+                                onTap: () async {
+                                  TimeOfDay? pickedTime = await showTimePicker(
+                                    context: context,
+                                    initialTime: TimeOfDay.now(),
+                                  );
+                                  if (pickedTime != null) {
+                                    timeController.text =
+                                        "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+    actions: [
+  Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      ElevatedButton(
+        onPressed: isUploadingPhoto ? null : onSubmit,
+        child: isUploadingPhoto 
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Submit'),
+      ),
+      const SizedBox(height: 12),
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton(
+          onPressed: isUploadingPhoto
+              ? null
+              : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ),
+    ],
+  ),
+],
               ),
-              child: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    DropdownButtonFormField<String>(
-                      value: selectedCrimeType,
-                      decoration: const InputDecoration(
-                        labelText: 'Crime Type',
-                        border: OutlineInputBorder(),
-                      ),
-items: crimeTypes.map((crimeType) {
-  return DropdownMenuItem<String>(
-    value: crimeType['name'],
-    child: Text(
-      '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-      style: const TextStyle(fontSize: 14),
-      overflow: TextOverflow.ellipsis, // Handles long text gracefully
-    ),
-  );
-}).toList(),
-                      onChanged: (newValue) {
-                        if (newValue != null) {
-                          final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
-                          selectedCrimeType = newValue;
-                          selectedCrimeId = selected['id'];
-                          selectedCategory = selected['category'];
-                        }
-                      },
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please select a crime type';
-                        }
-                        return null;
-                      },
+            );
+          },
+        );
+      } else {
+
+
+        // MOBILE 
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          builder: (context) {
+            return StatefulBuilder(
+              builder: (context, setState) => SingleChildScrollView(
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                    left: 16,
+                    right: 16,
+                    top: 16,
+                  ),
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        DropdownButtonFormField<String>(
+                          value: selectedCrimeType,
+                          decoration: const InputDecoration(
+                            labelText: 'Crime Type',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: crimeTypes.map((crimeType) {
+                            return DropdownMenuItem<String>(
+                              value: crimeType['name'],
+                              child: Text(
+                                '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                                style: const TextStyle(fontSize: 14),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (newValue) {
+                            if (newValue != null) {
+                              final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
+                              selectedCrimeType = newValue;
+                              selectedCrimeId = selected['id'];
+                            }
+                          },
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Please select a crime type';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: descriptionController,
+                          decoration: const InputDecoration(
+                            labelText: 'Description (optional)',
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLines: 3,
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // Photo section
+                        _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                          setState(() {
+                            selectedPhoto = photo;
+                            isUploadingPhoto = uploading;
+                          });
+                        }),
+                        const SizedBox(height: 16),
+                        
+                        TextFormField(
+                          controller: dateController,
+                          decoration: const InputDecoration(
+                            labelText: 'Date',
+                            border: OutlineInputBorder(),
+                          ),
+                          readOnly: true,
+                          onTap: () async {
+                            DateTime? pickedDate = await showDatePicker(
+                              context: context,
+                              initialDate: now,
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime(2101),
+                            );
+                            if (pickedDate != null) {
+                              dateController.text =
+                                  "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: timeController,
+                          decoration: const InputDecoration(
+                            labelText: 'Time',
+                            border: OutlineInputBorder(),
+                          ),
+                          readOnly: true,
+                          onTap: () async {
+                            TimeOfDay? pickedTime = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay.now(),
+                            );
+                            if (pickedTime != null) {
+                              timeController.text =
+                                  "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 24),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: isUploadingPhoto ? null : onSubmit,
+                            child: isUploadingPhoto
+                                ? const CircularProgressIndicator()
+                                : const Text('Submit'),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: descriptionController,
-                      decoration: const InputDecoration(
-                        labelText: 'Description (optional)',
-                        border: OutlineInputBorder(),
-                      ),
-                      maxLines: 3,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: dateController,
-                      decoration: const InputDecoration(
-                        labelText: 'Date',
-                        border: OutlineInputBorder(),
-                      ),
-                      readOnly: true,
-                      onTap: () async {
-                        DateTime? pickedDate = await showDatePicker(
-                          context: context,
-                          initialDate: now,
-                          firstDate: DateTime(2000),
-                          lastDate: DateTime(2101),
-                        );
-                        if (pickedDate != null) {
-                          dateController.text =
-                              "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: timeController,
-                      decoration: const InputDecoration(
-                        labelText: 'Time',
-                        border: OutlineInputBorder(),
-                      ),
-                      readOnly: true,
-                      onTap: () async {
-                        TimeOfDay? pickedTime = await showTimePicker(
-                          context: context,
-                          initialTime: TimeOfDay.now(),
-                        );
-                        if (pickedTime != null) {
-                          timeController.text =
-                              "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: onSubmit,
-                        child: const Text('Submit'),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          );
-        },
-      );
-    }
-  } catch (e) {
-    if (mounted) {
-      _showSnackBar('Error loading crime types: ${e.toString()}');
+            );
+          },
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar('Error loading crime types: ${e.toString()}');
+      }
     }
   }
-}
+
+   Widget _buildPhotoSection(XFile? selectedPhoto, bool isUploading, Function(XFile?, bool) onPhotoChanged) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Photo (Optional)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 8),
+          if (selectedPhoto != null)
+            Stack(
+              children: [
+                Container(
+                  height: 200,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: kIsWeb
+                        ? Image.network(
+                            selectedPhoto.path,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return const Center(child: Text('Error loading image'));
+                            },
+                          )
+                        : Image.file(
+                            File(selectedPhoto.path),
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return const Center(child: Text('Error loading image'));
+                            },
+                          ),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: CircleAvatar(
+                    backgroundColor: Colors.red,
+                    radius: 16,
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white, size: 16),
+                      onPressed: () {
+                        onPhotoChanged(null, false);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: isUploading
+                        ? null
+                        : () async {
+                            onPhotoChanged(null, true);
+                            try {
+                              final photo = await PhotoService.pickImage();
+                              onPhotoChanged(photo, false);
+                            } catch (e) {
+                              onPhotoChanged(null, false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error taking photo: $e')),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.camera_alt),
+                    label: const Text('Take Photo'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: isUploading
+                        ? null
+                        : () async {
+                            onPhotoChanged(null, true);
+                            try {
+                              final photo = await PhotoService.pickImageFromGallery();
+                              onPhotoChanged(photo, false);
+                            } catch (e) {
+                              onPhotoChanged(null, false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error selecting photo: $e')),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.photo_library),
+                    label: const Text('Gallery'),
+                  ),
+                ),
+              ],
+            ),
+          if (isUploading)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+        ],
+      ),
+    );
+  }
+
 
 
 
@@ -2222,9 +2982,11 @@ Future<void> _showMobileReportForm(
 
   String selectedCrimeType = crimeTypes[0]['name'];
   int selectedCrimeId = crimeTypes[0]['id'];
-  // ignore: unused_local_variable
-  String selectedCategory = crimeTypes[0]['category'];
   bool isSubmitting = false;
+  
+  // Photo state
+  XFile? selectedPhoto;
+  bool isUploadingPhoto = false;
 
   final result = await showModalBottomSheet(
     context: context,
@@ -2250,16 +3012,16 @@ Future<void> _showMobileReportForm(
                       labelText: 'Crime Type',
                       border: OutlineInputBorder(),
                     ),
-items: crimeTypes.map((crimeType) {
-  return DropdownMenuItem<String>(
-    value: crimeType['name'],
-    child: Text(
-      '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-      style: const TextStyle(fontSize: 14),
-      overflow: TextOverflow.ellipsis, // Handles long text gracefully
-    ),
-  );
-}).toList(),
+                    items: crimeTypes.map((crimeType) {
+                      return DropdownMenuItem<String>(
+                        value: crimeType['name'],
+                        child: Text(
+                          '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                          style: const TextStyle(fontSize: 14),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }).toList(),
                     onChanged: isSubmitting
                         ? null
                         : (newValue) {
@@ -2268,7 +3030,6 @@ items: crimeTypes.map((crimeType) {
                               setState(() {
                                 selectedCrimeType = newValue;
                                 selectedCrimeId = selected['id'];
-                                selectedCategory = selected['category'];
                               });
                             }
                           },
@@ -2290,6 +3051,16 @@ items: crimeTypes.map((crimeType) {
                     enabled: !isSubmitting,
                   ),
                   const SizedBox(height: 16),
+                  
+                  // Photo section
+                  _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                    setState(() {
+                      selectedPhoto = photo;
+                      isUploadingPhoto = uploading;
+                    });
+                  }),
+                  const SizedBox(height: 16),
+                  
                   TextFormField(
                     controller: dateController,
                     decoration: const InputDecoration(
@@ -2337,7 +3108,7 @@ items: crimeTypes.map((crimeType) {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: isSubmitting
+                      onPressed: (isSubmitting || isUploadingPhoto)
                           ? null
                           : () async {
                               if (formKey.currentState!.validate()) {
@@ -2351,6 +3122,7 @@ items: crimeTypes.map((crimeType) {
                                     descriptionController.text,
                                     position,
                                     dateTime,
+                                    selectedPhoto, // Pass the photo
                                   );
 
                                   if (mounted) {
@@ -2365,7 +3137,7 @@ items: crimeTypes.map((crimeType) {
                                 }
                               }
                             },
-                      child: isSubmitting
+                      child: (isSubmitting || isUploadingPhoto)
                           ? const CircularProgressIndicator()
                           : const Text('Submit Report'),
                     ),
@@ -2387,11 +3159,19 @@ items: crimeTypes.map((crimeType) {
 
 void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
   try {
-    // Fetch crime types from Supabase including category
+    // Fetch crime types and existing photo
     final crimeTypesResponse = await Supabase.instance.client
         .from('crime_type')
         .select('*')
         .order('name');
+
+    // Get existing photo if any
+    Map<String, dynamic>? existingPhoto;
+    try {
+      existingPhoto = await PhotoService.getHotspotPhoto(hotspot['id']);
+    } catch (e) {
+      print('Error fetching existing photo: $e');
+    }
 
     final formKey = GlobalKey<FormState>();
     final descriptionController = TextEditingController(text: hotspot['description'] ?? '');
@@ -2405,240 +3185,531 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
     final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
     String selectedCrimeType = hotspot['crime_type']['name'];
     int selectedCrimeId = hotspot['type_id'];
-    // ignore: unused_local_variable
-    String selectedCategory = hotspot['crime_type']['category'] ?? 'Unknown';
     
-    // Add active status variables
+    // Active status variables
     String selectedActiveStatus = hotspot['active_status'] ?? 'active';
     bool isActiveStatus = selectedActiveStatus == 'active';
+
+    // Photo state
+    XFile? newSelectedPhoto;
+    bool isUploadingPhoto = false;
+    bool _ = existingPhoto != null;
+    bool deleteExistingPhoto = false;
 
     // Desktop/Web view
     if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
       showDialog(
         context: context,
-        builder: (context) => Dialog(
-          child: EditHotspotFormDesktop(
-            hotspot: hotspot,
-            crimeTypes: crimeTypes,
-            onUpdate: (id, crimeId, description, time, activeStatus) async {
-              try {
-                await _updateHotspot(id, crimeId, description, time, activeStatus);
-                await _loadHotspots();
-                if (mounted) {
-                  Navigator.pop(context);
-                  _showSnackBar('Crime report updated');
-                }
-              } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed to update crime report: $e')),
-                  );
-                }
-              }
-            },
-onCancel: () {
-  setState(() {
-    _selectedHotspot = null;
-  });
-  Navigator.pop(context);
-},
-            isAdmin: _isAdmin,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setState) => AlertDialog(
+            title: const Text('Edit Crime Report'),
+            content: SizedBox(
+              width: 500,
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Crime type dropdown
+                      
+                      DropdownButtonFormField<String>(
+                        value: selectedCrimeType,
+                        decoration: const InputDecoration(
+                          labelText: 'Crime Type',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: crimeTypes.map((crimeType) {
+                          return DropdownMenuItem<String>(
+                            value: crimeType['name'],
+                            child: Text(
+                              '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                              style: const TextStyle(fontSize: 14),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            final selected = crimeTypes.firstWhere((c) => c['name'] == value);
+                            setState(() {
+                              selectedCrimeType = value;
+                              selectedCrimeId = selected['id'];
+                            });
+                          }
+                        },
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please select a crime type';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Description field
+                      TextFormField(
+                        controller: descriptionController,
+                        decoration: const InputDecoration(
+                          labelText: 'Description (optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                        maxLines: 3,
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Photo management section
+                      _buildEditPhotoSection(
+                        existingPhoto: existingPhoto,
+                        newSelectedPhoto: newSelectedPhoto,
+                        isUploadingPhoto: isUploadingPhoto,
+                        deleteExistingPhoto: deleteExistingPhoto,
+                        onPhotoChanged: (photo, uploading) {
+                          setState(() {
+                            newSelectedPhoto = photo;
+                            isUploadingPhoto = uploading;
+                          });
+                        },
+                        onDeleteExistingToggle: (delete) {
+                          setState(() {
+                            deleteExistingPhoto = delete;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Date and time fields
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: dateController,
+                              decoration: const InputDecoration(
+                                labelText: 'Date',
+                                border: OutlineInputBorder(),
+                              ),
+                              readOnly: true,
+                              onTap: () async {
+                                DateTime? pickedDate = await showDatePicker(
+                                  context: context,
+                                  initialDate: DateTime.parse(hotspot['time']),
+                                  firstDate: DateTime(2000),
+                                  lastDate: DateTime(2101),
+                                );
+                                if (pickedDate != null) {
+                                  dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              controller: timeController,
+                              decoration: const InputDecoration(
+                                labelText: 'Time',
+                                border: OutlineInputBorder(),
+                              ),
+                              readOnly: true,
+                              onTap: () async {
+                                TimeOfDay? pickedTime = await showTimePicker(
+                                  context: context,
+                                  initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
+                                );
+                                if (pickedTime != null) {
+                                  final now = DateTime.now();
+                                  final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
+                                  timeController.text = DateFormat('HH:mm').format(formatted);
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Active status for admins
+                      if (_isAdmin)
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Active Status:',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                              ),
+                              Row(
+                                children: [
+                                  Switch(
+                                    value: isActiveStatus,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        isActiveStatus = value;
+                                        selectedActiveStatus = value ? 'active' : 'inactive';
+                                      });
+                                    },
+                                    activeColor: Colors.green,
+                                    inactiveThumbColor: Colors.grey,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    isActiveStatus ? 'Active' : 'Inactive',
+                                    style: TextStyle(
+                                      color: isActiveStatus ? Colors.green : Colors.grey,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              ElevatedButton(
+                onPressed: isUploadingPhoto
+                    ? null
+                    : () async {
+                        if (formKey.currentState!.validate()) {
+                          try {
+                            final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
+                            
+                            // Update hotspot first
+                            await _updateHotspot(
+                              hotspot['id'],
+                              selectedCrimeId,
+                              descriptionController.text,
+                              dateTime,
+                              selectedActiveStatus,
+                            );
+
+                            // Handle photo updates
+                            await _handlePhotoUpdates(
+                              hotspotId: hotspot['id'],
+                              existingPhoto: existingPhoto,
+                              newPhoto: newSelectedPhoto,
+                              deleteExisting: deleteExistingPhoto,
+                            );
+
+                            await _loadHotspots();
+                            if (mounted) {
+                              Navigator.pop(context);
+                              _showSnackBar('Crime report updated');
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Failed to update crime report: $e')),
+                              );
+                            }
+                          }
+                        }
+                      },
+                child: isUploadingPhoto 
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Update'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ],
           ),
         ),
       );
       return;
     }
 
-    // Mobile view (bottom sheet)
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
-          left: 16.0,
-          right: 16.0,
-          top: 16.0,
-        ),
-        child: StatefulBuilder(
-          builder: (context, setState) {
-            return Form(
-              key: formKey,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    DropdownButtonFormField<String>(
-                      value: selectedCrimeType,
-                      decoration: const InputDecoration(labelText: 'Crime Type'),
-items: crimeTypes.map((crimeType) {
-  return DropdownMenuItem<String>(
-    value: crimeType['name'],
-    child: Text(
-      '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-      style: const TextStyle(fontSize: 14),
-      overflow: TextOverflow.ellipsis, // Handles long text gracefully
+showModalBottomSheet(
+  context: context,
+  isScrollControlled: true,
+  builder: (context) => Container(
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.of(context).size.height * 0.95,
     ),
-  );
-}).toList(),
-                      onChanged: (newValue) {
-                        if (newValue != null) {
-                          final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
-                          setState(() {
-                            selectedCrimeType = newValue;
-                            selectedCrimeId = selected['id'];
-                            selectedCategory = selected['category'];
-                          });
-                        }
-                      },
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please select a crime type';
-                        }
-                        return null;
-                      },
+    child: Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
+        left: 16.0,
+        right: 16.0,
+        top: 25.0, // Increased top padding for better crime type visibility
+      ),
+      child: StatefulBuilder(
+        builder: (context, setState) {
+          return Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    value: selectedCrimeType,
+                    decoration: const InputDecoration(
+                      labelText: 'Crime Type',
+                      border: OutlineInputBorder(),
                     ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: descriptionController,
-                      decoration: const InputDecoration(labelText: 'Description (optional)'),
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: dateController,
-                      decoration: const InputDecoration(labelText: 'Date'),
-                      readOnly: true,
-                      onTap: () async {
-                        DateTime? pickedDate = await showDatePicker(
-                          context: context,
-                          initialDate: DateTime.parse(hotspot['time']),
-                          firstDate: DateTime(2000),
-                          lastDate: DateTime(2101),
-                        );
-                        if (pickedDate != null) {
-                          dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: timeController,
-                      decoration: const InputDecoration(labelText: 'Time'),
-                      readOnly: true,
-                      onTap: () async {
-                        TimeOfDay? pickedTime = await showTimePicker(
-                          context: context,
-                          initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
-                        );
-                        if (pickedTime != null) {
-                          final now = DateTime.now();
-                          final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
-                          timeController.text = DateFormat('HH:mm').format(formatted);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    // Add active status toggle for admins only
-                    if (_isAdmin)
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade300),
-                          borderRadius: BorderRadius.circular(8),
+                    items: crimeTypes.map((crimeType) {
+                      return DropdownMenuItem<String>(
+                        value: crimeType['name'],
+                        child: Text(
+                          '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                          style: const TextStyle(fontSize: 14),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Active Status:',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                            ),
-                            Row(
-                              children: [
-                                Switch(
-                                  value: isActiveStatus,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      isActiveStatus = value;
-                                      selectedActiveStatus = value ? 'active' : 'inactive';
-                                    });
-                                  },
-                                  activeColor: Colors.green,
-                                  inactiveThumbColor: Colors.grey,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  isActiveStatus ? 'Active' : 'Inactive',
-                                  style: TextStyle(
-                                    color: isActiveStatus ? Colors.green : Colors.grey,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        ElevatedButton(
-                          onPressed: () async {
-                            if (formKey.currentState!.validate()) {
-                              try {
-                                final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
-                                await _updateHotspot(
-                                  hotspot['id'],
-                                  selectedCrimeId,
-                                  descriptionController.text,
-                                  dateTime,
-                                  selectedActiveStatus,
-                                );
-                                await _loadHotspots();
-                                if (mounted) {
-                                  Navigator.pop(context);
-                                  _showSnackBar('Updated crime successfully');
-                                }
-                              } catch (e) {
-                                print('Error updating hotspot: $e');
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Failed to update hotspot: ${e.toString()}'),
-                                      duration: const Duration(seconds: 5),
-                                    ),
-                                  );
-                                }
-                              }
+                      );
+                    }).toList(),
+                    onChanged: (newValue) {
+                      if (newValue != null) {
+                        final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
+                        setState(() {
+                          selectedCrimeType = newValue;
+                          selectedCrimeId = selected['id'];
+                        });
+                      }
+                    },
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please select a crime type';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Description (optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 3,
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Photo section for mobile
+                  _buildEditPhotoSection(
+                    existingPhoto: existingPhoto,
+                    newSelectedPhoto: newSelectedPhoto,
+                    isUploadingPhoto: isUploadingPhoto,
+                    deleteExistingPhoto: deleteExistingPhoto,
+                    onPhotoChanged: (photo, uploading) {
+                      setState(() {
+                        newSelectedPhoto = photo;
+                        isUploadingPhoto = uploading;
+                      });
+                    },
+                    onDeleteExistingToggle: (delete) {
+                      setState(() {
+                        deleteExistingPhoto = delete;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Date and time fields - Side by side
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: dateController,
+                          decoration: const InputDecoration(
+                            labelText: 'Date',
+                            border: OutlineInputBorder(),
+                          ),
+                          readOnly: true,
+                          onTap: () async {
+                            DateTime? pickedDate = await showDatePicker(
+                              context: context,
+                              initialDate: DateTime.parse(hotspot['time']),
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime(2101),
+                            );
+                            if (pickedDate != null) {
+                              dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
                             }
                           },
-                          child: const Text('Update'),
                         ),
-                        ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              _showHotspotDetails(hotspot);
-                            });
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: timeController,
+                          decoration: const InputDecoration(
+                            labelText: 'Time',
+                            border: OutlineInputBorder(),
+                          ),
+                          readOnly: true,
+                          onTap: () async {
+                            TimeOfDay? pickedTime = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
+                            );
+                            if (pickedTime != null) {
+                              final now = DateTime.now();
+                              final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
+                              timeController.text = DateFormat('HH:mm').format(formatted);
+                            }
                           },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Add active status toggle for admins only - Compact Design
+                  if (_isAdmin)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isActiveStatus ? Colors.green.shade50 : Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isActiveStatus ? Colors.green.shade200 : Colors.grey.shade300,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                isActiveStatus ? Icons.check_circle : Icons.cancel,
+                                color: isActiveStatus ? Colors.green : Colors.grey,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Transform.scale(
+                            scale: 0.8,
+                            child: Switch(
+                              value: isActiveStatus,
+                              onChanged: (value) {
+                                setState(() {
+                                  isActiveStatus = value;
+                                  selectedActiveStatus = value ? 'active' : 'inactive';
+                                });
+                              },
+                              activeColor: Colors.green,
+                              inactiveThumbColor: Colors.grey,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 14),
+                  
+                  // Update and Cancel buttons - Update on left, Cancel on right
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: isUploadingPhoto
+                              ? null
+                              : () async {
+                                  if (formKey.currentState!.validate()) {
+                                    try {
+                                      final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
+                                      
+                                      // Update hotspot first
+                                      await _updateHotspot(
+                                        hotspot['id'],
+                                        selectedCrimeId,
+                                        descriptionController.text,
+                                        dateTime,
+                                        selectedActiveStatus,
+                                      );
+
+                                      // Handle photo updates
+                                      await _handlePhotoUpdates(
+                                        hotspotId: hotspot['id'],
+                                        existingPhoto: existingPhoto,
+                                        newPhoto: newSelectedPhoto,
+                                        deleteExisting: deleteExistingPhoto,
+                                      );
+
+                                      await _loadHotspots();
+                                      if (mounted) {
+                                        Navigator.pop(context);
+                                        _showSnackBar('Crime report updated successfully');
+                                      }
+                                    } catch (e) {
+                                      if (mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Failed to update crime report: ${e.toString()}'),
+                                            duration: const Duration(seconds: 5),
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          child: isUploadingPhoto
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Update'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.grey[500],
                             foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                           child: const Text('Cancel'),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                ],
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
-    );
+    ),
+  ),
+);
   } catch (e) {
     if (mounted) {
       _showSnackBar('Error loading crime types: ${e.toString()}');
@@ -2648,94 +3719,79 @@ items: crimeTypes.map((crimeType) {
 
 
 Future<void> _reportHotspot(
-  int typeId,
-  String description,
-  LatLng position,
-  DateTime dateTime,
-) async {
-  try {
-    final insertData = {
-      'type_id': typeId,
-      'description': description.trim().isNotEmpty ? description.trim() : null,
-      'location': 'POINT(${position.longitude} ${position.latitude})',
-      'time': dateTime.toIso8601String(),
-      'status': 'pending',
-      'created_by': _userProfile?['id'],
-      'reported_by': _userProfile?['id'],
-      'created_at': DateTime.now().toIso8601String(),
-    };
+    int typeId,
+    String description,
+    LatLng position,
+    DateTime dateTime,
+    [XFile? photo]
+  ) async {
+    try {
+      final insertData = {
+        'type_id': typeId,
+        'description': description.trim().isNotEmpty ? description.trim() : null,
+        'location': 'POINT(${position.longitude} ${position.latitude})',
+        'time': dateTime.toIso8601String(),
+        'status': 'pending',
+        'created_by': _userProfile?['id'],
+        'reported_by': _userProfile?['id'],
+        'created_at': DateTime.now().toIso8601String(),
+      };
 
-    // Insert the hotspot
-    final response = await Supabase.instance.client
-        .from('hotspot')
-        .insert(insertData)
-        .select('''
-          *,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-        .single();
+      final response = await Supabase.instance.client
+          .from('hotspot')
+          .insert(insertData)
+          .select('id')
+          .single();
 
-    print('Hotspot inserted successfully: ${response['id']}');
+      print('Hotspot inserted successfully: ${response['id']}');
+      final hotspotId = response['id'] as int;
 
-    // Only create notifications if this is a pending report
-    if (response['status'] == 'pending') {
-      try {
-        // Get all admin users
-        final admins = await Supabase.instance.client
-            .from('users')
-            .select('id')
-            .eq('role', 'admin');
-
-        // Create a single batch insert for all notifications with unique constraint
-        if (admins.isNotEmpty) {
-          final notifications = admins.map((admin) => {
-            'user_id': admin['id'],
-            'title': 'New Crime Report',
-            'message': 'New ${response['crime_type']['name']} report awaiting review',
-            'type': 'report',
-            'hotspot_id': response['id'],
-            'created_at': DateTime.now().toIso8601String(),
-            // Add a unique constraint key to prevent duplicates
-            'unique_key': 'report_${response['id']}_${admin['id']}',
-          }).toList();
-
-          // Use upsert to prevent duplicates
-          await Supabase.instance.client
-              .from('notifications')
-              .upsert(
-                notifications,
-                onConflict: 'unique_key', // This requires a unique constraint in your DB
-              );
-          
-          print('Created/updated ${notifications.length} admin notifications');
+      // Upload photo if provided
+      if (photo != null) {
+        try {
+          await PhotoService.uploadPhoto(
+            imageFile: photo,
+            hotspotId: hotspotId,
+            userId: _userProfile!['id'],
+          );
+          print('Photo uploaded successfully for hotspot $hotspotId');
+        } catch (e) {
+          print('Photo upload failed: $e');
+          _showSnackBar('Report saved but photo upload failed: ${e.toString()}');
         }
-      } catch (notificationError) {
-        print('Error creating notifications: $notificationError');
       }
-    }
 
-    // UI fallback if real-time fails
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (!_hotspots.any((h) => h['id'] == response['id']) && mounted) {
-      setState(() {
-        final crimeType = response['crime_type'] ?? {};
-        _hotspots.insert(0, {
-          ...response,
-          'crime_type': {
-            'id': crimeType['id'] ?? response['type_id'],
-            'name': crimeType['name'] ?? 'Unknown',
-            'level': crimeType['level'] ?? 'unknown',
-            'category': crimeType['category'] ?? 'General',
-            'description': crimeType['description'],
+      // Create admin notifications (existing code)
+      if (response['status'] == 'pending') {
+        try {
+          final admins = await Supabase.instance.client
+              .from('users')
+              .select('id')
+              .eq('role', 'admin');
+
+          if (admins.isNotEmpty) {
+            final notifications = admins.map((admin) => {
+              'user_id': admin['id'],
+              'title': 'New Crime Report',
+              'message': 'New crime report awaiting review',
+              'type': 'report',
+              'hotspot_id': hotspotId,
+              'created_at': DateTime.now().toIso8601String(),
+              'unique_key': 'report_${hotspotId}_${admin['id']}',
+            }).toList();
+
+            await Supabase.instance.client
+                .from('notifications')
+                .upsert(notifications, onConflict: 'unique_key');
           }
-        });
-      });
+        } catch (notificationError) {
+          print('Error creating notifications: $notificationError');
+        }
+      }
+    } catch (e) {
+      _showSnackBar('Failed to report hotspot: ${e.toString()}');
     }
-
-  } catch (e) {
-    _showSnackBar('Failed to report hotspot: ${e.toString()}');
   }
-}
 
 
 
@@ -2754,8 +3810,7 @@ void _checkRealtimeConnection() {
   }
 }
 
-// 5. Update _saveHotspot with similar fallback mechanism
-Future<void> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
+Future<int?> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
   try {
     final insertData = {
       'type_id': int.parse(typeId),
@@ -2763,7 +3818,7 @@ Future<void> _saveHotspot(String typeId, String description, LatLng position, Da
       'location': 'POINT(${position.longitude} ${position.latitude})',
       'time': dateTime.toIso8601String(),
       'created_by': _userProfile?['id'],
-      'status': 'approved', // Admin creates are auto-approved
+      'status': 'approved',
       'active_status': 'active',
     };
 
@@ -2807,9 +3862,12 @@ Future<void> _saveHotspot(String typeId, String description, LatLng position, Da
     if (mounted) {
       _showSnackBar('Crime record saved');
     }
+    
+    return response['id'] as int?;
   } catch (e) {
     _showSnackBar('Failed to save hotspot: ${e.toString()}');
     print('Error details: $e');
+    return null;
   }
 }
 
@@ -3118,12 +4176,202 @@ Widget _buildFloatingActionButtons() {
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.end,
     children: [
+      // Map Type Selection Container - MINIMIZED
+      if (_showMapTypeSelector) ...[
+        Container(
+          margin: const EdgeInsets.only(bottom: 7), // Reduced from 8
+          padding: const EdgeInsets.all(7), // Reduced from 8
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10), // Reduced from 12
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08), // Reduced opacity
+                blurRadius: 4, // Reduced from 8
+                offset: const Offset(0, 1), // Reduced from (0, 2)
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: MapType.values.map((type) {
+              final isSelected = type == _currentMapType;
+              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _currentMapType = type;
+                    _showMapTypeSelector = false;
+                  });
+                },
+                child: Container(
+                  margin: const EdgeInsets.symmetric(vertical: 1), // Reduced from 2
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Reduced padding
+                  decoration: BoxDecoration(
+                    color: isSelected ? Colors.blue.shade100 : Colors.transparent,
+                    borderRadius: BorderRadius.circular(7), // Reduced from 8
+                    border: isSelected 
+                      ? Border.all(color: Colors.blue.shade300, width: 1)
+                      : null,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _getMapTypeIcon(type),
+                        size: 17, // Reduced from 18
+                        color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
+                      ),
+                      const SizedBox(width: 7), // Reduced from 8
+                      Text(
+                        _getMapTypeName(type),
+                        style: TextStyle(
+                          fontSize: 11, // Reduced from 12
+                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                          color: isSelected ? Colors.blue.shade700 : Colors.grey.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+      
+      // Map Type Toggle Button
+      Tooltip(
+        message: 'Select Map Type',
+        child: FloatingActionButton(
+          heroTag: 'mapType',
+          onPressed: () {
+            setState(() {
+              _showMapTypeSelector = !_showMapTypeSelector;
+            });
+          },
+          backgroundColor: _showMapTypeSelector ? Colors.blue.shade600 : Colors.white,
+          foregroundColor: _showMapTypeSelector ? Colors.white : Colors.grey.shade700,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          mini: true,
+          child: Icon(_getMapTypeIcon(_currentMapType)),
+        ),
+      ),
+      const SizedBox(height: 4),
+      
+      // Compass button with modern slide feedback
+      Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Sliding feedback widget
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutBack,
+            right: _showRotationFeedback ? 48 : 20, // Slide from right to left
+            top: 8,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 200),
+              opacity: _showRotationFeedback ? 1.0 : 0.0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _isRotationLocked 
+                    ? Colors.orange.shade600.withOpacity(0.95)
+                    : Colors.green.shade600.withOpacity(0.95),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 4,
+                      offset: const Offset(-1, 1),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _isRotationLocked ? Icons.lock : Icons.lock_open,
+                      size: 12,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _isRotationLocked ? 'Locked' : 'Unlocked',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          
+          // Compass button
+          Tooltip(
+            message: _isRotationLocked ? 'Unlock Rotation (Double-tap)' : 'Reset Rotation (Double-tap to lock)',
+            child: FloatingActionButton(
+              heroTag: 'compass',
+              onPressed: () {
+                // Single tap resets rotation (only when not locked)
+                if (!_isRotationLocked) {
+                  _mapController.rotate(0);
+                  setState(() {
+                    _currentMapRotation = 0.0;
+                  });
+                }
+                // Close map type selector when other buttons are pressed
+                if (_showMapTypeSelector) {
+                  setState(() {
+                    _showMapTypeSelector = false;
+                  });
+                }
+              },
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              mini: true,
+              child: GestureDetector(
+                onDoubleTap: () {
+                  // Double tap toggles rotation lock
+                  setState(() {
+                    _isRotationLocked = !_isRotationLocked;
+                    _showRotationFeedback = true;
+                  });
+                  
+                  // Hide feedback after delay
+                  Timer(const Duration(milliseconds: 1500), () {
+                    if (mounted) {
+                      setState(() {
+                        _showRotationFeedback = false;
+                      });
+                    }
+                  });
+                },
+                child: _buildCompass(),
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 4),
+      
       // Filter Crimes button (always visible)
       Tooltip(
         message: 'Filter Hotspots',
         child: FloatingActionButton(
           heroTag: 'filterHotspots',
-          onPressed: _showHotspotFilterDialog,
+          onPressed: () {
+            _showHotspotFilterDialog();
+            // Close map type selector when other buttons are pressed
+            if (_showMapTypeSelector) {
+              setState(() {
+                _showMapTypeSelector = false;
+              });
+            }
+          },
           backgroundColor: const Color.fromARGB(255, 107, 109, 109),
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -3139,7 +4387,15 @@ Widget _buildFloatingActionButtons() {
           message: 'Clear Route',
           child: FloatingActionButton(
             heroTag: 'clearRoute',
-            onPressed: _clearDirections,
+            onPressed: () {
+              _clearDirections();
+              // Close map type selector when other buttons are pressed
+              if (_showMapTypeSelector) {
+                setState(() {
+                  _showMapTypeSelector = false;
+                });
+              }
+            },
             backgroundColor: Colors.red.shade600,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             mini: true,
@@ -3159,6 +4415,10 @@ Widget _buildFloatingActionButtons() {
           onPressed: () async {
             setState(() {
               _locationButtonPressed = true;
+              // Close map type selector when other buttons are pressed
+              if (_showMapTypeSelector) {
+                _showMapTypeSelector = false;
+              }
             });
             await _getCurrentLocation();
             // Reset the state after a short delay
@@ -3183,6 +4443,96 @@ Widget _buildFloatingActionButtons() {
   );
 }
 
+// Helper method to get readable names for map types
+String _getMapTypeName(MapType type) {
+  switch (type) {
+    case MapType.standard:
+      return 'Standard';
+    case MapType.satellite:
+      return 'Satellite';
+    case MapType.terrain:
+      return 'Terrain';
+    case MapType.topographic:
+      return 'Topographic';
+    case MapType.dark:
+      return 'Dark Mode';
+  }
+}
+
+Widget _buildCompass() {
+  return Container(
+    width: 40,
+    height: 40,
+    decoration: BoxDecoration(
+      color: Colors.white,
+      shape: BoxShape.circle,
+      // Add a visual indicator when rotation is locked
+      border: _isRotationLocked 
+        ? Border.all(color: Colors.red, width: 2)
+        : null,
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.2),
+          blurRadius: 4,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Stack(
+      alignment: Alignment.center,
+      children: [
+        // Rotating compass elements (only when not locked)
+        Transform.rotate(
+          angle: _isRotationLocked ? 0 : -_currentMapRotation * (3.14159 / 180),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Compass background
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.grey.shade300, width: 1),
+                ),
+              ),
+              // North arrow - change color when locked
+              Icon(
+                Icons.navigation,
+                color: _isRotationLocked ? Colors.red.shade700 : Colors.red,
+                size: 20,
+              ),
+              // Small 'N' indicator
+              Positioned(
+                top: 0,
+                child: Text(
+                  'N',
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    color: _isRotationLocked ? Colors.red.shade700 : Colors.red,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Lock indicator when rotation is locked (stays fixed)
+       if (_isRotationLocked)
+          Positioned(
+            bottom: 2,
+            child: Icon(
+              Icons.lock,
+              color: Colors.red.shade700,
+              size: 10,
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+
 
 Widget _buildNotificationsScreen() {
   return Scaffold(
@@ -3194,7 +4544,7 @@ Widget _buildNotificationsScreen() {
             onPressed: _markAllAsRead,
             child: const Text(
               'Mark all as read',
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: Colors.black),
             ),
           ),
       ],
@@ -3311,7 +4661,41 @@ void _handleNotificationTap(Map<String, dynamic> notification) {
 
   
 
+// Helper method to get max zoom for each map type
+int _getMaxZoomForMapType(MapType type) {
+  switch (type) {
+    case MapType.standard:
+      return 18;
+    case MapType.terrain:
+      return 17; // OpenTopoMap has limited zoom
+    case MapType.satellite:
+      return 18; // Esri imagery
+    case MapType.topographic:
+      return 17; // Esri topo
+    case MapType.dark:
+      return 18; // CartoDB
+  }
+}
+
+// Helper method to get icon for each map type
+IconData _getMapTypeIcon(MapType type) {
+  switch (type) {
+    case MapType.standard:
+      return Icons.map;
+    case MapType.satellite:
+      return Icons.satellite_alt;
+    case MapType.terrain:
+      return Icons.terrain;
+    case MapType.topographic:
+      return Icons.landscape;
+    case MapType.dark:
+      return Icons.dark_mode;
+  }
+}
+
 Widget _buildMap() {
+  final currentConfig = mapConfigurations[_currentMapType]!;
+  
   return Stack(
     children: [
       // Main Map with enhanced styling
@@ -3328,13 +4712,13 @@ Widget _buildMap() {
           ],
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(16),
+   
           child: FlutterMap(
             mapController: _mapController,
             options: MapOptions(
               initialCenter: _currentPosition ?? const LatLng(14.5995, 120.9842),
               initialZoom: 15.0,
-              maxZoom: 19.0,
+              maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
               minZoom: 3.0,
               onTap: (tapPosition, latLng) {
                 FocusScope.of(context).unfocus();
@@ -3344,21 +4728,37 @@ Widget _buildMap() {
                 _showLocationOptions(latLng);
               },
               onMapEvent: (MapEvent mapEvent) {
-                if (mapEvent is MapEventMove && mapEvent.camera.zoom > 19) {
-                  _mapController.move(mapEvent.camera.center, 19.0);
+                final maxZoom = _getMaxZoomForMapType(_currentMapType);
+                if (mapEvent is MapEventMove && mapEvent.camera.zoom > maxZoom) {
+                  _mapController.move(mapEvent.camera.center, maxZoom.toDouble());
+                }
+                // Track rotation changes
+                if (mapEvent is MapEventRotate || mapEvent is MapEventMove) {
+                  setState(() {
+                    _currentMapRotation = mapEvent.camera.rotation;
+                  });
                 }
               },
-              interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              interactionOptions: InteractionOptions(
+                // Conditionally enable/disable rotation based on lock state
+                flags: _isRotationLocked 
+                  ? InteractiveFlag.all & ~InteractiveFlag.rotate  // All flags except rotate
+                  : InteractiveFlag.all,  // All flags including rotate
               ),
             ),
             children: [
-              // Enhanced Tile Layer
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              // Enhanced Tile Layer with dynamic source
+            TileLayer(
+                urlTemplate: currentConfig['urlTemplate'],
                 userAgentPackageName: 'com.example.zecure',
-                maxZoom: 19,
-                fallbackUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(), // Convert int to double
+                fallbackUrl: currentConfig['fallbackUrl'],
+                // Add subdomains for CartoDB
+                subdomains: _currentMapType == MapType.dark ? ['a', 'b', 'c', 'd'] : const [],
+                // Handle tile loading errors
+                errorTileCallback: (tile, error, stackTrace) {
+                  print('Tile loading error: $error');
+                },
               ),
 
               // UPDATED: Only show route polylines, not tracking polylines
@@ -3583,8 +4983,6 @@ Widget _buildMap() {
         ),
       ),
 
-    
-
       // Cool overlay effects for map corners
       Positioned(
         top: 0,
@@ -3692,7 +5090,7 @@ Widget _buildEnhancedDestinationMarker() {
 
 
 
-// Helper method to get heading stream (you'll need to implement this)
+
 
 
 
@@ -3705,6 +5103,14 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
 
   String address = "Loading address...";
   String fullLocation = coordinates;
+
+  // Fetch hotspot photo
+  Map<String, dynamic>? hotspotPhoto;
+  try {
+    hotspotPhoto = await PhotoService.getHotspotPhoto(hotspot['id']);
+  } catch (e) {
+    print('Error fetching hotspot photo: $e');
+  }
 
   try {
     final response = await http.get(
@@ -3730,204 +5136,1097 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
   final crimeType = hotspot['crime_type'];
   final category = crimeType['category'] ?? 'Unknown Category';
 
-  // Desktop/Web View
-  if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black.withOpacity(0.3),
-      builder: (context) => Center(
+
+// DESKTOP VIEW FOR HOTSPOT DETAILS
+if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
+  showDialog(
+    context: context,
+    barrierColor: Colors.black.withOpacity(0.3),
+    builder: (context) => Dialog(
+      backgroundColor: Colors.transparent,
+      child: Center(
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: HotspotDetailsDesktop(
-            hotspot: hotspot,
-            userProfile: _userProfile,
-            isAdmin: _isAdmin,
-            onReview: _reviewHotspot,
-            onReject: _showRejectDialog,
-            onDelete: _deleteHotspot,
-            onEdit: _showEditHotspotForm,
+          child: Material(
+            child: IntrinsicHeight( // This makes container size fit content
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.8,
+                constraints: BoxConstraints(
+                  maxWidth: 600,
+                  maxHeight: MediaQuery.of(context).size.height * 0.9,
+                ),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.all(Radius.circular(12)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min, // Important for proper sizing
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(12),
+                          topRight: Radius.circular(12),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Crime Report Details',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(context),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    // Content - Flexible to fit content
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Photo section - Now clickable
+                            if (hotspotPhoto != null) ...[
+                              GestureDetector(
+                                onTap: () => _showFullScreenImage(hotspotPhoto?['photo_url']),
+                                child: Container(
+                                  height: 200,
+                                  width: double.infinity,
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.grey.shade300),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Stack(
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.network(
+                                          hotspotPhoto['photo_url'],
+                                          fit: BoxFit.cover,
+                                          width: double.infinity,
+                                          height: double.infinity,
+                                          loadingBuilder: (context, child, loadingProgress) {
+                                            if (loadingProgress == null) return child;
+                                            return const Center(child: CircularProgressIndicator());
+                                          },
+                                          errorBuilder: (context, error, stackTrace) {
+                                            return const Center(
+                                              child: Column(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(Icons.error, color: Colors.red),
+                                                  Text('Failed to load image'),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                      // Overlay to indicate clickability
+                                      Positioned(
+                                        top: 8,
+                                        right: 8,
+                                        child: Container(
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black.withOpacity(0.6),
+                                            borderRadius: BorderRadius.circular(20),
+                                          ),
+                                          child: const Icon(
+                                            Icons.zoom_in,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            
+                            // Crime details using fixed structure
+                            SizedBox(
+                              width: double.infinity,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Type with status
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(
+                                          width: 80,
+                                          child: Text('Type:', 
+                                            style: TextStyle(fontWeight: FontWeight.bold)),
+                                        ),
+                                        Expanded(
+                                          child: Row(
+                                            children: [
+                                              Text('${crimeType['name']}'),
+                                              const SizedBox(width: 12),
+                                              _buildStatusWidget(activeStatus, status),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  
+                                  // Category
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(
+                                          width: 80,
+                                          child: Text('Category:', 
+                                            style: TextStyle(fontWeight: FontWeight.bold)),
+                                        ),
+                                        Expanded(child: Text(category)),
+                                      ],
+                                    ),
+                                  ),
+                                  
+                                  // Level
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(
+                                          width: 80,
+                                          child: Text('Level:', 
+                                            style: TextStyle(fontWeight: FontWeight.bold)),
+                                        ),
+                                        Expanded(child: Text('${crimeType['level']}')),
+                                      ],
+                                    ),
+                                  ),
+                                  
+                                  // Description
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(
+                                          width: 80,
+                                          child: Text('Description:', 
+                                            style: TextStyle(fontWeight: FontWeight.bold)),
+                                        ),
+                                        Expanded(
+                                          child: Text(
+                                            (hotspot['description'] == null || hotspot['description'].toString().trim().isEmpty) 
+                                                ? 'No description' 
+                                                : hotspot['description'],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  
+                                  // Location with copy button
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(
+                                          width: 80,
+                                          child: Text('Location:', 
+                                            style: TextStyle(fontWeight: FontWeight.bold)),
+                                        ),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(address),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                coordinates,
+                                                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.copy),
+                                          onPressed: () {
+                                            Clipboard.setData(ClipboardData(text: fullLocation));
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text('Location copied to clipboard')),
+                                            );
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  
+                                  // Time
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(
+                                          width: 80,
+                                          child: Text('Time:', 
+                                            style: TextStyle(fontWeight: FontWeight.bold)),
+                                        ),
+                                        Expanded(child: Text(formattedTime)),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            
+                            // Show rejection reason for rejected reports
+                            if (status == 'rejected' && hotspot['rejection_reason'] != null)
+                              Container(
+                                margin: const EdgeInsets.only(top: 16, bottom: 16),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.red.shade200),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(Icons.cancel, color: Colors.red.shade600, size: 20),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'Rejection Reason:',
+                                          style: TextStyle(
+                                            color: Colors.red.shade700,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      hotspot['rejection_reason'].toString().trim().isEmpty 
+                                          ? 'No reason provided' 
+                                          : hotspot['rejection_reason'],
+                                      style: TextStyle(
+                                        color: Colors.red.shade700,
+                                        fontSize: 14,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            
+                            // Show approval note for approved reports by users
+                            if (status == 'approved' && !_isAdmin && isOwner)
+                              Container(
+                                margin: const EdgeInsets.only(top: 16, bottom: 16),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.green.shade200),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Your post has been approved and is being managed by the admin.',
+                                        style: TextStyle(
+                                          color: Colors.green.shade700,
+                                          fontSize: 14,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            
+                           // Action buttons - Now better designed and centered
+                            const SizedBox(height: 20),
+                            _buildDesktopActionButtons(hotspot, status, isOwner),
+                            const SizedBox(height: 16), // Small padding at bottom
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),
-    );
-    return;
-  }
+    ),
+  );
+  return;
+}
 
-  // Mobile View (Bottom Sheet) - Updated to show active status for everyone
-  showModalBottomSheet(
+
+// MOBILE VIEW FOR HOTSPOT DETAILS
+showModalBottomSheet(
+  context: context,
+  isScrollControlled: true,
+  enableDrag: true,
+  isDismissible: true,
+  builder: (context) => GestureDetector(
+    onTap: () {}, // Prevents dismissal when tapping content
+    child: Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.95,
+        minHeight: MediaQuery.of(context).size.height * 0.2,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min, // This makes it auto-size to content
+        children: [
+          // Drag handle at the top
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey[400],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          
+          // Content wrapper that auto-expands or scrolls
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Photo section for mobile - Now clickable
+                  if (hotspotPhoto != null) ...[
+                    GestureDetector(
+                      onTap: () => _showFullScreenImage(hotspotPhoto?['photo_url']),
+                      child: Container(
+                        height: 200,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(
+                                hotspotPhoto['photo_url'],
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                height: double.infinity,
+                                loadingBuilder: (context, child, loadingProgress) {
+                                  if (loadingProgress == null) return child;
+                                  return const Center(child: CircularProgressIndicator());
+                                },
+                                errorBuilder: (context, error, stackTrace) {
+                                  return const Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.error, color: Colors.red),
+                                        Text('Failed to load image'),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            // Overlay to indicate clickability
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.6),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: const Icon(
+                                  Icons.zoom_in,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  
+                  // Updated mobile view with status next to type
+                  ListTile(
+                    title: Row(
+                      children: [
+                        Text('Type: ${crimeType['name']}'),
+                        const SizedBox(width: 8),
+                        _buildStatusWidget(activeStatus, status),
+                      ],
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Category: $category'),
+                        Text('Level: ${crimeType['level']}'),
+                      ],
+                    ),
+                  ),
+                  ListTile(
+                    title: const Text('Description:'),
+                    subtitle: Text(
+                      (hotspot['description'] == null || hotspot['description'].toString().trim().isEmpty) 
+                          ? 'No description' 
+                          : hotspot['description'],
+                    ),
+                  ),
+                  ListTile(
+                    title: const Text('Location:'),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(address),
+                        const SizedBox(height: 4),
+                        Text(
+                          coordinates,
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                      ],
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.copy),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: fullLocation));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Location copied to clipboard')),
+                        );
+                      },
+                    ),
+                  ),
+                  ListTile(
+                    title: const Text('Time:'),
+                    subtitle: Text(formattedTime),
+                  ),
+
+                  // Show rejection reason for rejected reports
+                  if (status == 'rejected' && hotspot['rejection_reason'] != null)
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red.shade200),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.cancel, color: Colors.red.shade600, size: 20),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Rejection Reason:',
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            hotspot['rejection_reason'].toString().trim().isEmpty 
+                                ? 'No reason provided' 
+                                : hotspot['rejection_reason'],
+                            style: TextStyle(
+                              color: Colors.red.shade700,
+                              fontSize: 14,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  
+                  // Show approval note for approved reports by users (visible only to the report owner, not admin)
+                  if (status == 'approved' && !_isAdmin && isOwner)
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Your post has been approved and is being managed by the admin.',
+                              style: TextStyle(
+                                color: Colors.green.shade700,
+                                fontSize: 14,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Mobile action buttons
+                  if (_isAdmin && status == 'pending')
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _reviewHotspot(hotspot['id'], true),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.green,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Approve'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _showRejectDialog(hotspot['id']),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.blueGrey,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Reject'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _deleteHotspot(hotspot['id']),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Delete'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (!_isAdmin && status == 'pending' && isOwner)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                _showEditHotspotForm(hotspot);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: const Color.fromARGB(255, 19, 111, 187),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Edit'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _deleteHotspot(hotspot['id']),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Delete'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (status == 'rejected')
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          if (isOwner)
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () => _deleteHotspot(hotspot['id']),
+                                style: ElevatedButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                child: const Text('Delete'),
+                              ),
+                            ),
+                          if (_isAdmin)
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () => _deleteHotspot(hotspot['id']),
+                                style: ElevatedButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                child: const Text('Delete'),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  if (_isAdmin && status == 'approved')
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                _showEditHotspotForm(hotspot);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: const Color.fromARGB(255, 19, 111, 187),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Edit'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _deleteHotspot(hotspot['id']),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Delete'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  ),
+);
+}
+
+// FULL SCREEN PHOTO VIEWER FOR HOTSPOT DETAILS
+void _showFullScreenImage(String imageUrl) {
+  showDialog(
     context: context,
-    isScrollControlled: true,
-    builder: (context) => SingleChildScrollView(
-      child: Container(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    barrierColor: Colors.black,
+    builder: (context) => Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Stack(
           children: [
-            ListTile(
-              title: Text('Type: ${crimeType['name']}'),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Category: $category'),
-                  Text('Level: ${crimeType['level']}'),
-                ],
-              ),
-            ),
-            ListTile(
-              title: const Text('Description:'),
-              subtitle: Text(
-                (hotspot['description'] == null || hotspot['description'].toString().trim().isEmpty) 
-                    ? 'No description' 
-                    : hotspot['description'],
-              ),
-            ),
-            ListTile(
-              title: const Text('Location:'),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(address),
-                  const SizedBox(height: 4),
-                  Text(
-                    coordinates,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                ],
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.copy),
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: fullLocation));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Location copied to clipboard')),
-                  );
-                },
-              ),
-            ),
-            ListTile(
-              title: const Text('Time:'),
-              subtitle: Text(formattedTime),
-            ),
-            // Show active status for everyone (not just admins)
-            ListTile(
-              title: Text(
-                'Status: ${activeStatus.toUpperCase()}',
-                style: TextStyle(
-                  color: activeStatus == 'active' ? Colors.green : Colors.grey,
-                  fontWeight: FontWeight.bold,
+            Center(
+              child: InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.contain,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return const Center(
+                      child: CircularProgressIndicator(color: Colors.white),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.error, color: Colors.white, size: 50),
+                          Text('Failed to load image', style: TextStyle(color: Colors.white)),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ),
-              trailing: activeStatus == 'active' 
-                ? const Icon(Icons.check_circle, color: Colors.green)
-                : const Icon(Icons.cancel, color: Colors.grey),
             ),
-            if (status != 'approved')
-              ListTile(
-                title: Text(
-                  'Review Status: ${status.toUpperCase()}',
+            Positioned(
+              top: 16,
+              right: 16,
+              child: IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.black.withOpacity(0.5),
+                ),
+              ),
+            ),
+            // Instructions for zoom
+            Positioned(
+              bottom: 30,
+              left: 25,
+              right: 25,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text(
+                   'Pinch with two fingers to zoom\nDrag to move around',
                   style: TextStyle(
-                    color: status == 'pending' ? Colors.orange : Colors.red,
-                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    fontSize: 14,
                   ),
-                ),
-                subtitle: status == 'rejected' && hotspot['rejection_reason'] != null
-                    ? Text('Reason: ${hotspot['rejection_reason']}')
-                    : null,
-              ),
-            // ... rest of the existing action buttons remain the same ...
-            if (_isAdmin && status == 'pending')
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed: () => _reviewHotspot(hotspot['id'], true),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                      child: const Text('Approve'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _showRejectDialog(hotspot['id']),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
-                      child: const Text('Reject'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _deleteHotspot(hotspot['id']),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                      child: const Text('Delete'),
-                    ),
-                  ],
+                  textAlign: TextAlign.center,
                 ),
               ),
-            if (!_isAdmin && status == 'pending' && isOwner)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _showEditHotspotForm(hotspot);
-                      },
-                      child: const Text('Edit'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _deleteHotspot(hotspot['id']),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                      child: const Text('Delete'),
-                    ),
-                  ],
-                ),
-              ),
-            if (status == 'rejected')
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    if (isOwner)
-                      ElevatedButton(
-                        onPressed: () => _deleteHotspot(hotspot['id']),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                        child: const Text('Delete'),
-                      ),
-                    if (_isAdmin)
-                      ElevatedButton(
-                        onPressed: () => _deleteHotspot(hotspot['id']),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                        child: const Text('Delete'),
-                      ),
-                  ],
-                ),
-              ),
-            if (_isAdmin && status == 'approved')
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _showEditHotspotForm(hotspot);
-                      },
-                      child: const Text('Edit'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _deleteHotspot(hotspot['id']),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                      child: const Text('Delete'),
-                    ),
-                  ],
-                ),
-              ),
+            ),
           ],
         ),
       ),
     ),
   );
 }
+
+
+
+// New helper widget to build status with effects
+Widget _buildStatusWidget(String activeStatus, String status) {
+  Color statusColor;
+  String statusText;
+  bool shouldAnimate = false;
+
+  if (status == 'rejected') {
+    statusColor = Colors.red;
+    statusText = 'REJECTED';
+  } else if (status == 'pending') {
+    statusColor = Colors.orange;
+    statusText = 'PENDING';
+    shouldAnimate = true;
+  } else if (activeStatus == 'active') {
+    statusColor = Colors.green;
+    statusText = 'ACTIVE';
+    shouldAnimate = true;
+  } else if (activeStatus == 'inactive') {
+    statusColor = Colors.grey;
+    statusText = 'INACTIVE';
+  } else {
+    statusColor = Colors.grey;
+    statusText = activeStatus.toUpperCase();
+  }
+
+  Widget statusWidget = Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      if (shouldAnimate)
+        TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 1000),
+          tween: Tween(begin: 0.3, end: 1.0),
+          builder: (context, value, child) {
+            return AnimatedOpacity(
+              opacity: value,
+              duration: const Duration(milliseconds: 500),
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: statusColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            );
+          },
+          onEnd: () {
+            // Animation repeats automatically
+          },
+        ),
+      if (shouldAnimate) const SizedBox(width: 6),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: statusColor.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: statusColor, width: 1),
+        ),
+        child: Text(
+          statusText,
+          style: TextStyle(
+            color: statusColor,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    ],
+  );
+
+  return statusWidget;
+}
+
+
+//DESKTOP ACTION BUTTONS FOR HOTSPOT DETAILS - MODERN DESIGN
+Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, bool isOwner) {
+  final buttons = <Widget>[];
+
+  if (_isAdmin && status == 'pending') {
+    buttons.addAll([
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: () => _reviewHotspot(hotspot['id'], true),
+          icon: const Icon(Icons.check_circle, size: 18),
+          label: const Text('Approve', style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade100,
+            foregroundColor: Colors.green.shade700,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade300, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          ),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: () => _showRejectDialog(hotspot['id']),
+          icon: const Icon(Icons.cancel, size: 18),
+          label: const Text('Reject', style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade100,
+            foregroundColor: Colors.blueGrey,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade300, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          ),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: () => _deleteHotspot(hotspot['id']),
+          icon: const Icon(Icons.delete, size: 18),
+          label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade100,
+            foregroundColor: Colors.red.shade700,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade300, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          ),
+        ),
+      ),
+    ]);
+  } else if (!_isAdmin && status == 'pending' && isOwner) {
+    buttons.addAll([
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.pop(context);
+            _showEditHotspotForm(hotspot);
+          },
+          icon: const Icon(Icons.edit, size: 18),
+          label: const Text('Edit', style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade100,
+            foregroundColor: Colors.blue.shade700,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade300, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          ),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: () => _deleteHotspot(hotspot['id']),
+          icon: const Icon(Icons.delete, size: 18),
+          label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade100,
+            foregroundColor: Colors.red.shade700,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade300, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          ),
+        ),
+      ),
+    ]);
+  } else if (status == 'rejected') {
+    if (isOwner || _isAdmin) {
+      buttons.add(
+        Center(
+          child: SizedBox(
+            width: 200,
+            child: ElevatedButton.icon(
+              onPressed: () => _deleteHotspot(hotspot['id']),
+              icon: const Icon(Icons.delete, size: 18),
+              label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w600)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey.shade100,
+                foregroundColor: Colors.red.shade700,
+                elevation: 0,
+                shadowColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.grey.shade300, width: 1),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+  } else if (_isAdmin && status == 'approved') {
+    buttons.addAll([
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.pop(context);
+            _showEditHotspotForm(hotspot);
+          },
+          icon: const Icon(Icons.edit, size: 18),
+          label: const Text('Edit', style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade100,
+            foregroundColor: Colors.blue.shade700,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade300, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          ),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: () => _deleteHotspot(hotspot['id']),
+          icon: const Icon(Icons.delete, size: 18),
+          label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade100,
+            foregroundColor: Colors.red.shade700,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade300, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  if (buttons.isEmpty) return const SizedBox.shrink();
+
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: buttons,
+  );
+}
+
+
+
+
+
 
 
 // Add these methods for admin review
@@ -4070,7 +6369,7 @@ Future<void> _deleteHotspot(int id) async {
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('Confirm Deletion'),
-      content: const Text('Are you sure you want to delete this hotspot?'),
+      content: const Text('Are you sure you want to delete this hotspot? This will also delete any associated photos.'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
@@ -4090,6 +6389,19 @@ Future<void> _deleteHotspot(int id) async {
   if (shouldDelete != true) return;
 
   try {
+    // Delete associated photo first
+    try {
+      final existingPhoto = await PhotoService.getHotspotPhoto(id);
+      if (existingPhoto != null) {
+        await PhotoService.deletePhoto(existingPhoto);
+        print('Deleted photo for hotspot $id');
+      }
+    } catch (e) {
+      print('Error deleting hotspot photo: $e');
+      // Continue with hotspot deletion even if photo deletion fails
+    }
+
+    // Delete the hotspot
     await Supabase.instance.client
         .from('hotspot')
         .delete()

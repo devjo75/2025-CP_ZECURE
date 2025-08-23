@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
 import 'package:zecure/services/auth_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/gestures.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -29,6 +30,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   String? _selectedGender;
   bool _isLoading = false;
   bool _obscurePassword = true;
+  bool _agreedToTerms = false;
   bool _obscureConfirmPassword = true;
 
   late AnimationController _fadeController;
@@ -96,82 +98,304 @@ class _RegisterScreenState extends State<RegisterScreen>
     }
   }
 
-  Future<void> _register() async {
-    if (!_formKey.currentState!.validate()) return;
+  void _showTermsAndConditions() {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext context) {
+      return Dialog(
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: MediaQuery.of(context).size.width > 600 ? 100 : 20,
+          vertical: 40,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Container(
+          constraints: const BoxConstraints(maxHeight: 600),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade600,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    topRight: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.security_rounded,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Terms and Conditions',
+                        style: GoogleFonts.poppins(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Content
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    '''Welcome to Zecure
 
-    setState(() => _isLoading = true);
-    try {
-      final authService = AuthService(Supabase.instance.client);
-      await authService.signUpWithEmail(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-        username: _usernameController.text.trim(),
-        firstName: _firstNameController.text.trim(),
-        lastName: _lastNameController.text.trim(),
-        middleName: _middleNameController.text.trim().isEmpty 
-            ? null 
-            : _middleNameController.text.trim(),
-        extName: _extNameController.text.trim().isEmpty 
-            ? null 
-            : _extNameController.text.trim(),
-        bday: _selectedDate,
-        gender: _selectedGender,
-        contactNumber: _contactNumberController.text.trim().isEmpty
-            ? null
-            : _contactNumberController.text.trim(),
+By creating an account and using Zecure, you agree to the following terms and conditions:
+
+1. SERVICE DESCRIPTION
+Zecure is an AI-powered crime monitoring platform designed to enhance public safety in Zamboanga City by:
+• Collecting and analyzing crime-related data from public sources
+• Identifying crime hotspots and patterns in real-time
+• Providing safety alerts and recommendations to users
+• Enabling community reporting of incidents and safe locations
+• Offering route recommendations based on safety data
+
+2. USER RESPONSIBILITIES
+You agree to:
+• Provide accurate and truthful information during registration
+• Use the platform responsibly and in accordance with local laws
+• Report incidents truthfully and in good faith
+• Respect the privacy and safety of other users
+• Not misuse the platform for illegal activities or false reporting
+
+3. DATA COLLECTION AND PRIVACY
+• We collect personal information necessary for account creation and service provision
+• Crime-related data is gathered from publicly available sources
+• Your location data may be used to provide relevant safety information
+• We implement security measures to protect your personal information
+• User-reported data may be shared with relevant authorities when necessary
+
+4. PLATFORM LIMITATIONS
+Please understand that Zecure:
+• Provides predictive analysis but cannot prevent crimes
+• Relies on publicly available data which may have limitations
+• Requires internet connectivity for full functionality
+• May not capture all criminal activities or safety concerns
+• Accuracy depends on data quality and user participation
+
+5. COMMUNITY PARTICIPATION
+By using Zecure, you may:
+• Report incidents and safety concerns
+• Mark and verify safe locations
+• Contribute to community safety awareness
+• Receive alerts about potential safety risks in your area
+
+6. COOPERATION WITH AUTHORITIES
+• Relevant information may be shared with law enforcement agencies
+• Users are encouraged to report serious crimes directly to police
+• The platform supplements but does not replace traditional emergency services
+
+7. LIABILITY AND DISCLAIMERS
+• Zecure is provided "as is" without warranties
+• We are not liable for decisions made based on platform information
+• Users are responsible for their own safety and security
+• Emergency situations should always be reported to proper authorities
+
+8. TERMS MODIFICATIONS
+We reserve the right to modify these terms. Users will be notified of significant changes and continued use implies acceptance.
+
+9. ACCOUNT TERMINATION
+We may suspend or terminate accounts that violate these terms or engage in harmful activities.
+
+10. CONTACT INFORMATION
+For questions about these terms or the platform, please contact our support team.
+
+By clicking "I Agree," you acknowledge that you have read, understood, and agree to be bound by these Terms and Conditions.''',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      height: 1.5,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+              ),
+              
+              // Footer buttons
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(20),
+                    bottomRight: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          side: BorderSide(color: Colors.grey.shade400),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'Cancel',
+                          style: GoogleFonts.poppins(
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          setState(() => _agreedToTerms = true);
+                          Navigator.of(context).pop();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue.shade600,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'I Agree',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       );
+    },
+  );
+}
 
-      if (mounted) {
-        _showSuccessSnackBar('Registration successful! Please login.');
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const LoginScreen()),
-        );
-      }
-    } on AuthException catch (error) {
-      _showErrorSnackBar(error.message);
-    } catch (error) {
-      _showErrorSnackBar('Registration failed. Please try again.');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+
+  Future<void> _register() async {
+  if (!_formKey.currentState!.validate()) return;
+  
+  if (!_agreedToTerms) {
+    _showErrorSnackBar('Please agree to the Terms and Conditions to continue');
+    return;
+  }
+
+  setState(() => _isLoading = true);
+  try {
+    final authService = AuthService(Supabase.instance.client);
+    await authService.signUpWithEmail(
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+      username: _usernameController.text.trim(),
+      firstName: _firstNameController.text.trim(),
+      lastName: _lastNameController.text.trim(),
+      middleName: _middleNameController.text.trim().isEmpty 
+          ? null 
+          : _middleNameController.text.trim(),
+      extName: _extNameController.text.trim().isEmpty 
+          ? null 
+          : _extNameController.text.trim(),
+      bday: _selectedDate,
+      gender: _selectedGender,
+      contactNumber: _contactNumberController.text.trim().isEmpty
+          ? null
+          : _contactNumberController.text.trim(),
+    );
+
+    if (mounted) {
+      _showSuccessSnackBar('Registration successful! Please login.');
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+      );
     }
+  } on AuthException catch (error) {
+    _showErrorSnackBar(error.message);
+  } catch (error) {
+    _showErrorSnackBar('Registration failed. Please try again.');
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
-  void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.error_outline, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(child: Text(message)),
-          ],
-        ),
-        backgroundColor: Colors.red.shade600,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
-  }
 
-  void _showSuccessSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle_outline, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(child: Text(message)),
-          ],
-        ),
-        backgroundColor: Colors.green.shade600,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
+void _showErrorSnackBar(String message) {
+  final bool isWeb = MediaQuery.of(context).size.width > 600;
+  final screenWidth = MediaQuery.of(context).size.width;
+  final double maxWidth = isWeb ? 550 : screenWidth * 0.92;
+  
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Row(
+        children: [
+          const Icon(Icons.error_outline, color: Colors.white),
+          const SizedBox(width: 12),
+          Expanded(child: Text(message)),
+        ],
       ),
-    );
-  }
+      backgroundColor: Colors.red.shade600,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: EdgeInsets.only(
+        left: isWeb ? (screenWidth - maxWidth) / 2 : 16,
+        right: isWeb ? (screenWidth - maxWidth) / 2 : 16,
+        bottom: 16,
+      ),
+    ),
+  );
+}
+
+void _showSuccessSnackBar(String message) {
+  final bool isWeb = MediaQuery.of(context).size.width > 600;
+  final screenWidth = MediaQuery.of(context).size.width;
+  final double maxWidth = isWeb ? 550 : screenWidth * 0.92;
+  
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Row(
+        children: [
+          const Icon(Icons.check_circle_outline, color: Colors.white),
+          const SizedBox(width: 12),
+          Expanded(child: Text(message)),
+        ],
+      ),
+      backgroundColor: Colors.green.shade600,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: EdgeInsets.only(
+        left: isWeb ? (screenWidth - maxWidth) / 2 : 16,
+        right: isWeb ? (screenWidth - maxWidth) / 2 : 16,
+        bottom: 16,
+      ),
+    ),
+  );
+}
 
   @override
   void dispose() {
@@ -375,6 +599,52 @@ class _RegisterScreenState extends State<RegisterScreen>
       ),
     );
   }
+
+  Widget _buildTermsCheckbox() {
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Checkbox(
+        value: _agreedToTerms,
+        onChanged: (value) => setState(() => _agreedToTerms = value ?? false),
+        activeColor: Colors.blue.shade600,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+        ),
+      ),
+      Expanded(
+        child: GestureDetector(
+          onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: RichText(
+              text: TextSpan(
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  color: Colors.grey.shade600,
+                ),
+                children: [
+                  const TextSpan(text: 'I agree to the '),
+                  TextSpan(
+                    text: 'Terms and Conditions',
+                    style: GoogleFonts.poppins(
+                      color: Colors.blue.shade600,
+                      fontWeight: FontWeight.w500,
+                      decoration: TextDecoration.underline,
+                    ),
+                    recognizer: TapGestureRecognizer()
+                      ..onTap = _showTermsAndConditions,
+                  ),
+                  const TextSpan(text: ' of Zecure'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
 
   Widget _buildHeader(bool isWeb) {
     return Column(
@@ -729,6 +999,9 @@ class _RegisterScreenState extends State<RegisterScreen>
                 return null;
               },
             ),
+
+            const SizedBox(height: 20),
+            _buildTermsCheckbox(),
             
             const SizedBox(height: 28),
             

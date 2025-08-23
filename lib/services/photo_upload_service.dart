@@ -1,249 +1,176 @@
-import 'dart:io';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:path/path.dart' as path;
+import 'package:mime/mime.dart';
 
-class PhotoUploadService {
-  static const String bucketName = 'hotspot_photos';
-  final SupabaseClient _supabase = Supabase.instance.client;
-  final ImagePicker _picker = ImagePicker();
-
-  /// Pick image from gallery or camera
-  Future<XFile?> pickImage({required ImageSource source}) async {
+class PhotoService {
+  static const String bucketName = 'hotspot-photos';
+  
+  static Future<XFile?> pickImage() async {
+    final ImagePicker picker = ImagePicker();
+    
     try {
-      final XFile? image = await _picker.pickImage(
-        source: source,
-        maxWidth: 1920,
-        maxHeight: 1080,
+      final XFile? image = await picker.pickImage(
+        source: ImageSource.camera,
         imageQuality: 85,
       );
+      
       return image;
     } catch (e) {
-      throw Exception('Failed to pick image: ${e.toString()}');
+      print('Error picking image: $e');
+      return null;
     }
   }
-
-  /// Show image source selection dialog
-  Future<XFile?> showImageSourceDialog(BuildContext context) async {
-    return await showDialog<XFile?>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Select Image Source'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.camera_alt),
-                title: const Text('Camera'),
-                onTap: () async {
-                  Navigator.pop(context);
-                  final image = await pickImage(source: ImageSource.camera);
-                  if (context.mounted) {
-                    Navigator.pop(context, image);
-                  }
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library),
-                title: const Text('Gallery'),
-                onTap: () async {
-                  Navigator.pop(context);
-                  final image = await pickImage(source: ImageSource.gallery);
-                  if (context.mounted) {
-                    Navigator.pop(context, image);
-                  }
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// Upload image to Supabase Storage
-  Future<String> uploadImage({
-    required XFile imageFile,
-    required String userId,
-    String? hotspotId,
-  }) async {
+  
+  static Future<XFile?> pickImageFromGallery() async {
+    final ImagePicker picker = ImagePicker();
+    
     try {
-      // Generate unique filename
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final extension = path.extension(imageFile.name);
-      final fileName = hotspotId != null 
-          ? 'hotspot_${hotspotId}_$timestamp$extension'
-          : 'temp_${userId}_$timestamp$extension';
-
-      // Get file data
-      Uint8List fileBytes;
-      if (kIsWeb) {
-        fileBytes = await imageFile.readAsBytes();
-      } else {
-        final file = File(imageFile.path);
-        fileBytes = await file.readAsBytes();
-      }
-
-      // Upload to Supabase Storage
-      final _ = await _supabase.storage
-          .from(bucketName)
-          .uploadBinary(
-            fileName,
-            fileBytes,
-            fileOptions: const FileOptions(
-              cacheControl: '3600',
-              upsert: false,
-            ),
-          );
-
-      // Get public URL
-      final publicUrl = _supabase.storage
-          .from(bucketName)
-          .getPublicUrl(fileName);
-
-      return publicUrl;
-    } on StorageException catch (e) {
-      throw Exception('Storage error: ${e.message}');
+      final XFile? image = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      
+      return image;
     } catch (e) {
-      throw Exception('Failed to upload image: ${e.toString()}');
+      print('Error picking image from gallery: $e');
+      return null;
     }
   }
-
-  /// Save photo metadata to database
-  Future<String> savePhotoToDatabase({
+  
+  static Future<Map<String, dynamic>?> uploadPhoto({
+    required XFile imageFile,
     required int hotspotId,
-    required String photoUrl,
     required String userId,
   }) async {
+    String? uploadedFilePath;
+    
     try {
-      final response = await _supabase
+      final bytes = await imageFile.readAsBytes();
+      final fileExtension = path.extension(imageFile.name).toLowerCase();
+      final mimeType = lookupMimeType(imageFile.path) ?? 'image/jpeg';
+      
+      // Generate unique filename
+      final fileName = 'hotspot_${hotspotId}_${DateTime.now().millisecondsSinceEpoch}$fileExtension';
+      final filePath = '$userId/$fileName';
+      uploadedFilePath = filePath;
+      
+      // Upload to Supabase Storage first
+      final uploadResponse = await Supabase.instance.client.storage
+          .from(bucketName)
+          .uploadBinary(filePath, bytes);
+      
+      if (uploadResponse.isEmpty) {
+        throw Exception('Failed to upload image to storage');
+      }
+      
+      print('File uploaded successfully to storage: $filePath');
+      
+      // Get public URL
+      final publicUrl = Supabase.instance.client.storage
+          .from(bucketName)
+          .getPublicUrl(filePath);
+      
+      print('Generated public URL: $publicUrl');
+      
+      // Save photo record to database
+      final photoRecord = await Supabase.instance.client
           .from('hotspot_photos')
           .insert({
             'hotspot_id': hotspotId,
-            'photo_url': photoUrl,
-            'uploaded_by': userId,
+            'photo_url': publicUrl,
+            'photo_path': filePath,
+            'file_name': fileName,
+            'file_size': bytes.length,
+            'mime_type': mimeType,
+            'created_by': userId,
           })
-          .select('id')
+          .select()
           .single();
-
-      return response['id'];
-    } on PostgrestException catch (e) {
-      throw Exception('Database error: ${e.message}');
+      
+      print('Photo record saved to database: ${photoRecord['id']}');
+      
+      return photoRecord;
     } catch (e) {
-      throw Exception('Failed to save photo metadata: ${e.toString()}');
+      print('Error uploading photo: $e');
+      
+      // If database insert failed but file was uploaded, clean up the file
+      if (uploadedFilePath != null && e.toString().contains('hotspot_photos')) {
+        try {
+          await Supabase.instance.client.storage
+              .from(bucketName)
+              .remove([uploadedFilePath]);
+          print('Cleaned up uploaded file after database error');
+        } catch (cleanupError) {
+          print('Failed to clean up file: $cleanupError');
+        }
+      }
+      
+      throw Exception('Failed to upload photo: $e');
     }
   }
-
-  /// Complete photo upload process (upload + save metadata)
-  Future<String> uploadAndSavePhoto({
-    required XFile imageFile,
-    required int hotspotId,
+  
+  static Future<void> deletePhoto(Map<String, dynamic> photoRecord) async {
+    try {
+      final photoPath = photoRecord['photo_path'];
+      
+      // Delete from storage
+      await Supabase.instance.client.storage
+          .from(bucketName)
+          .remove([photoPath]);
+      
+      // Delete from database
+      await Supabase.instance.client
+          .from('hotspot_photos')
+          .delete()
+          .eq('id', photoRecord['id']);
+      
+    } catch (e) {
+      print('Error deleting photo: $e');
+      throw Exception('Failed to delete photo: $e');
+    }
+  }
+  
+  static Future<Map<String, dynamic>?> getHotspotPhoto(int hotspotId) async {
+    try {
+      final response = await Supabase.instance.client
+          .from('hotspot_photos')
+          .select()
+          .eq('hotspot_id', hotspotId)
+          .maybeSingle();
+      
+      return response;
+    } catch (e) {
+      print('Error getting hotspot photo: $e');
+      return null;
+    }
+  }
+  
+  static Future<Map<String, dynamic>?> updatePhoto({
+    required XFile newImageFile,
+    required Map<String, dynamic> existingPhotoRecord,
     required String userId,
   }) async {
     try {
-      // Upload image first
-      final photoUrl = await uploadImage(
-        imageFile: imageFile,
-        userId: userId,
-        hotspotId: hotspotId.toString(),
-      );
-
-      // Save metadata to database
-      final photoId = await savePhotoToDatabase(
-        hotspotId: hotspotId,
-        photoUrl: photoUrl,
+      // Delete old photo first
+      await deletePhoto(existingPhotoRecord);
+      
+      // Upload new photo
+      final newPhotoRecord = await uploadPhoto(
+        imageFile: newImageFile,
+        hotspotId: existingPhotoRecord['hotspot_id'],
         userId: userId,
       );
-
-      return photoId;
+      
+      return newPhotoRecord;
     } catch (e) {
-      rethrow;
+      print('Error updating photo: $e');
+      throw Exception('Failed to update photo: $e');
     }
   }
-
-  /// Get photos for a specific hotspot
-  Future<List<Map<String, dynamic>>> getHotspotPhotos(int hotspotId) async {
-    try {
-      final response = await _supabase
-          .from('hotspot_photos')
-          .select('''
-            id,
-            photo_url,
-            created_at,
-            uploaded_by,
-            users: uploaded_by (first_name, last_name)
-          ''')
-          .eq('hotspot_id', hotspotId)
-          .order('created_at', ascending: false);
-
-      return List<Map<String, dynamic>>.from(response);
-    } on PostgrestException catch (e) {
-      throw Exception('Database error: ${e.message}');
-    } catch (e) {
-      throw Exception('Failed to get hotspot photos: ${e.toString()}');
-    }
-  }
-
-  /// Delete photo from storage and database
-  Future<void> deletePhoto({
-    required String photoId,
-    required String photoUrl,
-  }) async {
-    try {
-      // Extract filename from URL
-      final uri = Uri.parse(photoUrl);
-      final fileName = path.basename(uri.path);
-
-      // Delete from storage
-      await _supabase.storage
-          .from(bucketName)
-          .remove([fileName]);
-
-      // Delete from database
-      await _supabase
-          .from('hotspot_photos')
-          .delete()
-          .eq('id', photoId);
-    } on StorageException catch (e) {
-      throw Exception('Storage error: ${e.message}');
-    } on PostgrestException catch (e) {
-      throw Exception('Database error: ${e.message}');
-    } catch (e) {
-      throw Exception('Failed to delete photo: ${e.toString()}');
-    }
-  }
-
-  /// Validate image file
-  bool isValidImage(XFile file) {
-    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
-    const _ = 5 * 1024 * 1024; // 5MB
-
-    final extension = path.extension(file.name).toLowerCase();
-    
-    // Check extension
-    if (!allowedExtensions.contains(extension)) {
-      return false;
-    }
-
-    // Check file size (Note: XFile doesn't provide size directly on all platforms)
-    // You might need to read the file to check size if needed
-    
-    return true;
-  }
-
-  /// Compress image if needed (for future implementation)
-  Future<XFile?> compressImage(XFile file) async {
-    // This is a placeholder for image compression
-    // You can implement using packages like flutter_image_compress
-    return file;
+  
+  // Helper method to check if user is authenticated (for upload permissions)
+  static bool isUserAuthenticated() {
+    return Supabase.instance.client.auth.currentUser != null;
   }
 }

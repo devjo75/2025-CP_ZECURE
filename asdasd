@@ -1,0 +1,504 @@
+Widget _buildMap() {
+  return Stack(
+    children: [
+      // Main Map with enhanced styling
+      Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 20,
+              spreadRadius: 2,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _currentPosition ?? const LatLng(14.5995, 120.9842),
+              initialZoom: 15.0,
+              maxZoom: 19.0,
+              minZoom: 3.0,
+              onTap: (tapPosition, latLng) {
+                FocusScope.of(context).unfocus();
+                setState(() {
+                  _destination = latLng;
+                });
+                _showLocationOptions(latLng);
+              },
+                onMapEvent: (MapEvent mapEvent) {
+                  if (mapEvent is MapEventMove && mapEvent.camera.zoom > 19) {
+                    _mapController.move(mapEvent.camera.center, 19.0);
+                  }
+                  // Track rotation changes
+                  if (mapEvent is MapEventRotate || mapEvent is MapEventMove) {
+                    setState(() {
+                      _currentMapRotation = mapEvent.camera.rotation;
+                    });
+                  }
+                },
+              interactionOptions: InteractionOptions(
+                // Conditionally enable/disable rotation based on lock state
+                flags: _isRotationLocked 
+                  ? InteractiveFlag.all & ~InteractiveFlag.rotate  // All flags except rotate
+                  : InteractiveFlag.all,  // All flags including rotate
+              ),
+            ),
+            children: [
+              // Enhanced Tile Layer
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.zecure',
+                maxZoom: 19,
+                fallbackUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+              ),
+
+              // UPDATED: Only show route polylines, not tracking polylines
+              if (_routePoints.isNotEmpty && _hasActiveRoute) ...[
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.black.withOpacity(0.2),
+                      strokeWidth: 6,
+                    ),
+                  ],
+                ),
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.blue.shade600,
+                      strokeWidth: 4,
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.white,
+                    ),
+                  ],
+                ),
+              ],
+
+              // Enhanced Polyline layer with better styling (original)
+              if (_polylinePoints.isNotEmpty) ...[
+                // Shadow polyline for depth
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _polylinePoints,
+                      color: Colors.black.withOpacity(0.2),
+                      strokeWidth: 6,
+                    ),
+                  ],
+                ),
+                // Main polyline with enhanced styling
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _polylinePoints,
+                      color: Colors.blue.shade600,
+                      strokeWidth: 4,
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.white,
+                    ),
+                  ],
+                ),
+              ],
+
+              // Enhanced Main markers layer (current position and destination)
+              MarkerLayer(
+                markers: [
+                  if (_currentPosition != null)
+                    Marker(
+                      point: _currentPosition!,
+                      width: 60,
+                      height: 60,
+                      child: _buildEnhancedCurrentLocationMarker(),
+                    ),
+                  if (_destination != null)
+                    Marker(
+                      point: _destination!,
+                      width: 50,
+                      height: 50,
+                      child: _buildEnhancedDestinationMarker(),
+                    ),
+                ],
+              ),
+              Consumer<HotspotFilterService>(
+                builder: (context, filterService, child) {
+                  return MarkerLayer(
+                    markers: _hotspots.where((hotspot) {
+                      final currentUserId = _userProfile?['id'];
+                      final isAdmin = _isAdmin;
+                      final status = hotspot['status'] ?? 'approved';
+                      final activeStatus = hotspot['active_status'] ?? 'active';
+                      final createdBy = hotspot['created_by'];
+                      final reportedBy = hotspot['reported_by'];
+                      final isOwnHotspot = currentUserId != null &&
+                                       (currentUserId == createdBy || currentUserId == reportedBy);
+                      // Admin view - show all hotspots based on filters
+                      if (isAdmin) {
+                        return filterService.shouldShowHotspot(hotspot);
+                      }
+                      // Non-admin view rules:
+                      // 1. Show active+approved hotspots that match crime type filters
+                      if (activeStatus == 'active' &&
+                          status == 'approved' &&
+                          filterService.shouldShowHotspot(hotspot)) {
+                        return true;
+                      }
+                      // 2. Always show user's own hotspots regardless of status
+                      if (isOwnHotspot) {
+                        // Apply filter service settings for pending/rejected if needed
+                        if (status == 'pending' && !filterService.showPending) return false;
+                        if (status == 'rejected' && !filterService.showRejected) return false;
+                        return true;
+                      }
+                      return false;
+                    }).map((hotspot) {
+                      final coords = hotspot['location']['coordinates'];
+                      final point = LatLng(coords[1], coords[0]);
+                      final status = hotspot['status'] ?? 'approved';
+                      final activeStatus = hotspot['active_status'] ?? 'active';
+                      final crimeLevel = hotspot['crime_type']['level'];
+                      final isActive = activeStatus == 'active';
+                      final isOwnHotspot = _userProfile?['id'] != null &&
+                                       (_userProfile?['id'] == hotspot['created_by'] ||
+                                        _userProfile?['id'] == hotspot['reported_by']);
+                      final isSelected = _selectedHotspot != null && _selectedHotspot!['id'] == hotspot['id'];
+                      // Determine marker appearance
+                      Color markerColor;
+                      IconData markerIcon;
+                      double opacity = 1.0;
+                      if (status == 'pending') {
+                        markerColor = Colors.deepPurple;
+                        markerIcon = Icons.question_mark_rounded;
+                      } else if (status == 'rejected') {
+                        markerColor = Colors.grey;
+                        markerIcon = Icons.block_rounded;
+                        // Make rejected markers semi-transparent unless it's the user's own
+                        opacity = isOwnHotspot ? 1.0 : 0.6;
+                      } else {
+                        // For approved hotspots
+                        switch (crimeLevel) {
+                          case 'critical':
+                            markerColor = const Color.fromARGB(255, 247, 26, 10);
+                            markerIcon = Icons.warning_rounded;
+                            break;
+                          case 'high':
+                            markerColor = const Color.fromARGB(255, 223, 106, 11);
+                            markerIcon = Icons.error_rounded;
+                            break;
+                          case 'medium':
+                            markerColor = const Color.fromARGB(155, 202, 130, 49);
+                            markerIcon = Icons.info_rounded;
+                            break;
+                          case 'low':
+                            markerColor = const Color.fromARGB(255, 216, 187, 23);
+                            markerIcon = Icons.info_outline_rounded;
+                            break;
+                          default:
+                            markerColor = Colors.blue;
+                            markerIcon = Icons.location_pin;
+                        }
+                        // Apply inactive styling
+                        if (!isActive) {
+                          markerColor = markerColor.withOpacity(0.3);
+                        }
+                      }
+                      return Marker(
+                        point: point,
+                        width: isSelected ? 80 : 70,
+                        height: isSelected ? 80 : 70,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Enhanced highlight ring for selected hotspot
+                            if (isSelected)
+                              Container(
+                                width: 90,
+                                height: 90,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.blue.withOpacity(0.6),
+                                    width: 3,
+                                  ),
+                                ),
+                              ),
+                            // Main marker with pulsing effect
+                            Opacity(
+                              opacity: opacity,
+                              child: PulsingHotspotMarker(
+                                markerColor: markerColor,
+                                markerIcon: markerIcon,
+                                isActive: isActive && status != 'rejected',
+                                pulseScale: isSelected ? 1.2 : 1.0,
+                                onTap: () {
+                                  setState(() {
+                                    _selectedHotspot = hotspot;
+                                  });
+                                  _showHotspotDetails(hotspot);
+                                },
+                              ),
+                            ),
+
+                            // Status indicator dot for pending/rejected
+                            if (status == 'pending' || status == 'rejected')
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Container(
+                                  width: 16,
+                                  height: 16,
+                                  decoration: BoxDecoration(
+                                    color: status == 'pending' ? Colors.orange : Colors.grey,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white, width: 2),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+
+    
+
+      // Cool overlay effects for map corners
+      Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        child: Container(
+          height: 2,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.blue.withOpacity(0.3),
+                Colors.transparent,
+                Colors.blue.withOpacity(0.3),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+Widget _buildCurrentScreen(bool isDesktop) {
+  switch (_currentTab) {
+    case MainTab.map:
+      return Stack(
+        children: [
+          // Full screen map
+          _buildMap(),
+          
+          // Loading indicator
+          if (_isLoading && _currentPosition == null)
+            const Center(child: CircularProgressIndicator()),
+          
+          // Top bar with search + login/logout
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                width: isDesktop ? 600 : double.infinity,
+                margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16),
+                child: Row(
+                  children: [
+                    Expanded(child: _buildSearchBar(isWeb: isDesktop)),
+                    const SizedBox(width: 12),
+                    Container(
+                      width: 45,
+                      height: 45,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.08),
+                            blurRadius: 12,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: IconButton(
+                        iconSize: 22,
+                        padding: EdgeInsets.zero,
+                        icon: Icon(
+                          _userProfile == null ? Icons.login : Icons.logout,
+                          color: Colors.grey.shade700,
+                        ),
+                        onPressed: _userProfile == null 
+                            ? () {
+                                Navigator.pushReplacement(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                                );
+                              }
+                            : _showLogoutConfirmation,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          
+          // Proximity Alert positioned below search bar
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 80,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: isDesktop ? 600 : double.infinity),
+                child: _buildProximityAlert(),
+              ),
+            ),
+          ),
+
+          // Floating duration widget at bottom
+          _buildFloatingDurationWidget(),
+        ],
+      );
+    case MainTab.notifications:
+      return _buildNotificationsScreen();
+    case MainTab.profile:
+      return _buildProfileScreen();
+  }
+}
+
+Widget _buildFloatingActionButtons() {
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
+      // Compass button with custom rotating compass and double-click to lock rotation
+      Tooltip(
+        message: _isRotationLocked ? 'Unlock Rotation (Double-tap)' : 'Reset Rotation (Double-tap to lock)',
+        child: FloatingActionButton(
+          heroTag: 'compass',
+          onPressed: () {
+            // Single tap resets rotation (only when not locked)
+            if (!_isRotationLocked) {
+              _mapController.rotate(0);
+              setState(() {
+                _currentMapRotation = 0.0;
+              });
+            }
+          },
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          mini: true,
+          child: GestureDetector(
+            onDoubleTap: () {
+              // Double tap toggles rotation lock
+              setState(() {
+                _isRotationLocked = !_isRotationLocked;
+              });
+              
+              // Show feedback to user
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    _isRotationLocked ? 'Rotation locked' : 'Rotation unlocked',
+                  ),
+                  duration: const Duration(seconds: 1),
+                  behavior: SnackBarBehavior.floating,
+                  margin: const EdgeInsets.only(bottom: 100, left: 16, right: 16),
+                ),
+              );
+            },
+            child: _buildCompass(),
+          ),
+        ),
+      ),
+      const SizedBox(height: 4),
+      
+      // Filter Crimes button (always visible)
+      Tooltip(
+        message: 'Filter Hotspots',
+        child: FloatingActionButton(
+          heroTag: 'filterHotspots',
+          onPressed: _showHotspotFilterDialog,
+          backgroundColor: const Color.fromARGB(255, 107, 109, 109),
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          mini: true,
+          child: const Icon(Icons.filter_alt),
+        ),
+      ),
+      const SizedBox(height: 4),
+      
+      // Clear Directions button (only visible when there's a route)
+      if (_showClearButton)
+        Tooltip(
+          message: 'Clear Route',
+          child: FloatingActionButton(
+            heroTag: 'clearRoute',
+            onPressed: _clearDirections,
+            backgroundColor: Colors.red.shade600,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            mini: true,
+            child: const Icon(
+              Icons.close,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      const SizedBox(height: 4),
+      
+      // My Location button (always visible) - Google Maps style
+      Tooltip(
+        message: 'My Location',
+        child: FloatingActionButton(
+          heroTag: 'myLocation',
+          onPressed: () async {
+            setState(() {
+              _locationButtonPressed = true;
+            });
+            await _getCurrentLocation();
+            // Reset the state after a short delay
+            Future.delayed(const Duration(seconds: 2), () {
+              if (mounted) {
+                setState(() {
+                  _locationButtonPressed = false;
+                });
+              }
+            });
+          },
+          backgroundColor: Colors.white,
+          foregroundColor: _locationButtonPressed ? Colors.blue.shade600 : Colors.grey.shade600,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Icon(
+            _locationButtonPressed ? Icons.my_location : Icons.location_searching,
+            color: _locationButtonPressed ? Colors.blue.shade600 : Colors.grey.shade600,
+          ),
+        ),
+      ),
+    ],
+  );
+}
+

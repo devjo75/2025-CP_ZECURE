@@ -108,6 +108,26 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   void _showErrorSnackBar(String message) {
+    final bool isWeb = MediaQuery.of(context).size.width > 600;
+    final screenWidth = MediaQuery.of(context).size.width;
+    
+    // Calculate responsive margins for desktop
+    EdgeInsets snackBarMargin;
+    if (isWeb) {
+      // Center the snackbar and constrain its width to match the form
+      final double maxWidth = 500; // Same as your form max width
+      final double horizontalMargin = (screenWidth - maxWidth) / 2;
+      snackBarMargin = EdgeInsets.fromLTRB(
+        horizontalMargin.clamp(32.0, double.infinity), // Minimum 32px from edges
+        16,
+        horizontalMargin.clamp(32.0, double.infinity),
+        16,
+      );
+    } else {
+      // Keep mobile margins as before
+      snackBarMargin = const EdgeInsets.all(16);
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -122,7 +142,7 @@ class _LoginScreenState extends State<LoginScreen>
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
         ),
-        margin: const EdgeInsets.all(16),
+        margin: snackBarMargin,
       ),
     );
   }

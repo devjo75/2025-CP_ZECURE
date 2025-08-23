@@ -35,6 +35,8 @@ dependencies:
   url_launcher: ^6.3.1
   intl: ^0.19.0        # Updated for better date formatting
   path: ^1.9.0
+  mime: ^1.0.4
+
   
   # Backend
   supabase_flutter: ^2.6.0  # Updated version
@@ -46,6 +48,7 @@ dependencies:
   # Sharing and Media
   share_plus: ^10.0.2
   image_picker: ^1.1.2
+  flutter_image_compress: ^2.0.4
   
   # Date and Time
   flutter_datetime_picker_plus: ^2.2.0  # Updated fork
