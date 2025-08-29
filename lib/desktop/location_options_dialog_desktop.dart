@@ -11,6 +11,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
   final VoidCallback onShareLocation;
   final VoidCallback onReportHotspot;
   final VoidCallback onAddHotspot;
+  final VoidCallback onAddSafeSpot; // Add this parameter
 
   const LocationOptionsDialogDesktop({
     super.key,
@@ -24,6 +25,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
     required this.onShareLocation,
     required this.onReportHotspot,
     required this.onAddHotspot,
+    required this.onAddSafeSpot, // Add this parameter
   });
 
   @override
@@ -66,14 +68,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                     onGetSafeRoute();
                   },
                 ),
-                ListTile(
-                  leading: const Icon(Icons.share),
-                  title: const Text('Share Location'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    onShareLocation();
-                  },
-                ),
+
                 if (!isAdmin && userProfile != null)
                   ListTile(
                     leading: const Icon(Icons.report, color: Colors.orange),
@@ -84,7 +79,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                       onReportHotspot();
                     },
                   ),
-                if (isAdmin)
+                if (isAdmin && userProfile != null)
                   ListTile(
                     leading: const Icon(Icons.add_location_alt),
                     title: const Text('Add Crime Incident'),
@@ -94,6 +89,26 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                       onAddHotspot();
                     },
                   ),
+                // Add the safe spot option here
+                if (userProfile != null)
+                  ListTile(
+                    leading: const Icon(Icons.safety_check, color: Colors.blue),
+                    title: const Text('Add Safe Spot'),
+                    subtitle: const Text('Mark this as a safe location'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      onAddSafeSpot();
+                    },
+                  ),
+
+                ListTile(
+                  leading: const Icon(Icons.share),
+                  title: const Text('Share Location'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    onShareLocation();
+                  },
+                ),
                 if (distance > 0)
                   Padding(
                     padding: const EdgeInsets.all(8.0),

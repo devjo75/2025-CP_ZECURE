@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
+import 'package:zecure/screens/map_screen.dart';
 import 'package:zecure/services/auth_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/gestures.dart';
@@ -98,25 +99,32 @@ class _RegisterScreenState extends State<RegisterScreen>
     }
   }
 
-  void _showTermsAndConditions() {
+void _showTermsAndConditions() {
+  final bool isWeb = MediaQuery.of(context).size.width > 600;
+  
   showDialog(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) {
       return Dialog(
         insetPadding: EdgeInsets.symmetric(
-          horizontal: MediaQuery.of(context).size.width > 600 ? 100 : 20,
+          horizontal: isWeb ? 
+            MediaQuery.of(context).size.width * 0.25 : // 50% width on web
+            20, // Keep mobile padding
           vertical: 40,
         ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
         ),
         child: Container(
-          constraints: const BoxConstraints(maxHeight: 600),
+          constraints: BoxConstraints(
+            maxHeight: 600,
+            maxWidth: isWeb ? 600 : double.infinity, // Max width constraint for web
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Header
+              // Header - keep existing code
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
@@ -155,10 +163,10 @@ class _RegisterScreenState extends State<RegisterScreen>
                 ),
               ),
               
-              // Content
+              // Content - keep existing scrollable content
               Expanded(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(20),
+                  padding: EdgeInsets.all(isWeb ? 24 : 20), // Slightly more padding on web
                   child: Text(
                     '''Welcome to Zecure
 
@@ -166,52 +174,52 @@ By creating an account and using Zecure, you agree to the following terms and co
 
 1. SERVICE DESCRIPTION
 Zecure is an AI-powered crime monitoring platform designed to enhance public safety in Zamboanga City by:
-• Collecting and analyzing crime-related data from public sources
-• Identifying crime hotspots and patterns in real-time
-• Providing safety alerts and recommendations to users
-• Enabling community reporting of incidents and safe locations
-• Offering route recommendations based on safety data
+- Collecting and analyzing crime-related data from public sources
+- Identifying crime hotspots and patterns in real-time
+- Providing safety alerts and recommendations to users
+- Enabling community reporting of incidents and safe locations
+- Offering route recommendations based on safety data
 
 2. USER RESPONSIBILITIES
 You agree to:
-• Provide accurate and truthful information during registration
-• Use the platform responsibly and in accordance with local laws
-• Report incidents truthfully and in good faith
-• Respect the privacy and safety of other users
-• Not misuse the platform for illegal activities or false reporting
+- Provide accurate and truthful information during registration
+- Use the platform responsibly and in accordance with local laws
+- Report incidents truthfully and in good faith
+- Respect the privacy and safety of other users
+- Not misuse the platform for illegal activities or false reporting
 
 3. DATA COLLECTION AND PRIVACY
-• We collect personal information necessary for account creation and service provision
-• Crime-related data is gathered from publicly available sources
-• Your location data may be used to provide relevant safety information
-• We implement security measures to protect your personal information
-• User-reported data may be shared with relevant authorities when necessary
+- We collect personal information necessary for account creation and service provision
+- Crime-related data is gathered from publicly available sources
+- Your location data may be used to provide relevant safety information
+- We implement security measures to protect your personal information
+- User-reported data may be shared with relevant authorities when necessary
 
 4. PLATFORM LIMITATIONS
 Please understand that Zecure:
-• Provides predictive analysis but cannot prevent crimes
-• Relies on publicly available data which may have limitations
-• Requires internet connectivity for full functionality
-• May not capture all criminal activities or safety concerns
-• Accuracy depends on data quality and user participation
+- Provides predictive analysis but cannot prevent crimes
+- Relies on publicly available data which may have limitations
+- Requires internet connectivity for full functionality
+- May not capture all criminal activities or safety concerns
+- Accuracy depends on data quality and user participation
 
 5. COMMUNITY PARTICIPATION
 By using Zecure, you may:
-• Report incidents and safety concerns
-• Mark and verify safe locations
-• Contribute to community safety awareness
-• Receive alerts about potential safety risks in your area
+- Report incidents and safety concerns
+- Mark and verify safe locations
+- Contribute to community safety awareness
+- Receive alerts about potential safety risks in your area
 
 6. COOPERATION WITH AUTHORITIES
-• Relevant information may be shared with law enforcement agencies
-• Users are encouraged to report serious crimes directly to police
-• The platform supplements but does not replace traditional emergency services
+- Relevant information may be shared with law enforcement agencies
+- Users are encouraged to report serious crimes directly to police
+- The platform supplements but does not replace traditional emergency services
 
 7. LIABILITY AND DISCLAIMERS
-• Zecure is provided "as is" without warranties
-• We are not liable for decisions made based on platform information
-• Users are responsible for their own safety and security
-• Emergency situations should always be reported to proper authorities
+- Zecure is provided "as is" without warranties
+- We are not liable for decisions made based on platform information
+- Users are responsible for their own safety and security
+- Emergency situations should always be reported to proper authorities
 
 8. TERMS MODIFICATIONS
 We reserve the right to modify these terms. Users will be notified of significant changes and continued use implies acceptance.
@@ -224,7 +232,7 @@ For questions about these terms or the platform, please contact our support team
 
 By clicking "I Agree," you acknowledge that you have read, understood, and agree to be bound by these Terms and Conditions.''',
                     style: GoogleFonts.poppins(
-                      fontSize: 13,
+                      fontSize: isWeb ? 14 : 13, // Slightly larger text on web
                       height: 1.5,
                       color: Colors.grey.shade700,
                     ),
@@ -232,9 +240,9 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
                 ),
               ),
               
-              // Footer buttons
+              // Footer buttons - keep existing
               Container(
-                padding: const EdgeInsets.all(20),
+                padding: EdgeInsets.all(isWeb ? 24 : 20),
                 decoration: BoxDecoration(
                   color: Colors.grey.shade50,
                   borderRadius: const BorderRadius.only(
@@ -329,14 +337,12 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
     );
 
     if (mounted) {
-      _showSuccessSnackBar('Registration successful! Please login.');
+      // Navigate to MapScreen (user should now be logged in)
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => const LoginScreen()),
+        MaterialPageRoute(builder: (context) => const MapScreen()),
       );
     }
-  } on AuthException catch (error) {
-    _showErrorSnackBar(error.message);
   } catch (error) {
     _showErrorSnackBar('Registration failed. Please try again.');
   } finally {
@@ -371,31 +377,6 @@ void _showErrorSnackBar(String message) {
   );
 }
 
-void _showSuccessSnackBar(String message) {
-  final bool isWeb = MediaQuery.of(context).size.width > 600;
-  final screenWidth = MediaQuery.of(context).size.width;
-  final double maxWidth = isWeb ? 550 : screenWidth * 0.92;
-  
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Row(
-        children: [
-          const Icon(Icons.check_circle_outline, color: Colors.white),
-          const SizedBox(width: 12),
-          Expanded(child: Text(message)),
-        ],
-      ),
-      backgroundColor: Colors.green.shade600,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: EdgeInsets.only(
-        left: isWeb ? (screenWidth - maxWidth) / 2 : 16,
-        right: isWeb ? (screenWidth - maxWidth) / 2 : 16,
-        bottom: 16,
-      ),
-    ),
-  );
-}
 
   @override
   void dispose() {
@@ -541,20 +522,20 @@ void _showSuccessSnackBar(String message) {
     // Expanded max width for better screen utilization
     final double maxWidth = isWeb ? 550 : screenWidth * 0.92;
 
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.blue.shade50,
-              Colors.white,
-              Colors.blue.shade50,
-            ],
-          ),
-        ),
-        child: SafeArea(
+return Scaffold(
+  body: Container(
+    decoration: const BoxDecoration(
+      image: DecorationImage(
+        image: AssetImage('assets/images/LIGHT.jpg'),
+        fit: BoxFit.cover,
+      ),
+    ),
+    child: Container(
+      // Blue tinted overlay to match your theme
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50.withOpacity(0.2),
+      ),
+      child: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {
               return SingleChildScrollView(
@@ -596,6 +577,7 @@ void _showSuccessSnackBar(String message) {
             },
           ),
         ),
+      ),
       ),
     );
   }
@@ -646,35 +628,40 @@ void _showSuccessSnackBar(String message) {
   );
 }
 
-  Widget _buildHeader(bool isWeb) {
-    return Column(
-      children: [
-        // Back Button
-        Align(
-          alignment: Alignment.centerLeft,
-          child: IconButton(
-            onPressed: () => Navigator.pop(context),
-            icon: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              child: Icon(
-                Icons.arrow_back_ios_new_rounded,
-                color: Colors.blue.shade600,
-                size: 20,
-              ),
+Widget _buildHeader(bool isWeb) {
+  return Column(
+    children: [
+      // Back to Login Button
+      Align(
+        alignment: Alignment.centerLeft,
+        child: IconButton(
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const LoginScreen()),
+            );
+          },
+          icon: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: Icon(
+              Icons.arrow_back_ios_new_rounded,
+              color: Colors.blue.shade600,
+              size: 20,
             ),
           ),
         ),
+      ),
         
         SizedBox(height: isWeb ? 20 : 16),
         

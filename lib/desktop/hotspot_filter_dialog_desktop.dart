@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
 
@@ -34,35 +35,35 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     
                     // Severity filters
                     const Text('Severity:', style: TextStyle(fontWeight: FontWeight.bold)),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Critical',
-                      Icons.warning,
-                      Colors.red,
+                      FontAwesomeIcons.exclamationTriangle,  // Updated to match mobile
+                      const Color.fromARGB(255, 219, 0, 0),
                       filterService.showCritical,
                       (value) => filterService.toggleCritical(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'High',
-                      Icons.error,
-                      Colors.orange,
+                      Icons.priority_high,  // Updated to match mobile
+                      const Color.fromARGB(255, 223, 106, 11),
                       filterService.showHigh,
                       (value) => filterService.toggleHigh(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Medium',
-                      Icons.info,
-                      Colors.yellow,
+                      Icons.remove,  // Updated to match mobile
+                      const Color.fromARGB(167, 116, 66, 9),
                       filterService.showMedium,
                       (value) => filterService.toggleMedium(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Low',
-                      Icons.check_circle,
-                      Colors.green,
+                      Icons.low_priority,  // Updated to match mobile
+                      const Color.fromARGB(255, 216, 187, 23),
                       filterService.showLow,
                       (value) => filterService.toggleLow(),
                     ),
@@ -70,39 +71,39 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     
                     // Category filters
                     const Text('Categories:', style: TextStyle(fontWeight: FontWeight.bold)),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Property',
-                      Icons.house,
+                      Icons.home_outlined,  // Updated to match mobile
                       Colors.blue,
                       filterService.showProperty,
                       (value) => filterService.toggleProperty(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Violent',
-                      Icons.warning,
+                      Icons.priority_high,  // Updated to match mobile
                       Colors.red,
                       filterService.showViolent,
                       (value) => filterService.toggleViolent(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Drug',
-                      Icons.medical_services,
+                      FontAwesomeIcons.syringe,
                       Colors.purple,
                       filterService.showDrug,
                       (value) => filterService.toggleDrug(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Public Order',
-                      Icons.gavel,
+                      Icons.balance,  // Updated to match mobile
                       Colors.orange,
                       filterService.showPublicOrder,
                       (value) => filterService.togglePublicOrder(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Financial',
                       Icons.attach_money,
@@ -110,43 +111,64 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                       filterService.showFinancial,
                       (value) => filterService.toggleFinancial(),
                     ),
-                    _buildFilterToggle(
+                    buildFilterToggle(
                       context,
                       'Traffic',
-                      Icons.directions_car,
+                      Icons.traffic,  // Updated to match mobile
                       Colors.blueGrey,
                       filterService.showTraffic,
                       (value) => filterService.toggleTraffic(),
                     ),
-                      _buildFilterToggle(
-                        context,
-                        'Alerts',
-                        Icons.notification_important,
-                        Colors.deepPurple,
-                        filterService.showAlerts,
-                        (value) => filterService.toggleAlerts(),
-                      ),
+                    buildFilterToggle(
+                      context,
+                      'Alerts',
+                      Icons.campaign,  // Updated to match mobile
+                      Colors.deepPurple,
+                      filterService.showAlerts,
+                      (value) => filterService.toggleAlerts(),
+                    ),
                     const SizedBox(height: 16),
                     
                     // Status filters (only for logged-in users)
                     if (userProfile != null) ...[
                       const Text('Status:', style: TextStyle(fontWeight: FontWeight.bold)),
-                      _buildFilterToggle(
+                      buildFilterToggle(
                         context,
                         'Pending',
-                        Icons.question_mark,
-                        Colors.purple,
+                        Icons.hourglass_empty,  // Updated to match mobile
+                        Colors.amber,  // Updated color to match mobile
                         filterService.showPending,
                         (value) => filterService.togglePending(),
                       ),
-                      _buildFilterToggle(
+                      buildFilterToggle(
                         context,
                         'Rejected',
-                        Icons.block,
+                        Icons.cancel_outlined,  // Updated to match mobile
                         Colors.grey,
                         filterService.showRejected,
                         (value) => filterService.toggleRejected(),
                       ),
+                      
+                      // Active/Inactive filters (only for admin and regular users) - ADDED
+                      if (userProfile?['role'] == 'admin' || userProfile?['role'] == 'user') ...[
+                        buildFilterToggle(
+                          context,
+                          'Active',
+                          Icons.check_circle_outline,  // Active icon
+                          Colors.green,
+                          filterService.showActive,
+                          (value) => filterService.toggleActive(),
+                        ),
+                        buildFilterToggle(
+                          context,
+                          'Inactive',
+                          Icons.pause_circle_outline,  // Inactive icon
+                          Colors.grey,
+                          filterService.showInactive,
+                          (value) => filterService.toggleInactive(),
+                        ),
+                      ],
+                      
                       const SizedBox(height: 16),
                     ],
                     
@@ -154,6 +176,14 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Theme.of(context).primaryColor,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
                         onPressed: () => Navigator.pop(context),
                         child: const Text('Close'),
                       ),
@@ -167,22 +197,4 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
       ),
     );
   }
-}
-
-// Utility function for building filter toggles
-Widget _buildFilterToggle(
-  BuildContext context,
-  String label,
-  IconData icon,
-  Color color,
-  bool value,
-  ValueChanged<bool> onChanged,
-) {
-  return SwitchListTile(
-    title: Text(label),
-    secondary: Icon(icon, color: color),
-    value: value,
-    onChanged: onChanged,
-    dense: true,
-  );
 }

@@ -10,6 +10,8 @@ class HotspotFilterService with ChangeNotifier {
   // Status filters
   bool _showPending = true;
   bool _showRejected = true;
+  bool _showActive = true;    // New active filter
+  bool _showInactive = true;  // New inactive filter
   
   // Category filters
   bool _showProperty = true;
@@ -18,7 +20,10 @@ class HotspotFilterService with ChangeNotifier {
   bool _showPublicOrder = true;
   bool _showFinancial = true;
   bool _showTraffic = true;
-  bool _showAlerts = true;  // New alerts filter
+  bool _showAlerts = true;
+
+  // Track current user to reset filters when user changes
+  String? _currentUserId;
 
   // Getters
   bool get showCritical => _showCritical;
@@ -27,13 +32,41 @@ class HotspotFilterService with ChangeNotifier {
   bool get showLow => _showLow;
   bool get showPending => _showPending;
   bool get showRejected => _showRejected;
+  bool get showActive => _showActive;      // New getter
+  bool get showInactive => _showInactive;  // New getter
   bool get showProperty => _showProperty;
   bool get showViolent => _showViolent;
   bool get showDrug => _showDrug;
   bool get showPublicOrder => _showPublicOrder;
   bool get showFinancial => _showFinancial;
   bool get showTraffic => _showTraffic;
-  bool get showAlerts => _showAlerts;  // New getter
+  bool get showAlerts => _showAlerts;
+
+  // Method to reset filters when user changes or logs out
+  void resetFiltersForUser(String? newUserId) {
+    if (_currentUserId != newUserId) {
+      _currentUserId = newUserId;
+      
+      // Reset all filters to default (true)
+      _showCritical = true;
+      _showHigh = true;
+      _showMedium = true;
+      _showLow = true;
+      _showPending = true;
+      _showRejected = true;
+      _showActive = true;
+      _showInactive = true;
+      _showProperty = true;
+      _showViolent = true;
+      _showDrug = true;
+      _showPublicOrder = true;
+      _showFinancial = true;
+      _showTraffic = true;
+      _showAlerts = true;
+      
+      notifyListeners();
+    }
+  }
 
   // Severity toggle methods
   void toggleCritical() {
@@ -64,6 +97,17 @@ class HotspotFilterService with ChangeNotifier {
 
   void toggleRejected() {
     _showRejected = !_showRejected;
+    notifyListeners();
+  }
+
+  // New active/inactive toggle methods
+  void toggleActive() {
+    _showActive = !_showActive;
+    notifyListeners();
+  }
+
+  void toggleInactive() {
+    _showInactive = !_showInactive;
     notifyListeners();
   }
 
@@ -98,7 +142,6 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
-  // New alerts toggle method
   void toggleAlerts() {
     _showAlerts = !_showAlerts;
     notifyListeners();
@@ -115,6 +158,18 @@ class HotspotFilterService with ChangeNotifier {
       return _showPending;
     } else if (status == 'rejected') {
       return _showRejected;
+    }
+
+    // For approved hotspots, check active/inactive filters
+    // Only apply active/inactive filters for approved hotspots
+    if (status == 'approved' || status == null) {
+      final activeStatus = hotspot['active_status'] ?? 'active';
+      final isActive = activeStatus == 'active';
+      
+      // If hotspot is active but we're not showing active ones, hide it
+      if (isActive && !_showActive) return false;
+      // If hotspot is inactive but we're not showing inactive ones, hide it
+      if (!isActive && !_showInactive) return false;
     }
     
     // Check category filters for approved hotspots
@@ -137,7 +192,7 @@ class HotspotFilterService with ChangeNotifier {
       case 'Traffic':
         if (!_showTraffic) return false;
         break;
-      case 'Alert':  // Handle new Alert category
+      case 'Alert':
         if (!_showAlerts) return false;
         break;
     }

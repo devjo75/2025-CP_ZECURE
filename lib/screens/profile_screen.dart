@@ -33,6 +33,10 @@ class ProfileScreen {
   bool get isEditingProfile => _isEditingProfile;
   set isEditingProfile(bool value) => _isEditingProfile = value;
 
+
+//PROFILE PAGE TO ALWAYS START FROM THE TOP
+  bool _shouldScrollToTop = false;
+
   
 
   void initControllers() {
@@ -245,17 +249,27 @@ Future<void> updateProfile(BuildContext context, {required VoidCallback onSucces
     );
   }
 
+//PROFILE PAGE TO ALWAYS START FROM THE TOP
+  void setShouldScrollToTop(bool value) {
+  _shouldScrollToTop = value;
+}
+
+
+
 Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback onEditPressed) {
-  // Scroll to top when profile view is built
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (_profileViewScrollController.hasClients) {
-      _profileViewScrollController.animateTo(
-        0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
-  });
+  // Only scroll to top when explicitly requested (when returning from edit mode)
+  if (_shouldScrollToTop) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_profileViewScrollController.hasClients) {
+        _profileViewScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+    _shouldScrollToTop = false; // Reset the flag
+  }
 
   return SingleChildScrollView(
     controller: _profileViewScrollController, // Use the separate controller
@@ -705,39 +719,31 @@ Widget buildEditProfileForm(
   bool showNewPassword = false;
   bool showConfirmPassword = false;
 
-  // Scroll to top when the form is built
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    _scrollController.animateTo(
-      0,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
-    );
-  });
-
+  // Only scroll to top when explicitly requested (when entering edit mode)
+  if (_shouldScrollToTop) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
-    // Also reset profile view scroll position
-    if (_profileViewScrollController.hasClients) {
-      _profileViewScrollController.jumpTo(0);
-    }
-  });
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+    _shouldScrollToTop = false; // Reset the flag
+  }
 
-return StatefulBuilder(
-  builder: (context, setState) {
-    return PopScope(
-      canPop: false, // Prevent default pop behavior
-      onPopInvoked: (didPop) {
-        if (!didPop) {
-          // Handle back button to go back to profile view instead of map
-          onCancel();
-        }
-      },
+  return StatefulBuilder(
+    builder: (context, setState) {
+      return PopScope(
+        canPop: false,
+        onPopInvoked: (didPop) {
+          if (!didPop) {
+            // Set flag to scroll to top when returning to profile view
+            _shouldScrollToTop = true;
+            onCancel();
+          }
+        },
       child: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(

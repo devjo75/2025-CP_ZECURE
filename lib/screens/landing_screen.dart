@@ -164,20 +164,20 @@ class _LandingScreenState extends State<LandingScreen>
     final bool isWeb = MediaQuery.of(context).size.width > 600;
     final screenWidth = MediaQuery.of(context).size.width;
 
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.blue.shade50,
-              Colors.white,
-              Colors.blue.shade50,
-            ],
-          ),
-        ),
-        child: SafeArea(
+return Scaffold(
+  body: Container(
+    decoration: const BoxDecoration(
+      image: DecorationImage(
+        image: AssetImage('assets/images/LIGHT.jpg'),
+        fit: BoxFit.cover,
+      ),
+    ),
+    child: Container(
+      // Blue tinted overlay to match your theme
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50.withOpacity(0.2),
+      ),
+      child: SafeArea(
           child: SingleChildScrollView(
             child: Padding(
               padding: EdgeInsets.symmetric(
@@ -220,6 +220,7 @@ class _LandingScreenState extends State<LandingScreen>
             ),
           ),
         ),
+      ),
       ),
     );
   }

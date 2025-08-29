@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
@@ -14,6 +16,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/main.dart';
+import 'package:zecure/screens/auth/register_screen.dart';
+import 'package:zecure/screens/welcome_message_first_timer.dart';
+import 'package:zecure/screens/welcome_message_screen.dart';
 import 'package:zecure/services/auth_service.dart';
 import 'package:zecure/screens/auth/login_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -26,6 +31,11 @@ import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
+import 'package:zecure/services/safe_spot_details.dart';
+import 'package:zecure/services/safe_spot_form.dart';
+import 'package:zecure/services/safe_spot_service.dart';
+
+
 
 
 
@@ -42,8 +52,7 @@ class MapScreen extends StatefulWidget {
 
 enum MainTab { map, notifications, profile }
 enum TravelMode { walking, driving, cycling }
-enum MapType {
-  standard, satellite, terrain, topographic, dark }
+enum MapType { standard, satellite, terrain, topographic, dark }
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
@@ -58,24 +67,30 @@ class _MapScreenState extends State<MapScreen> {
       'fallbackUrl': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       'attribution': '© OpenStreetMap contributors',
     },
+
+
     MapType.terrain: {
       'name': 'Terrain',
       'urlTemplate': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
       'fallbackUrl': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
       'attribution': '© OpenTopoMap (CC-BY-SA)',
     },
-    MapType.satellite: {
-      'name': 'Satellite',
-      'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      'fallbackUrl': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      'attribution': '© Esri',
-    },
-    MapType.topographic: {
-      'name': 'Topographic',
-      'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-      'fallbackUrl': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-      'attribution': '© Esri',
-    },
+
+  MapType.satellite: {
+    'name': 'Satellite',
+    'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    'fallbackUrl': 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    'attribution': '© Esri, Maxar, Earthstar Geographics',
+  },
+
+  MapType.topographic: {
+    'name': 'Topographic',
+    'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    'fallbackUrl': 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    'attribution': '© Esri, HERE, Garmin, SafeGraph, METI/NASA, USGS',
+  },
+
+  
     MapType.dark: {
       'name': 'Dark',
       'urlTemplate': 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
@@ -85,11 +100,15 @@ class _MapScreenState extends State<MapScreen> {
     
   };
 
+
+
  
   TravelMode _selectedTravelMode = TravelMode.driving;
   bool _showTravelModeSelector = false;
   bool _showMapTypeSelector = false;
 
+
+  
 
 
   //MAP ROTATION
@@ -149,9 +168,8 @@ class _MapScreenState extends State<MapScreen> {
   MainTab _currentTab = MainTab.map;
   late ProfileScreen _profileScreen;
 
-  // Hotspot state
+  // HOTSPOT
   List<Map<String, dynamic>> _hotspots = [];
-  // ignore: unused_field
   Map<String, dynamic>? _selectedHotspot;
   RealtimeChannel? _hotspotsChannel;
 
@@ -159,8 +177,11 @@ class _MapScreenState extends State<MapScreen> {
 List<Map<String, dynamic>> _notifications = [];
 RealtimeChannel? _notificationsChannel;
 int _unreadNotificationCount = 0;
-// Add notification to enum
 
+// SAFE SPOT 
+List<Map<String, dynamic>> _safeSpots = [];
+RealtimeChannel? _safeSpotsChannel;
+bool _showSafeSpots = true;
 
 @override
 void initState() {
@@ -171,6 +192,10 @@ void initState() {
     if (event.session != null && mounted) {
       print('User logged in, loading profile and setting up real-time');
       _loadUserProfile().then((_) {
+        // Reset filters for the logged-in user
+        final filterService = Provider.of<HotspotFilterService>(context, listen: false);
+        filterService.resetFiltersForUser(_userProfile?['id']?.toString());
+        
         // Setup real-time after profile is loaded
         _setupNotificationsRealtime();
         _loadNotifications();
@@ -184,15 +209,29 @@ void initState() {
         _notifications = [];
         _unreadNotificationCount = 0;
       });
+      
+      // Reset filters for guest user (no login)
+      final filterService = Provider.of<HotspotFilterService>(context, listen: false);
+      filterService.resetFiltersForUser(null);
+      
       // Unsubscribe from channels
       _notificationsChannel?.unsubscribe();
       _hotspotsChannel?.unsubscribe();
+      _safeSpotsChannel?.unsubscribe(); 
     }
   });
 
-  _loadUserProfile();
+  // Initial profile load
+  _loadUserProfile().then((_) {
+    // Reset filters for the current user (if any)
+    final filterService = Provider.of<HotspotFilterService>(context, listen: false);
+    filterService.resetFiltersForUser(_userProfile?['id']?.toString());
+  });
+  
   _loadHotspots();
   _setupRealtimeSubscription();
+  _loadSafeSpots();
+  _setupSafeSpotsRealtime();
   
   // Only setup notifications if user is already logged in
   if (_userProfile != null) {
@@ -215,6 +254,10 @@ void initState() {
       }
     }
   });
+
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _showWelcomeModal();
+  });
 }
 
 @override
@@ -227,9 +270,428 @@ void dispose() {
   _reconnectionTimer?.cancel(); 
   _routeUpdateTimer?.cancel();
   _proximityCheckTimer?.cancel(); 
+  
+  // Enhanced safe spots cleanup
+  if (_safeSpotsChannel != null) {
+    print('Unsubscribing from safe spots real-time channel...');
+    _safeSpotsChannel!.unsubscribe();
+    _safeSpotsChannel = null;
+  }
+  
   super.dispose();
 }
 
+
+
+
+// SAFE SPOTS METHOD STARTS HERE
+void _removeDuplicateSafeSpots() {
+  final Map<String, Map<String, dynamic>> uniqueSpots = {};
+  
+  // Keep only the last occurrence of each safe spot ID
+  for (final spot in _safeSpots) {
+    final spotId = spot['id'] as String;
+    uniqueSpots[spotId] = spot;
+  }
+  
+  final originalCount = _safeSpots.length;
+  _safeSpots = uniqueSpots.values.toList();
+  final newCount = _safeSpots.length;
+  
+  if (originalCount != newCount) {
+    print('⚠️  Removed ${originalCount - newCount} duplicate safe spots');
+    print('Safe spots count: $originalCount -> $newCount');
+  }
+}
+// Updated _loadSafeSpots method
+Future<void> _loadSafeSpots() async {
+  try {
+    print('=== LOADING SAFE SPOTS ===');
+    print('User ID: ${_userProfile?['id']}');
+    print('Is Admin: $_isAdmin');
+    print('Current safe spots count: ${_safeSpots.length}');
+    
+    final safeSpots = await SafeSpotService.getSafeSpots(
+      userId: _userProfile?['id'],
+      isAdmin: _isAdmin,
+    );
+    
+    print('Loaded ${safeSpots.length} safe spots from database');
+    
+    // Log the status distribution for debugging
+    final statusCounts = <String, int>{};
+    for (final spot in safeSpots) {
+      final status = spot['status'] ?? 'unknown';
+      statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+    }
+    print('Status distribution: $statusCounts');
+    
+    if (mounted) {
+      setState(() {
+        _safeSpots = safeSpots;
+        // Remove any duplicates that might exist
+        _removeDuplicateSafeSpots();
+      });
+      print('✅ Safe spots state updated successfully');
+      print('New _safeSpots.length: ${_safeSpots.length}');
+    }
+  } catch (e) {
+    print('❌ Error loading safe spots: $e');
+    if (mounted) {
+      _showSnackBar('Error loading safe spots: ${e.toString()}');
+    }
+  }
+  print('=== END LOADING SAFE SPOTS ===');
+}
+
+
+//  REAL-TIME SAFE SPOTS
+
+void _setupSafeSpotsRealtime() {
+  _safeSpotsChannel?.unsubscribe();
+  
+  _safeSpotsChannel = Supabase.instance.client
+      .channel('safe_spots_realtime_${DateTime.now().millisecondsSinceEpoch}')
+      .onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'safe_spots',
+        callback: _handleSafeSpotInsert,
+      )
+      .onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'safe_spots',
+        callback: _handleSafeSpotUpdate,
+      )
+      .onPostgresChanges(
+        event: PostgresChangeEvent.delete,
+        schema: 'public',
+        table: 'safe_spots',
+        callback: _handleSafeSpotDelete,
+      )
+      .onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'safe_spot_upvotes',
+        callback: _handleSafeSpotUpvoteChange,
+      )
+      .subscribe((status, error) {
+        print('Safe spots channel status: $status, error: $error');
+        
+        if (status == 'SUBSCRIBED') {
+          print('Successfully connected to safe spots channel');
+        } else if (status == 'CHANNEL_ERROR' || status == 'CLOSED') {
+          print('Error with safe spots channel: $error');
+          
+          // Attempt to reconnect after delay
+          Timer(const Duration(seconds: 3), () {
+            if (mounted) {
+              print('Attempting to reconnect safe spots channel...');
+              _setupSafeSpotsRealtime();
+            }
+          });
+        }
+      });
+}
+
+void _handleSafeSpotInsert(PostgresChangePayload payload) async {
+  if (!mounted) return;
+  
+  try {
+    // Fetch the complete safe spot data with proper relations
+    final response = await Supabase.instance.client
+        .from('safe_spots')
+        .select('''
+          *,
+          safe_spot_types!inner (
+            id,
+            name,
+            icon,
+            description
+          ),
+          users!safe_spots_created_by_fkey (
+            id,
+            first_name,
+            last_name,
+            role
+          )
+        ''')
+        .eq('id', payload.newRecord['id'])
+        .single();
+
+    if (mounted) {
+      // Check if this user should see this safe spot
+      final shouldShow = _shouldUserSeeSafeSpot(response);
+      
+      if (shouldShow) {
+        setState(() {
+          _safeSpots.insert(0, response); // Add to beginning like hotspots
+        });
+        
+        print('New safe spot added via real-time: ${response['name']}');
+        
+        // Show notification if it's not the current user's creation
+        if (response['created_by'] != _userProfile?['id']) {
+          final typeName = response['safe_spot_types']['name'];
+          _showSnackBar('New safe spot added: $typeName');
+        }
+      }
+    }
+  } catch (e) {
+    print('Error in _handleSafeSpotInsert: $e');
+    // Fallback with minimal data
+    if (mounted) {
+      setState(() {
+        _safeSpots.insert(0, payload.newRecord);
+      });
+    }
+  }
+}
+
+void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
+  if (!mounted) return;
+  
+  print('=== SAFE SPOT UPDATE DEBUG ===');
+  print('Payload new record: ${payload.newRecord}');
+  
+  try {
+    final spotId = payload.newRecord['id'] as String;
+    
+    // Get the previous safe spot data
+    final previousSafeSpot = _safeSpots.firstWhere(
+      (s) => s['id'] == spotId,
+      orElse: () => {},
+    );
+    
+    print('Previous status: ${previousSafeSpot['status']}');
+    print('New status from payload: ${payload.newRecord['status']}');
+
+    // Fetch the updated safe spot data
+    final response = await Supabase.instance.client
+        .from('safe_spots')
+        .select('''
+          *,
+          safe_spot_types!inner (
+            id,
+            name,
+            icon,
+            description
+          ),
+          users!safe_spots_created_by_fkey (
+            id,
+            first_name,
+            last_name,
+            role
+          )
+        ''')
+        .eq('id', spotId)
+        .single();
+
+    print('Fetched response status: ${response['status']}');
+
+    if (mounted) {
+      setState(() {
+        // REMOVE any existing instances of this safe spot first
+        _safeSpots.removeWhere((s) => s['id'] == spotId);
+        
+        // Then add the updated one
+        _safeSpots.add(response);
+        
+        // Remove duplicates as a safety measure
+        _removeDuplicateSafeSpots();
+        
+        print('Updated safe spots list. Total count: ${_safeSpots.length}');
+      });
+
+      // Show status change messages or edit confirmations
+      final previousStatus = previousSafeSpot.isNotEmpty ? previousSafeSpot['status'] ?? 'pending' : 'pending';
+      final newStatus = response['status'] ?? 'pending';
+      final typeName = response['safe_spot_types']['name'];
+
+      print('Status comparison: $previousStatus -> $newStatus');
+
+      // Check if it's a regular update (edit) vs status change
+      final previousName = previousSafeSpot.isNotEmpty ? previousSafeSpot['name'] : '';
+      final newName = response['name'] ?? '';
+      final previousDescription = previousSafeSpot.isNotEmpty ? previousSafeSpot['description'] : '';
+      final newDescription = response['description'] ?? '';
+      final previousTypeId = previousSafeSpot.isNotEmpty ? previousSafeSpot['type_id'] : null;
+      final newTypeId = response['type_id'];
+
+      // Check if it's an edit (content changed but status stayed same)
+      bool isEdit = (previousName != newName || 
+                    previousDescription != newDescription || 
+                    previousTypeId != newTypeId) && 
+                   previousStatus == newStatus;
+
+      if (isEdit && newStatus == previousStatus) {
+        print('Showing edit confirmation message');
+        _showSnackBar('Safe spot updated: $typeName');
+      } else if (newStatus != previousStatus) {
+        // Status change messages (existing logic)
+        if (newStatus == 'approved') {
+          print('Showing approved message');
+          _showSnackBar('Safe spot approved: $typeName');
+        } else if (newStatus == 'rejected') {
+          print('Showing rejected message');
+          _showSnackBar('Safe spot rejected: $typeName');
+        }
+      }
+    }
+  } catch (e) {
+    print('❌ Error in _handleSafeSpotUpdate: $e');
+    if (mounted) {
+      _showSnackBar('Error updating safe spot: ${e.toString()}');
+    }
+  }
+  print('=== END SAFE SPOT UPDATE DEBUG ===\n');
+}
+
+// Also add debug to the visibility check
+bool _shouldUserSeeSafeSpot(Map<String, dynamic> safeSpot) {
+  final status = safeSpot['status'] ?? 'pending';
+  final createdBy = safeSpot['created_by'];
+  final currentUserId = _userProfile?['id'];
+  
+  print('--- Visibility Check ---');
+  print('Status: $status');
+  print('Created by: $createdBy');
+  print('Current user: $currentUserId');
+  print('Is admin: $_isAdmin');
+  
+  // Admins can see everything
+  if (_isAdmin) {
+    print('Admin can see: true');
+    return true;
+  }
+  
+  // Users can see their own spots regardless of status
+  if (createdBy == currentUserId) {
+    print('Own spot: true');
+    return true;
+  }
+  
+  // Users can see approved and pending spots (for voting)
+  if (status == 'approved' || status == 'pending') {
+    print('Approved/pending spot: true');
+    return true;
+  }
+  
+  // Hide rejected spots from other users
+  print('Rejected spot from other user: false');
+  return false;
+}
+
+void _handleSafeSpotDelete(PostgresChangePayload payload) {
+  if (!mounted) return;
+  
+  final deletedSafeSpotId = payload.oldRecord['id'];
+  
+  setState(() {
+    final deletedSafeSpot = _safeSpots.firstWhere(
+      (s) => s['id'] == deletedSafeSpotId,
+      orElse: () => {},
+    );
+    
+    // Remove the safe spot from local state
+    _safeSpots.removeWhere((spot) => spot['id'] == deletedSafeSpotId);
+    
+    print('Safe spot deleted via real-time: $deletedSafeSpotId');
+    
+    // Show notification
+    if (deletedSafeSpot.isNotEmpty) {
+      final typeName = deletedSafeSpot['safe_spot_types']?['name'] ?? 'Safe spot';
+      _showSnackBar('$typeName deleted');
+    }
+  });
+}
+
+void _handleSafeSpotUpvoteChange(PostgresChangePayload payload) async {
+  if (!mounted) return;
+  
+  try {
+    final safeSpotId = payload.eventType == PostgresChangeEvent.delete 
+        ? payload.oldRecord['safe_spot_id']
+        : payload.newRecord['safe_spot_id'];
+    
+    // Find the safe spot in our local list
+    final index = _safeSpots.indexWhere((s) => s['id'] == safeSpotId);
+    
+    if (index != -1) {
+      // Get updated upvote count
+      final upvoteCount = await SafeSpotService.getSafeSpotUpvoteCount(safeSpotId);
+      
+      setState(() {
+        _safeSpots[index] = {
+          ..._safeSpots[index],
+          'upvote_count': upvoteCount,
+        };
+      });
+      
+      print('Upvote count updated via real-time: $upvoteCount for safe spot $safeSpotId');
+    }
+  } catch (e) {
+    print('Error in _handleSafeSpotUpvoteChange: $e');
+  }
+}
+
+
+
+
+
+// FUNCTION TO CALL WELCOME
+void _showWelcomeModal() async {
+  final user = Supabase.instance.client.auth.currentUser;
+  
+  if (user != null) {
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('username, role, created_at')
+          .eq('id', user.id)
+          .single();
+      
+      final isAdmin = response['role'] == 'admin';
+      final userName = response['username'];
+      final createdAt = DateTime.parse(response['created_at']);
+      final isNewUser = DateTime.now().difference(createdAt).inMinutes < 5; // Created within last 5 minutes
+      
+      if (isNewUser) {
+        // Show first-time welcome modal for new users
+        showFirstTimeWelcomeModal(
+          context,
+          userName: userName,
+        );
+      } else {
+        // Show regular welcome modal for returning users
+        showWelcomeModal(
+          context,
+          userType: isAdmin ? UserType.admin : UserType.user,
+          userName: userName,
+        );
+      }
+    } catch (e) {
+      // Fallback to regular user welcome
+      showWelcomeModal(
+        context,
+        userType: UserType.user,
+      );
+    }
+  } else {
+    // Show guest welcome modal
+    showWelcomeModal(
+      context,
+      userType: UserType.guest,
+      onCreateAccount: () {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const RegisterScreen()),
+        );
+      },
+    );
+  }
+}
 
 void _startProximityMonitoring() {
   _proximityCheckTimer?.cancel();
@@ -1517,15 +1979,15 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Critical',
-                        Icons.warning,
-                        const Color.fromARGB(255, 247, 26, 10),
+                        FontAwesomeIcons.exclamationTriangle,  // Better icon for critical
+                        const Color.fromARGB(255, 219, 0, 0),
                         filterService.showCritical,
                         (value) => filterService.toggleCritical(),
                       ),
                       _buildFilterToggle(
                         context,
                         'High',
-                        Icons.error,
+                        Icons.priority_high,  // Better icon for high priority
                         const Color.fromARGB(255, 223, 106, 11),
                         filterService.showHigh,
                         (value) => filterService.toggleHigh(),
@@ -1533,7 +1995,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Medium',
-                        Icons.info,
+                        Icons.remove,  // Better icon for medium
                         const Color.fromARGB(167, 116, 66, 9),
                         filterService.showMedium,
                         (value) => filterService.toggleMedium(),
@@ -1541,7 +2003,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Low',
-                        Icons.info_outline_rounded,
+                        Icons.low_priority,  // Better icon for low priority
                         const Color.fromARGB(255, 216, 187, 23),
                         filterService.showLow,
                         (value) => filterService.toggleLow(),
@@ -1564,7 +2026,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Property',
-                        Icons.house,
+                        Icons.home_outlined,  // Better property icon
                         Colors.blue,
                         filterService.showProperty,
                         (value) => filterService.toggleProperty(),
@@ -1572,7 +2034,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Violent',
-                        Icons.warning,
+                        Icons.priority_high,  // Better violent crime icon
                         Colors.red,
                         filterService.showViolent,
                         (value) => filterService.toggleViolent(),
@@ -1580,7 +2042,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Drug',
-                        Icons.medical_services,
+                        FontAwesomeIcons.syringe,  // Better drug icon (alternative to FontAwesome)
                         Colors.purple,
                         filterService.showDrug,
                         (value) => filterService.toggleDrug(),
@@ -1588,7 +2050,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Public Order',
-                        Icons.gavel,
+                        Icons.balance,  // Better public order icon
                         Colors.orange,
                         filterService.showPublicOrder,
                         (value) => filterService.togglePublicOrder(),
@@ -1596,7 +2058,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Financial',
-                        Icons.attach_money,
+                        Icons.attach_money,  // Better financial icon
                         Colors.green,
                         filterService.showFinancial,
                         (value) => filterService.toggleFinancial(),
@@ -1604,7 +2066,7 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Traffic',
-                        Icons.directions_car,
+                        Icons.traffic,  // Better traffic icon
                         Colors.blueGrey,
                         filterService.showTraffic,
                         (value) => filterService.toggleTraffic(),
@@ -1612,14 +2074,13 @@ void _showHotspotFilterDialog() {
                       _buildFilterToggle(
                         context,
                         'Alerts',
-                        Icons.notification_important,
-                        Colors.deepPurple,  // Distinct color for alerts
+                        Icons.campaign,  // Better alerts icon
+                        Colors.deepPurple,
                         filterService.showAlerts,
                         (value) => filterService.toggleAlerts(),
                       ),
                       
                       const SizedBox(height: 16),
-                      
                       
                       // Status filters (only for logged-in users)
                       if (_userProfile != null) ...[
@@ -1638,39 +2099,59 @@ void _showHotspotFilterDialog() {
                         _buildFilterToggle(
                           context,
                           'Pending',
-                          Icons.question_mark,
-                          Colors.purple,
+                          Icons.hourglass_empty,  // Better pending icon
+                          Colors.amber,
                           filterService.showPending,
                           (value) => filterService.togglePending(),
                         ),
                         _buildFilterToggle(
                           context,
                           'Rejected',
-                          Icons.block,
+                          Icons.cancel_outlined,  // Better rejected icon
                           Colors.grey,
                           filterService.showRejected,
                           (value) => filterService.toggleRejected(),
                         ),
+                        
+                        // Active/Inactive filters (only for admin and regular users)
+                        if (_userProfile?['role'] == 'admin' || _userProfile?['role'] == 'user') ...[
+                          _buildFilterToggle(
+                            context,
+                            'Active',
+                            Icons.check_circle_outline,  // Active icon
+                            Colors.green,
+                            filterService.showActive,
+                            (value) => filterService.toggleActive(),
+                          ),
+                          _buildFilterToggle(
+                            context,
+                            'Inactive',
+                            Icons.pause_circle_outline,  // Inactive icon
+                            Colors.grey,
+                            filterService.showInactive,
+                            (value) => filterService.toggleInactive(),
+                          ),
+                        ],
+                        
                         const SizedBox(height: 16),
                       ],
                       
-                        // Close button
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white, // White background
-                              foregroundColor: Theme.of(context).primaryColor, // Blue text
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
+                      // Close button
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Theme.of(context).primaryColor,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Close'),
                           ),
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
                         ),
-
+                      ),
                     ],
                   ),
                 ),
@@ -1749,6 +2230,7 @@ void _showLocationOptions(LatLng position) async {
           onShareLocation: () => _shareLocation(position),
           onReportHotspot: () => _showReportHotspotForm(position),
           onAddHotspot: () => _showAddHotspotForm(position),
+          onAddSafeSpot: () => _navigateToSafeSpotForm(position), // Updated callback
         );
       },
     );
@@ -1796,11 +2278,7 @@ void _showLocationOptions(LatLng position) async {
                   _getSafeRoute(position);
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.share),
-                title: const Text('Share Location'),
-                onTap: () => _shareLocation(position),
-              ),
+
               if (!_isAdmin && _userProfile != null)
                 ListTile(
                   leading: const Icon(Icons.report, color: Colors.orange),
@@ -1821,6 +2299,23 @@ void _showLocationOptions(LatLng position) async {
                     _showAddHotspotForm(position);
                   },
                 ),
+
+              if (_userProfile != null) // Safe spot option for mobile
+                ListTile(
+                  leading: const Icon(Icons.safety_check, color: Colors.blue),
+                  title: const Text('Add Safe Spot'),
+                  subtitle: const Text('Mark this as a safe location'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _navigateToSafeSpotForm(position);
+                  },
+                ),
+
+              ListTile(
+                leading: const Icon(Icons.share),
+                title: const Text('Share Location'),
+                onTap: () => _shareLocation(position),
+              ),
               if (_distance > 0)
                 Padding(
                   padding: const EdgeInsets.all(8.0),
@@ -1838,6 +2333,22 @@ void _showLocationOptions(LatLng position) async {
   }
 }
 
+void _navigateToSafeSpotForm(LatLng position) {
+  if (_userProfile == null) {
+    _showSnackBar('Please log in to add safe spots');
+    return;
+  }
+
+  SafeSpotForm.showSafeSpotForm(
+    context: context,
+    position: position,
+    userProfile: _userProfile,
+    onUpdate: () {
+      _loadSafeSpots(); // Reload safe spots to show the new one
+    },
+  );
+}
+
 
 
 
@@ -1847,57 +2358,7 @@ double _calculateDistance(LatLng point1, LatLng point2) {
   return distance.as(LengthUnit.Meter, point1, point2);
 }
 
-Future<List<LatLng>> _getRouteFromAPI(LatLng start, LatLng end) async {
-  // Check if running on web
-  final isWeb = kIsWeb;
-  
-  String baseUrl;
-  if (isWeb) {
-    // Use CORS proxy for web
-    baseUrl = 'https://api.allorigins.win/raw?url=';
-    final encodedUrl = Uri.encodeComponent(
-      'https://router.project-osrm.org/route/v1/driving/'
-      '${start.longitude},${start.latitude};'
-      '${end.longitude},${end.latitude}?overview=full&geometries=geojson'
-    );
-    baseUrl += encodedUrl;
-  } else {
-    // Direct API call for mobile
-    baseUrl = 'https://router.project-osrm.org/route/v1/driving/'
-        '${start.longitude},${start.latitude};'
-        '${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-  }
 
-  final response = await http.get(
-    Uri.parse(baseUrl),
-    headers: isWeb ? {} : {
-      'User-Agent': 'Zecure/1.0',
-    },
-  ).timeout(const Duration(seconds: 15));
-
-  if (response.statusCode == 200) {
-    final data = json.decode(response.body);
-    
-    if (data['routes'] == null || (data['routes'] as List).isEmpty) {
-      throw Exception('No route found');
-    }
-    
-    final route = data['routes'][0];
-    final coordinates = route['geometry']?['coordinates'] as List?;
-    
-    if (coordinates == null) {
-      throw Exception('No route coordinates found');
-    }
-    
-    return coordinates.map((coord) {
-      final coordList = coord as List;
-      final lng = _safeParseDouble(coordList[0]) ?? 0.0;
-      final lat = _safeParseDouble(coordList[1]) ?? 0.0;
-      return LatLng(lat, lng);
-    }).toList();
-  }
-  throw Exception('Failed to get route (${response.statusCode})');
-}
 
 
 List<LatLng> _findUnsafeSegments(List<LatLng> route) {
@@ -2033,29 +2494,99 @@ Future<List<LatLng>> _getRouteWithWaypoints(
   final waypointsStr = limitedWaypoints.map((p) => '${p.longitude},${p.latitude}').join(';');
   final isWeb = kIsWeb;
   
-  String baseUrl;
+  String apiUrl;
+  Uri requestUri;
+  
   if (isWeb) {
-    // Use CORS proxy for web
-    baseUrl = 'https://api.allorigins.win/raw?url=';
-    final encodedUrl = Uri.encodeComponent(
-      'https://router.project-osrm.org/route/v1/driving/'
-      '${start.longitude},${start.latitude};'
-      '$waypointsStr;'
-      '${end.longitude},${end.latitude}?overview=full&geometries=geojson&continue_straight=false&alternatives=false'
-    );
-    baseUrl += encodedUrl;
-  } else {
-    // Direct API call for mobile
-    baseUrl = 'https://router.project-osrm.org/route/v1/driving/'
+    // Build the OSRM URL first
+    apiUrl = 'https://router.project-osrm.org/route/v1/driving/'
         '${start.longitude},${start.latitude};'
         '$waypointsStr;'
         '${end.longitude},${end.latitude}?overview=full&geometries=geojson&continue_straight=false&alternatives=false';
+    
+    // Use a more reliable CORS proxy or try multiple options
+    final corsProxies = [
+      'https://cors-anywhere.herokuapp.com/',
+      'https://api.allorigins.win/raw?url=',
+      'https://corsproxy.io/?',
+    ];
+    
+    // Try first proxy
+    requestUri = Uri.parse('${corsProxies[1]}${Uri.encodeComponent(apiUrl)}');
+  } else {
+    // Direct API call for mobile
+    apiUrl = 'https://router.project-osrm.org/route/v1/driving/'
+        '${start.longitude},${start.latitude};'
+        '$waypointsStr;'
+        '${end.longitude},${end.latitude}?overview=full&geometries=geojson&continue_straight=false&alternatives=false';
+    
+    requestUri = Uri.parse(apiUrl);
   }
 
+  try {
+    final response = await http.get(
+      requestUri,
+      headers: isWeb ? {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      } : {
+        'User-Agent': 'Zecure/1.0',
+        'Accept': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 20));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      
+      if (data['routes'] == null || (data['routes'] as List).isEmpty) {
+        throw Exception('No safe route found with waypoints');
+      }
+      
+      final route = data['routes'][0];
+      final coordinates = route['geometry']?['coordinates'] as List?;
+      
+      if (coordinates == null) {
+        throw Exception('No route coordinates found');
+      }
+      
+      return coordinates.map((coord) {
+        final coordList = coord as List;
+        final lng = _safeParseDouble(coordList[0]) ?? 0.0;
+        final lat = _safeParseDouble(coordList[1]) ?? 0.0;
+        return LatLng(lat, lng);
+      }).toList();
+    }
+    throw Exception('Failed to get safe route with waypoints (${response.statusCode})');
+  } catch (e) {
+    if (isWeb) {
+      // Fallback: try different CORS proxy
+      return await _getRouteWithWaypointsFallback(start, end, waypoints);
+    }
+    rethrow;
+  }
+}
+
+Future<List<LatLng>> _getRouteWithWaypointsFallback(
+  LatLng start, 
+  LatLng end, 
+  List<LatLng> waypoints
+) async {
+  final limitedWaypoints = waypoints.take(2).toList();
+  final waypointsStr = limitedWaypoints.map((p) => '${p.longitude},${p.latitude}').join(';');
+  
+  // Try corsproxy.io as fallback
+  final apiUrl = 'https://router.project-osrm.org/route/v1/driving/'
+      '${start.longitude},${start.latitude};'
+      '$waypointsStr;'
+      '${end.longitude},${end.latitude}?overview=full&geometries=geojson&continue_straight=false&alternatives=false';
+  
+  final requestUri = Uri.parse('https://corsproxy.io/?${Uri.encodeComponent(apiUrl)}');
+  
   final response = await http.get(
-    Uri.parse(baseUrl),
-    headers: isWeb ? {} : {
-      'User-Agent': 'Zecure/1.0',
+    requestUri,
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
     },
   ).timeout(const Duration(seconds: 20));
 
@@ -2083,7 +2614,111 @@ Future<List<LatLng>> _getRouteWithWaypoints(
   throw Exception('Failed to get safe route with waypoints (${response.statusCode})');
 }
 
+Future<List<LatLng>> _getRouteFromAPI(LatLng start, LatLng end) async {
+  final isWeb = kIsWeb;
+  
+  String apiUrl;
+  Uri requestUri;
+  
+  if (isWeb) {
+    // Build the OSRM URL first
+    apiUrl = 'https://router.project-osrm.org/route/v1/driving/'
+        '${start.longitude},${start.latitude};'
+        '${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+    
+    // Use CORS proxy with proper encoding
+    requestUri = Uri.parse('https://api.allorigins.win/raw?url=${Uri.encodeComponent(apiUrl)}');
+  } else {
+    // Direct API call for mobile
+    apiUrl = 'https://router.project-osrm.org/route/v1/driving/'
+        '${start.longitude},${start.latitude};'
+        '${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+    
+    requestUri = Uri.parse(apiUrl);
+  }
 
+  try {
+    final response = await http.get(
+      requestUri,
+      headers: isWeb ? {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      } : {
+        'User-Agent': 'Zecure/1.0',
+        'Accept': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 15));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      
+      if (data['routes'] == null || (data['routes'] as List).isEmpty) {
+        throw Exception('No route found');
+      }
+      
+      final route = data['routes'][0];
+      final coordinates = route['geometry']?['coordinates'] as List?;
+      
+      if (coordinates == null) {
+        throw Exception('No route coordinates found');
+      }
+      
+      return coordinates.map((coord) {
+        final coordList = coord as List;
+        final lng = _safeParseDouble(coordList[0]) ?? 0.0;
+        final lat = _safeParseDouble(coordList[1]) ?? 0.0;
+        return LatLng(lat, lng);
+      }).toList();
+    }
+    throw Exception('Failed to get route (${response.statusCode})');
+  } catch (e) {
+    if (isWeb) {
+      // Fallback: try different CORS proxy
+      return await _getRouteFromAPIFallback(start, end);
+    }
+    rethrow;
+  }
+}
+
+Future<List<LatLng>> _getRouteFromAPIFallback(LatLng start, LatLng end) async {
+  // Try corsproxy.io as fallback
+  final apiUrl = 'https://router.project-osrm.org/route/v1/driving/'
+      '${start.longitude},${start.latitude};'
+      '${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+  
+  final requestUri = Uri.parse('https://corsproxy.io/?${Uri.encodeComponent(apiUrl)}');
+  
+  final response = await http.get(
+    requestUri,
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+  ).timeout(const Duration(seconds: 15));
+
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    
+    if (data['routes'] == null || (data['routes'] as List).isEmpty) {
+      throw Exception('No route found');
+    }
+    
+    final route = data['routes'][0];
+    final coordinates = route['geometry']?['coordinates'] as List?;
+    
+    if (coordinates == null) {
+      throw Exception('No route coordinates found');
+    }
+    
+    return coordinates.map((coord) {
+      final coordList = coord as List;
+      final lng = _safeParseDouble(coordList[0]) ?? 0.0;
+      final lat = _safeParseDouble(coordList[1]) ?? 0.0;
+      return LatLng(lat, lng);
+    }).toList();
+  }
+  throw Exception('Failed to get route (${response.statusCode})');
+}
 
 Future<void> _getSafeRoute(LatLng destination) async {
   if (_currentPosition == null) return;
@@ -2112,6 +2747,7 @@ Future<void> _getSafeRoute(LatLng destination) async {
         _showSnackBar('Safer route found! ');
       } else {
         _showSnackBar('Could not find safer route - using regular route.');
+        finalRoute = regularRoute; // Use original route if no improvement
       }
     }
     
@@ -2136,9 +2772,14 @@ Future<void> _getSafeRoute(LatLng destination) async {
     
     _startRouteUpdates();
   } catch (e) {
+    print('Safe route error: $e'); // Debug logging
     _showSnackBar('Error calculating safe route: ${e.toString()}');
     // Fallback to regular directions if safe route fails
-    _getDirections(destination);
+    try {
+      _getDirections(destination);
+    } catch (fallbackError) {
+      _showSnackBar('Unable to get any route. Please try again.');
+    }
   }
 }
 
@@ -2279,7 +2920,8 @@ double _calculateRouteDistance(List<LatLng> route) {
     }
   }
 
-
+ 
+// TRAVEL TIME DURATION
 Widget _buildFloatingDurationWidget() {
   // Only show if there's a destination and we have calculated distance
   if (_destination == null || _currentPosition == null || _distance <= 0) {
@@ -2428,6 +3070,7 @@ Widget _buildFloatingDurationWidget() {
 }
 
 
+//ADD HOTSPOT FOR ADMIN
   void _showAddHotspotForm(LatLng position) async {
     final isDesktop = MediaQuery.of(context).size.width >= 600;
 
@@ -2923,7 +3566,7 @@ Widget _buildFloatingDurationWidget() {
 
 
 
-
+// REPORT HOTSPOT FOR REGULAR USERS
 
 void _showReportHotspotForm(LatLng position) async {
   try {
@@ -3156,6 +3799,8 @@ Future<void> _showMobileReportForm(
   }
 }
 
+
+// EDIT HOTSPOT
 
 void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
   try {
@@ -3433,6 +4078,8 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
       return;
     }
 
+
+//MOBILE VIEW
 showModalBottomSheet(
   context: context,
   isScrollControlled: true,
@@ -3717,7 +4364,7 @@ showModalBottomSheet(
   }
 }
 
-
+// REPORT HOTSPOT
 Future<void> _reportHotspot(
     int typeId,
     String description,
@@ -3810,6 +4457,8 @@ void _checkRealtimeConnection() {
   }
 }
 
+
+// SAVE HOTSPOT
 Future<int?> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
   try {
     final insertData = {
@@ -3871,6 +4520,8 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
   }
 }
 
+
+// HOTSPOT DELETE
 void _handleHotspotDelete(PostgresChangePayload payload) {
   if (!mounted) return;
   
@@ -3895,6 +4546,8 @@ void _handleHotspotDelete(PostgresChangePayload payload) {
   }
 }
 
+
+//SHARE LOCATION
   Future<void> _shareLocation(LatLng position) async {
     final url = 'https://www.google.com/maps/search/?api=1&query=${position.latitude},${position.longitude}';
     final geoUrl = 'geo:${position.latitude},${position.longitude}?q=${position.latitude},${position.longitude}';
@@ -3929,7 +4582,7 @@ Future<void> _logout() async {
   }
 }
 
-
+//LOGOUT MODAL
   void _showLogoutConfirmation() async {
     final shouldLogout = await showDialog<bool>(
       context: context,
@@ -4034,7 +4687,7 @@ void _showProfileDialog() {
 
 
 
-
+// BOTTOM NAV BARS MAIN
 
 Widget _buildBottomNavBar() {
   return Container(
@@ -4171,6 +4824,138 @@ Widget _buildBottomNavBar() {
 }
 
 
+@override
+Widget build(BuildContext context) {
+  // Check if it's web or a large desktop screen
+  final bool isDesktop = MediaQuery.of(context).size.width >= 800;
+
+  return WillPopScope(
+    onWillPop: _handleWillPop,
+    child: Scaffold(
+      // Use desktop or mobile layout depending on screen size
+      body: isDesktop ? _buildResponsiveDesktopLayout() : _buildCurrentScreen(isDesktop),
+      
+      // Show FAB only if map tab is active
+      floatingActionButton: _currentTab == MainTab.map 
+          ? _buildFloatingActionButtons() 
+          : null,
+
+      // Bottom navigation bar - show on mobile OR when desktop sidebar is hidden and user is logged in
+      bottomNavigationBar: _buildResponsiveBottomNav(isDesktop),
+    ),
+  );
+}
+
+
+//  SIDEBAR VIEW FOR DESKTOP
+Widget _buildResponsiveDesktopLayout() {
+  return Stack(
+    children: [
+      Row(
+        children: [
+          // Responsive sidebar - automatically handles desktop/mobile logic
+          ResponsiveNavigation(
+            currentIndex: _currentTab.index,
+            onTap: (index) {
+              setState(() {
+                _currentTab = MainTab.values[index];
+                if (_currentTab == MainTab.profile) {
+                  _profileScreen.isEditingProfile = false;
+                }
+              });
+            },
+            unreadNotificationCount: _unreadNotificationCount,
+            isSidebarVisible: _isSidebarVisible,
+            isUserLoggedIn: _userProfile != null,
+            onToggle: () {
+              setState(() {
+                _isSidebarVisible = !_isSidebarVisible;
+              });
+            },
+          ),
+          
+          // Main content area
+          Expanded(
+            child: _buildCurrentScreen(true),
+          ),
+        ],
+      ),
+      
+      // Responsive toggle button
+      ResponsiveSidebarToggle(
+        isSidebarVisible: _isSidebarVisible,
+        isUserLoggedIn: _userProfile != null,
+        currentTab: _currentTab.index,
+        onToggle: () {
+          setState(() {
+            _isSidebarVisible = !_isSidebarVisible;
+          });
+        },
+      ),
+    ],
+  );
+}
+
+// BOTTOM NAV BARS FOR MOBILE VIEW
+Widget? _buildResponsiveBottomNav(bool isDesktop) {
+  // Only show bottom nav on mobile screens AND when user is logged in
+  // Don't show on desktop even when sidebar is hidden
+  if (isDesktop || _userProfile == null) {
+    return null;
+  }
+
+  // Use your existing bottom nav bar design for mobile only
+  return _buildBottomNavBar();
+}
+
+Future<bool> _handleWillPop() async {
+  // Check if we're on profile tab and in edit mode
+  if (_currentTab == MainTab.profile && _profileScreen.isEditingProfile == true) {
+    // Let the profile screen handle the back button
+    return true;
+  }
+  
+  // If not on map tab, switch to map tab
+  if (_currentTab != MainTab.map) {
+    setState(() {
+      _currentTab = MainTab.map;
+    });
+    return false;
+  }
+  
+  // Check if we can pop (has previous routes)
+  final canPop = Navigator.of(context).canPop();
+  
+  // If we can pop, pop the route (this will handle the landing page case)
+  if (canPop) {
+    Navigator.of(context).pop();
+    return false;
+  }
+  
+  // If this is the root route, show exit confirmation
+  final shouldExit = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Exit App?'),
+      content: const Text('Do you want to exit the application?'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('No'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Exit App', style: TextStyle(color: Colors.red)),
+        ),
+      ],
+    ),
+  ) ?? false;
+  
+  return shouldExit;
+}
+
+//FLOATING ACTION BUTTONS
+
 Widget _buildFloatingActionButtons() {
   return Column(
     mainAxisSize: MainAxisSize.min,
@@ -4197,12 +4982,9 @@ Widget _buildFloatingActionButtons() {
             children: MapType.values.map((type) {
               final isSelected = type == _currentMapType;
               return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _currentMapType = type;
-                    _showMapTypeSelector = false;
-                  });
-                },
+              onTap: () {
+                _switchMapType(type);  // Use your new method
+              },
                 child: Container(
                   margin: const EdgeInsets.symmetric(vertical: 1), // Reduced from 2
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Reduced padding
@@ -4296,7 +5078,7 @@ Widget _buildFloatingActionButtons() {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      _isRotationLocked ? 'Locked' : 'Unlocked',
+                      _isRotationLocked ? 'Rotate Locked' : 'Rotate Unlocked',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 10,
@@ -4459,6 +5241,8 @@ String _getMapTypeName(MapType type) {
   }
 }
 
+//COMPASS
+
 Widget _buildCompass() {
   return Container(
     width: 40,
@@ -4532,7 +5316,7 @@ Widget _buildCompass() {
   );
 }
 
-
+//NOTIFICATION
 
 Widget _buildNotificationsScreen() {
   return Scaffold(
@@ -4659,13 +5443,48 @@ void _handleNotificationTap(Map<String, dynamic> notification) {
   }
 }
 
+
+void _switchMapType(MapType newType) {
+  if (newType == _currentMapType) return;
+  
+  final currentZoom = _mapController.camera.zoom;
+  final currentMaxZoom = _getMaxZoomForMapType(_currentMapType);
+  final newMaxZoom = _getMaxZoomForMapType(newType);
+  
+  setState(() {
+    _currentMapType = newType;
+    _showMapTypeSelector = false;
+  });
+  
+  // Calculate appropriate zoom level for new map type
+  double targetZoom = currentZoom;
+  
+  if (currentZoom > newMaxZoom) {
+    // Current zoom exceeds new map's capability - clamp to max
+    targetZoom = newMaxZoom.toDouble();
+  } else if (currentZoom == currentMaxZoom && newMaxZoom > currentMaxZoom) {
+    // Was at max zoom of previous map, increase zoom for higher resolution map
+    targetZoom = math.min(currentZoom + 1, newMaxZoom.toDouble());
+  }
+  
+  // Apply zoom change with smooth animation
+  if (targetZoom != currentZoom) {
+    _mapController.move(
+      _mapController.camera.center, 
+      targetZoom
+    );
+    
+    // Show appropriate feedback message
+
+  }
+}
   
 
 // Helper method to get max zoom for each map type
 int _getMaxZoomForMapType(MapType type) {
   switch (type) {
     case MapType.standard:
-      return 18;
+      return 19;
     case MapType.terrain:
       return 17; // OpenTopoMap has limited zoom
     case MapType.satellite:
@@ -4693,6 +5512,9 @@ IconData _getMapTypeIcon(MapType type) {
   }
 }
 
+
+// MAP MAP MAP
+
 Widget _buildMap() {
   final currentConfig = mapConfigurations[_currentMapType]!;
   
@@ -4712,7 +5534,6 @@ Widget _buildMap() {
           ],
         ),
         child: ClipRRect(
-   
           child: FlutterMap(
             mapController: _mapController,
             options: MapOptions(
@@ -4720,8 +5541,26 @@ Widget _buildMap() {
               initialZoom: 15.0,
               maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
               minZoom: 3.0,
+              // Platform-specific tap behavior
               onTap: (tapPosition, latLng) {
                 FocusScope.of(context).unfocus();
+                
+                // Desktop/Web: Set destination on single tap
+                if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+                  setState(() {
+                    _destination = latLng;
+                  });
+                  _showLocationOptions(latLng);
+                }
+                // Mobile: Only unfocus (destination set on long press)
+              },
+              // Long press for mobile devices
+              onLongPress: (tapPosition, latLng) {
+                // Only provide haptic feedback on mobile
+                if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+                  HapticFeedback.mediumImpact();
+                }
+                
                 setState(() {
                   _destination = latLng;
                 });
@@ -4748,14 +5587,12 @@ Widget _buildMap() {
             ),
             children: [
               // Enhanced Tile Layer with dynamic source
-            TileLayer(
+              TileLayer(
                 urlTemplate: currentConfig['urlTemplate'],
                 userAgentPackageName: 'com.example.zecure',
-                maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(), // Convert int to double
+                maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
                 fallbackUrl: currentConfig['fallbackUrl'],
-                // Add subdomains for CartoDB
                 subdomains: _currentMapType == MapType.dark ? ['a', 'b', 'c', 'd'] : const [],
-                // Handle tile loading errors
                 errorTileCallback: (tile, error, stackTrace) {
                   print('Tile loading error: $error');
                 },
@@ -4787,7 +5624,6 @@ Widget _buildMap() {
 
               // Enhanced Polyline layer with better styling (original)
               if (_polylinePoints.isNotEmpty) ...[
-                // Shadow polyline for depth
                 PolylineLayer(
                   polylines: [
                     Polyline(
@@ -4797,7 +5633,6 @@ Widget _buildMap() {
                     ),
                   ],
                 ),
-                // Main polyline with enhanced styling
                 PolylineLayer(
                   polylines: [
                     Polyline(
@@ -4830,154 +5665,370 @@ Widget _buildMap() {
                     ),
                 ],
               ),
-              Consumer<HotspotFilterService>(
-                builder: (context, filterService, child) {
-                  return MarkerLayer(
-                    markers: _hotspots.where((hotspot) {
-                      final currentUserId = _userProfile?['id'];
-                      final isAdmin = _isAdmin;
-                      final status = hotspot['status'] ?? 'approved';
-                      final activeStatus = hotspot['active_status'] ?? 'active';
-                      final createdBy = hotspot['created_by'];
-                      final reportedBy = hotspot['reported_by'];
-                      final isOwnHotspot = currentUserId != null &&
-                                       (currentUserId == createdBy || currentUserId == reportedBy);
-                      // Admin view - show all hotspots based on filters
-                      if (isAdmin) {
-                        return filterService.shouldShowHotspot(hotspot);
-                      }
-                      // Non-admin view rules:
-                      // 1. Show active+approved hotspots that match crime type filters
-                      if (activeStatus == 'active' &&
-                          status == 'approved' &&
-                          filterService.shouldShowHotspot(hotspot)) {
-                        return true;
-                      }
-                      // 2. Always show user's own hotspots regardless of status
-                      if (isOwnHotspot) {
-                        // Apply filter service settings for pending/rejected if needed
-                        if (status == 'pending' && !filterService.showPending) return false;
-                        if (status == 'rejected' && !filterService.showRejected) return false;
-                        return true;
-                      }
-                      return false;
-                    }).map((hotspot) {
-                      final coords = hotspot['location']['coordinates'];
-                      final point = LatLng(coords[1], coords[0]);
-                      final status = hotspot['status'] ?? 'approved';
-                      final activeStatus = hotspot['active_status'] ?? 'active';
-                      final crimeLevel = hotspot['crime_type']['level'];
-                      final isActive = activeStatus == 'active';
-                      final isOwnHotspot = _userProfile?['id'] != null &&
-                                       (_userProfile?['id'] == hotspot['created_by'] ||
-                                        _userProfile?['id'] == hotspot['reported_by']);
-                      final isSelected = _selectedHotspot != null && _selectedHotspot!['id'] == hotspot['id'];
-                      // Determine marker appearance
-                      Color markerColor;
-                      IconData markerIcon;
-                      double opacity = 1.0;
-                      if (status == 'pending') {
-                        markerColor = Colors.deepPurple;
-                        markerIcon = Icons.question_mark_rounded;
-                      } else if (status == 'rejected') {
-                        markerColor = Colors.grey;
-                        markerIcon = Icons.block_rounded;
-                        // Make rejected markers semi-transparent unless it's the user's own
-                        opacity = isOwnHotspot ? 1.0 : 0.6;
-                      } else {
-                        // For approved hotspots
-                        switch (crimeLevel) {
-                          case 'critical':
-                            markerColor = const Color.fromARGB(255, 247, 26, 10);
-                            markerIcon = Icons.warning_rounded;
-                            break;
-                          case 'high':
-                            markerColor = const Color.fromARGB(255, 223, 106, 11);
-                            markerIcon = Icons.error_rounded;
-                            break;
-                          case 'medium':
-                            markerColor = const Color.fromARGB(155, 202, 130, 49);
-                            markerIcon = Icons.info_rounded;
-                            break;
-                          case 'low':
-                            markerColor = const Color.fromARGB(255, 216, 187, 23);
-                            markerIcon = Icons.info_outline_rounded;
-                            break;
-                          default:
-                            markerColor = Colors.blue;
-                            markerIcon = Icons.location_pin;
-                        }
-                        // Apply inactive styling
-                        if (!isActive) {
-                          markerColor = markerColor.withOpacity(0.3);
-                        }
-                      }
-                      return Marker(
-                        point: point,
-                        width: isSelected ? 80 : 70,
-                        height: isSelected ? 80 : 70,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            // Enhanced highlight ring for selected hotspot
-                            if (isSelected)
-                              Container(
-                                width: 90,
-                                height: 90,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.blue.withOpacity(0.6),
-                                    width: 3,
-                                  ),
-                                ),
-                              ),
-                            // Main marker with pulsing effect
-                            Opacity(
-                              opacity: opacity,
-                              child: PulsingHotspotMarker(
-                                markerColor: markerColor,
-                                markerIcon: markerIcon,
-                                isActive: isActive && status != 'rejected',
-                                pulseScale: isSelected ? 1.2 : 1.0,
-                                onTap: () {
-                                  setState(() {
-                                    _selectedHotspot = hotspot;
-                                  });
-                                  _showHotspotDetails(hotspot);
-                                },
-                              ),
-                            ),
-
-                            // Status indicator dot for pending/rejected
-                            if (status == 'pending' || status == 'rejected')
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: Container(
-                                  width: 16,
-                                  height: 16,
-                                  decoration: BoxDecoration(
-                                    color: status == 'pending' ? Colors.orange : Colors.grey,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: Colors.white, width: 2),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.2),
-                                        blurRadius: 4,
-                                        offset: const Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  );
-                },
+              
+// Updated filtering logic for your map - replace your existing Consumer<HotspotFilterService> section
+Consumer<HotspotFilterService>(
+  builder: (context, filterService, child) {
+    return MarkerLayer(
+      markers: _hotspots.where((hotspot) {
+        final currentUserId = _userProfile?['id'];
+        final isAdmin = _isAdmin;
+        final status = hotspot['status'] ?? 'approved';
+        final activeStatus = hotspot['active_status'] ?? 'active';
+        final createdBy = hotspot['created_by'];
+        final reportedBy = hotspot['reported_by'];
+        final isOwnHotspot = currentUserId != null &&
+                         (currentUserId == createdBy || currentUserId == reportedBy);
+        
+        // FIRST: Apply filter service logic to ALL hotspots (including own)
+        if (!filterService.shouldShowHotspot(hotspot)) {
+          return false;  // Hide if filter says no
+        }
+        
+        // SECOND: Apply visibility rules based on user role
+        if (isAdmin) {
+          // Admins see everything that passes the filter
+          return true;
+        }
+        
+        // For regular users and guests
+        if (status == 'approved' && activeStatus == 'active') {
+          // Show approved and active hotspots to everyone
+          return true;
+        }
+        
+        // Show own pending/rejected hotspots to authenticated users
+        if (isOwnHotspot && currentUserId != null) {
+          return true;
+        }
+        
+        // Hide everything else
+        return false;
+      }).map((hotspot) {
+        // Your existing marker building code stays the same
+        final coords = hotspot['location']['coordinates'];
+        final point = LatLng(coords[1], coords[0]);
+        final status = hotspot['status'] ?? 'approved';
+        final activeStatus = hotspot['active_status'] ?? 'active';
+        final crimeLevel = hotspot['crime_type']['level'];
+        final crimeCategory = hotspot['crime_type']['category'];
+        final isActive = activeStatus == 'active';
+        final isOwnHotspot = _userProfile?['id'] != null &&
+                         (_userProfile?['id'] == hotspot['created_by'] ||
+                          _userProfile?['id'] == hotspot['reported_by']);
+        final isSelected = _selectedHotspot != null && _selectedHotspot!['id'] == hotspot['id'];
+        
+        // Your existing marker color and icon logic stays exactly the same
+        Color markerColor;
+        IconData markerIcon;
+        double opacity = 1.0;
+        
+        if (status == 'pending') {
+          markerColor = Colors.deepPurple;
+          markerIcon = Icons.hourglass_empty;
+        }
+        else if (status == 'rejected') {
+          markerColor = Colors.grey;
+          markerIcon = Icons.cancel_outlined;
+          opacity = isOwnHotspot ? 1.0 : 0.6;
+        } else {
+  // Set color based on crime level
+  switch (crimeLevel) {
+    case 'critical':
+      markerColor = const Color.fromARGB(255, 221, 0, 0);
+      break;
+    case 'high':
+      markerColor = const Color.fromARGB(255, 241, 92, 23);
+      break;
+    case 'medium':
+      markerColor = const Color.fromARGB(155, 202, 130, 49);
+      break;
+    case 'low':
+      markerColor = const Color.fromARGB(255, 216, 187, 23);
+      break;
+    default:
+      markerColor = Colors.blue;
+  }
+  
+  // UPDATED: Level and Category-based icon selection to match filter dialog
+  if (crimeLevel == 'critical') {
+    // Critical level always gets triangle with exclamation
+    markerIcon = Icons.warning;  // Triangle with exclamation point
+  } else if (crimeLevel == 'high') {
+    // High level - specific icons per category
+    switch (crimeCategory?.toLowerCase()) {
+      case 'violent':
+        markerIcon = Icons.priority_high;  // ! - exclamation point for violent high
+        break;
+      case 'drug':
+        markerIcon = FontAwesomeIcons.syringe;  // Keep injection icon
+        break;
+      case 'property':
+        markerIcon = Icons.security;  // Property-specific icon for high level
+        break;
+      case 'traffic':
+        markerIcon = Icons.traffic;  // Traffic-specific icon for high level
+        break;
+      case 'financial':
+        markerIcon = Icons.credit_card_off;   // Financial-specific icon for high level
+        break;
+      case 'public order':
+        markerIcon = Icons.gavel;  // Public order icon
+        break;
+      case 'alert':
+        markerIcon = Icons.emergency;  // Emergency icon for high level alerts
+        break;
+      default:
+        markerIcon = Icons.report_problem;  // Default for high level
+    }
+  } else {
+    // For medium/low crimes, use category-based icons that match the filter
+    switch (crimeCategory?.toLowerCase()) {
+      case 'property':
+        markerIcon = Icons.home_outlined;  // Match filter icon
+        break;
+      case 'violent':
+        markerIcon = Icons.priority_high;  // ! - same as high level violent
+        break;
+      case 'drug':
+        markerIcon = FontAwesomeIcons.syringe;  // Keep injection icon
+        break;
+      case 'public order':
+        markerIcon = Icons.balance;  // Match filter icon
+        break;
+      case 'financial':
+        markerIcon = Icons.attach_money;  // Match filter icon
+        break;
+      case 'traffic':
+        markerIcon = Icons.traffic;  // Match filter icon
+        break;
+      case 'alert':
+        markerIcon = Icons.campaign;  // Match filter icon
+        break;
+      default:
+        markerIcon = Icons.location_pin;
+    }
+  }
+  
+  if (!isActive) {
+    markerColor = markerColor.withOpacity(0.3);
+  }
+}
+        
+        return Marker(
+          point: point,
+          width: isSelected ? 80 : 70,
+          height: isSelected ? 80 : 70,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (isSelected)
+                Container(
+                  width: 90,
+                  height: 90,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.blue.withOpacity(0.6),
+                      width: 3,
+                    ),
+                  ),
+                ),
+              Opacity(
+                opacity: opacity,
+                child: PulsingHotspotMarker(
+                  markerColor: markerColor,
+                  markerIcon: markerIcon,
+                  isActive: isActive && status != 'rejected',
+                  pulseScale: isSelected ? 1.2 : 1.0,
+                  onTap: () {
+                    setState(() {
+                      _selectedHotspot = hotspot;
+                    });
+                    _showHotspotDetails(hotspot);
+                  },
+                ),
               ),
+              if (status == 'pending' || status == 'rejected')
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: status == 'pending' ? Colors.orange : Colors.grey,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  },
+),
+
+              // Safe Spots Marker Layer
+if (_showSafeSpots)
+  MarkerLayer(
+    // Use a more specific key that changes when the list actually changes
+    key: ValueKey('safe_spots_${_safeSpots.map((s) => '${s['id']}_${s['status']}_${s['verified']}').join('_')}'),
+    markers: _safeSpots.asMap().entries.where((entry) {
+      final safeSpot = entry.value;
+      final status = safeSpot['status'] ?? 'pending';
+      final currentUserId = _userProfile?['id'];
+      final createdBy = safeSpot['created_by'];
+      final isOwnSpot = currentUserId != null && currentUserId == createdBy;
+      
+      // Show approved safe spots to everyone
+      if (status == 'approved') return true;
+      
+      // Show ALL pending spots to authenticated users (for voting)
+      if (status == 'pending' && currentUserId != null) return true;
+      
+      // Show own rejected spots
+      if (isOwnSpot && status == 'rejected') return true;
+      
+      // Show all to admin
+      if (_isAdmin) return true;
+
+      return false;
+    }).map((entry) {
+      final index = entry.key;
+      final safeSpot = entry.value;
+      final coords = safeSpot['location']['coordinates'];
+      final point = LatLng(coords[1], coords[0]);
+      final status = safeSpot['status'] ?? 'pending';
+      final verified = safeSpot['verified'] ?? false;
+      final safeSpotType = safeSpot['safe_spot_types'];
+      final currentUserId = _userProfile?['id'];
+      final createdBy = safeSpot['created_by'];
+      final isOwnSpot = currentUserId != null && currentUserId == createdBy;
+      
+      // Log marker color calculation for debugging
+      print('Building marker for safe spot ${safeSpot['id']} with status: $status, verified: $verified');
+      
+      Color markerColor;
+      IconData markerIcon = _getIconFromString(safeSpotType['icon']);
+      double opacity = 1.0;
+      
+      switch (status) {
+        case 'pending':
+          markerColor = Colors.deepPurple;
+          opacity = 0.8;
+          print('  -> Orange (pending)');
+          break;
+        case 'approved':
+          markerColor = verified ? Colors.green.shade700 : Colors.green.shade500;
+          print('  -> Green (approved, verified: $verified)');
+          break;
+        case 'rejected':
+          markerColor = Colors.grey;
+          opacity = isOwnSpot ? 0.7 : 0.4;
+          print('  -> Grey (rejected)');
+          break;
+        default:
+          markerColor = Colors.blue;
+          print('  -> Blue (default)');
+      }
+      
+      return Marker(
+        // Use index + id combination to ensure uniqueness
+        key: ValueKey('safe_spot_marker_${index}_${safeSpot['id']}_${status}_$verified'),
+        point: point,
+        width: 50,
+        height: 50,
+        child: GestureDetector(
+          onTap: () {
+            SafeSpotDetails.showSafeSpotDetails(
+              context: context,
+              safeSpot: safeSpot,
+              userProfile: _userProfile,
+              isAdmin: _isAdmin,
+              onUpdate: () {
+                print('Manual refresh triggered from details');
+                _loadSafeSpots();
+              },
+            );
+          },
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: markerColor.withOpacity(opacity),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  markerIcon,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              // Status indicator for non-approved spots
+              if (status != 'approved')
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: status == 'pending' ? Colors.orange : Colors.red,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1),
+                    ),
+                  ),
+                ),
+              // Verified indicator for approved spots
+              if (status == 'approved' && verified)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: Colors.blue,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1),
+                    ),
+                    child: const Icon(
+                      Icons.verified,
+                      color: Colors.white,
+                      size: 8,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }).toList(),
+  ),
             ],
           ),
         ),
@@ -5005,8 +6056,36 @@ Widget _buildMap() {
   );
 }
 
+// Helper method to convert string to IconData - ADD THIS TO YOUR _MapScreenState CLASS
+IconData _getIconFromString(String iconName) {
+  switch (iconName) {
+    case 'local_police':
+      return Icons.local_police;
+    case 'account_balance':
+      return Icons.account_balance;
+    case 'local_hospital':
+      return Icons.local_hospital;
+    case 'school':
+      return Icons.school;
+    case 'shopping_mall':
+      return Icons.store;
+    case 'lightbulb':
+      return Icons.lightbulb;
+    case 'security':
+      return Icons.security;
+    case 'local_fire_department':
+      return Icons.local_fire_department;
+    case 'church':
+      return Icons.church;
+    case 'community':
+      return Icons.group;
+    default:
+      return Icons.place;
+  }
+}
 
-// Revamped Enhanced Current Location Marker
+
+// CURRENT LOCATION
 Widget _buildEnhancedCurrentLocationMarker() {
   return Stack(
     alignment: Alignment.center,
@@ -5068,7 +6147,7 @@ Widget _buildEnhancedCurrentLocationMarker() {
 
 
 
-// Enhanced Destination Marker - bright red pin with white outline
+// DESTINATION PIN MARKER
 Widget _buildEnhancedDestinationMarker() {
   return const Stack(
     alignment: Alignment.center,
@@ -5095,7 +6174,7 @@ Widget _buildEnhancedDestinationMarker() {
 
 
 
-
+// HOTSPOT DETAILS
 void _showHotspotDetails(Map<String, dynamic> hotspot) async {
   final lat = hotspot['location']['coordinates'][1];
   final lng = hotspot['location']['coordinates'][0];
@@ -5131,8 +6210,9 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
   final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
   final status = hotspot['status'] ?? 'approved';
   final activeStatus = hotspot['active_status'] ?? 'active';
-  final isOwner = hotspot['created_by'] == _userProfile?['id'] ||
-      hotspot['reported_by'] == _userProfile?['id'];
+final isOwner = (_userProfile?['id'] != null) && 
+    (hotspot['created_by'] == _userProfile!['id'] ||
+     hotspot['reported_by'] == _userProfile!['id']);
   final crimeType = hotspot['crime_type'];
   final category = crimeType['category'] ?? 'Unknown Category';
 
@@ -6261,6 +7341,8 @@ void _showRejectDialog(int hotspotId) {
   );
 }
 
+
+
 Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
   try {
     // First get the hotspot to notify the reporter
@@ -6331,7 +7413,7 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
 
 
 
-
+//UPDATE HOTSPOT
 Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, DateTime dateTime, [String? activeStatus]) async {
   try {
     final updateData = {
@@ -6364,6 +7446,8 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
 }
 
 
+
+// DELETE HOTSPOT
 Future<void> _deleteHotspot(int id) async {
   final shouldDelete = await showDialog<bool>(
     context: context,
@@ -6424,6 +7508,9 @@ bool get isLargeScreen {
   return mediaQuery.size.width > 600; // Adjust threshold as needed
 }
 
+
+
+// SEARCH BAR 
 Widget _buildSearchBar({bool isWeb = false}) {
   final bool isDesktop = isLargeScreen;
   
@@ -6582,136 +7669,11 @@ Widget _buildSearchBar({bool isWeb = false}) {
 
 
 
-@override
-Widget build(BuildContext context) {
-  // Check if it's web or a large desktop screen
-  final bool isDesktop = MediaQuery.of(context).size.width >= 800;
-
-  return WillPopScope(
-    onWillPop: _handleWillPop,
-    child: Scaffold(
-      // Use desktop or mobile layout depending on screen size
-      body: isDesktop ? _buildResponsiveDesktopLayout() : _buildCurrentScreen(isDesktop),
-      
-      // Show FAB only if map tab is active
-      floatingActionButton: _currentTab == MainTab.map 
-          ? _buildFloatingActionButtons() 
-          : null,
-
-      // Bottom navigation bar - show on mobile OR when desktop sidebar is hidden and user is logged in
-      bottomNavigationBar: _buildResponsiveBottomNav(isDesktop),
-    ),
-  );
-}
-
-// New responsive desktop layout
-Widget _buildResponsiveDesktopLayout() {
-  return Stack(
-    children: [
-      Row(
-        children: [
-          // Responsive sidebar - automatically handles desktop/mobile logic
-          ResponsiveNavigation(
-            currentIndex: _currentTab.index,
-            onTap: (index) {
-              setState(() {
-                _currentTab = MainTab.values[index];
-                if (_currentTab == MainTab.profile) {
-                  _profileScreen.isEditingProfile = false;
-                }
-              });
-            },
-            unreadNotificationCount: _unreadNotificationCount,
-            isSidebarVisible: _isSidebarVisible,
-            isUserLoggedIn: _userProfile != null,
-            onToggle: () {
-              setState(() {
-                _isSidebarVisible = !_isSidebarVisible;
-              });
-            },
-          ),
-          
-          // Main content area
-          Expanded(
-            child: _buildCurrentScreen(true),
-          ),
-        ],
-      ),
-      
-      // Responsive toggle button
-      ResponsiveSidebarToggle(
-        isSidebarVisible: _isSidebarVisible,
-        isUserLoggedIn: _userProfile != null,
-        currentTab: _currentTab.index,
-        onToggle: () {
-          setState(() {
-            _isSidebarVisible = !_isSidebarVisible;
-          });
-        },
-      ),
-    ],
-  );
-}
-
-// Responsive bottom navigation - only shows on actual mobile screens
-Widget? _buildResponsiveBottomNav(bool isDesktop) {
-  // Only show bottom nav on mobile screens AND when user is logged in
-  // Don't show on desktop even when sidebar is hidden
-  if (isDesktop || _userProfile == null) {
-    return null;
-  }
-
-  // Use your existing bottom nav bar design for mobile only
-  return _buildBottomNavBar();
-}
-
-Future<bool> _handleWillPop() async {
-  // Check if we're on profile tab and in edit mode
-  if (_currentTab == MainTab.profile && _profileScreen.isEditingProfile == true) {
-    // Let the profile screen handle the back button
-    return true;
-  }
-  
-  // If not on map tab, switch to map tab
-  if (_currentTab != MainTab.map) {
-    setState(() {
-      _currentTab = MainTab.map;
-    });
-    return false;
-  }
-  
-  // Check if we can pop (has previous routes)
-  final canPop = Navigator.of(context).canPop();
-  
-  // If we can pop, pop the route (this will handle the landing page case)
-  if (canPop) {
-    Navigator.of(context).pop();
-    return false;
-  }
-  
-  // If this is the root route, show exit confirmation
-  final shouldExit = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Exit App?'),
-      content: const Text('Do you want to exit the application?'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('No'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Exit App', style: TextStyle(color: Colors.red)),
-        ),
-      ],
-    ),
-  ) ?? false;
-  
-  return shouldExit;
-}
 
 
+
+
+//ALERT SCREEN MESSAGE
 Widget _buildProximityAlert() {
   if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
     return const SizedBox.shrink();
@@ -6722,127 +7684,162 @@ Widget _buildProximityAlert() {
   final distance = (closestHotspot['distance'] as double).round();
   final level = crimeType['level'] ?? 'unknown';
   
-  // Determine alert color and icon based on crime level
+  // Your existing color/icon logic...
   Color alertColor;
   IconData alertIcon;
   Color textColor = Colors.white;
+  String alertEmoji;
   
   switch (level) {
     case 'critical':
       alertColor = const Color.fromARGB(255, 247, 26, 10);
       alertIcon = Icons.warning_rounded;
+      alertEmoji = '🚨';
       break;
     case 'high':
       alertColor = const Color.fromARGB(255, 223, 106, 11);
       alertIcon = Icons.error_rounded;
+      alertEmoji = '⚠️';
       break;
     case 'medium':
       alertColor = const Color.fromARGB(155, 202, 130, 49);
       alertIcon = Icons.info_rounded;
+      alertEmoji = '⚠️';
       break;
     case 'low':
       alertColor = const Color.fromARGB(255, 216, 187, 23);
       alertIcon = Icons.info_outline_rounded;
-      textColor = Colors.black;
+      alertEmoji = '⚠️';
+      textColor = Colors.black87;
       break;
     default:
       alertColor = Colors.orange;
       alertIcon = Icons.warning_outlined;
+      alertEmoji = '⚠️';
   }
 
-  return AnimatedContainer(
-    duration: const Duration(milliseconds: 300),
-    curve: Curves.easeInOut,
-    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-    padding: const EdgeInsets.all(10),
-    width: isLargeScreen ? 600 : null, // Constrain width on large screens
-    alignment: isLargeScreen ? Alignment.topCenter : null, // Center on large screens
+  return Container(
+    // REMOVED: margin from here since it's now handled by parent
+    // margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    margin: const EdgeInsets.symmetric(vertical: 4), // Keep only vertical margin
     decoration: BoxDecoration(
       color: alertColor,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(16),
       boxShadow: [
         BoxShadow(
-          color: alertColor.withOpacity(0.3),
-          blurRadius: 6,
-          offset: const Offset(0, 2),
+          color: alertColor.withOpacity(0.4),
+          blurRadius: 10,
+          spreadRadius: 1,
+          offset: const Offset(0, 4),
         ),
       ],
     ),
-    child: Row(
-      children: [
-          // Smaller alert icon
-          Container(
-            padding: const EdgeInsets.all(5), // Reduced padding
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              alertIcon,
-              color: textColor,
-              size: 16, // Reduced size
-            ),
-          ),
-          
-          const SizedBox(width: 8), // Reduced spacing
-          
-          // Alert content with smaller text
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '⚠️ Crime Alert',
-                  style: TextStyle(
-                    color: textColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13, // Reduced font size
-                  ),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _showHotspotDetails(closestHotspot),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icon
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.25),
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(height: 1), // Reduced spacing
-                Text(
-                  '${crimeType['name']} nearby (~${distance}m)',
-                  style: TextStyle(
-                    color: textColor.withOpacity(0.9),
-                    fontSize: 11, // Reduced font size
-                  ),
+                child: Icon(
+                  alertIcon,
+                  color: textColor,
+                  size: 14,
                 ),
-                if (_nearbyHotspots.length > 1)
-                  Text(
-                    '+${_nearbyHotspots.length - 1} more in area',
-                    style: TextStyle(
-                      color: textColor.withOpacity(0.8),
-                      fontSize: 9, // Reduced font size
-                      fontStyle: FontStyle.italic,
+              ),
+              
+              const SizedBox(width: 8),
+              
+              // Content
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          alertEmoji,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            '${crimeType['name']} • ${distance}m away',
+                            style: TextStyle(
+                              color: textColor,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-              ],
-            ),
+                    
+                    if (_nearbyHotspots.length > 1)
+                      Text(
+                        '+${_nearbyHotspots.length - 1} more nearby',
+                        style: TextStyle(
+                          color: textColor.withOpacity(0.8),
+                          fontSize: 10,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              
+              // Chevron
+              Icon(
+                Icons.chevron_right,
+                color: textColor.withOpacity(0.7),
+                size: 16,
+              ),
+            ],
           ),
-          
-          // Smaller details button
-          IconButton(
-            onPressed: () {
-              _showHotspotDetails(closestHotspot);
-            },
-            icon: Icon(
-              Icons.info_outline_rounded,
-              color: textColor,
-              size: 16, // Reduced size
-            ),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28), // Smaller constraints
-            tooltip: 'Details',
-          ),
-        ],
+        ),
       ),
-    );
+    ),
+  );
+}
+
+// The floating animation wrapper - FIXED VERSION
+Widget _buildAnimatedProximityAlert() {
+  if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
+    return const SizedBox.shrink();
   }
 
+  return TweenAnimationBuilder<double>(
+    duration: const Duration(milliseconds: 2000),
+    tween: Tween(begin: -3.0, end: 3.0),
+    curve: Curves.easeInOut,
+    builder: (context, translateY, child) {
+      return Transform.translate(
+        offset: Offset(0, translateY),
+        child: _buildProximityAlert(), // This calls the actual alert widget
+      );
+    },
+    onEnd: () {
+      // Restart the animation by rebuilding the widget
+      if (mounted) {
+        setState(() {});
+      }
+    },
+  );
+}
 
 
-// Update your _buildCurrentScreen method to handle desktop layout better
 Widget _buildCurrentScreen(bool isDesktop) {
   switch (_currentTab) {
     case MainTab.map:
@@ -6860,60 +7857,67 @@ Widget _buildCurrentScreen(bool isDesktop) {
             top: MediaQuery.of(context).padding.top + 16,
             left: 0,
             right: 0,
-            child: Center(
-              child: Container(
-                width: isDesktop ? 600 : double.infinity,
-                margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16),
-                child: Row(
-                  children: [
-                    Expanded(child: _buildSearchBar(isWeb: isDesktop)),
-                    const SizedBox(width: 12),
-                    Container(
-                      width: 45,
-                      height: 45,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
-                            blurRadius: 12,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: IconButton(
-                        iconSize: 22,
-                        padding: EdgeInsets.zero,
-                        icon: Icon(
-                          _userProfile == null ? Icons.login : Icons.logout,
-                          color: Colors.grey.shade700,
+            child: Container(
+              // MOBILE: Add horizontal margin for mobile
+              margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16), 
+              child: Center(
+                child: Container(
+                  width: isDesktop ? 600 : null, // Desktop: fixed width, Mobile: full available width
+                  child: Row(
+                    children: [
+                      Expanded(child: _buildSearchBar(isWeb: isDesktop)),
+                      const SizedBox(width: 12),
+                      Container(
+                        width: 45,
+                        height: 45,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 12,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
-                        onPressed: _userProfile == null 
-                            ? () {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(builder: (context) => const LoginScreen()),
-                                );
-                              }
-                            : _showLogoutConfirmation,
+                        child: IconButton(
+                          iconSize: 22,
+                          padding: EdgeInsets.zero,
+                          icon: Icon(
+                            _userProfile == null ? Icons.login : Icons.logout,
+                            color: Colors.grey.shade700,
+                          ),
+                          onPressed: _userProfile == null 
+                              ? () {
+                                  Navigator.pushReplacement(
+                                    context,
+                                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                                  );
+                                }
+                              : _showLogoutConfirmation,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
           
-          // Proximity Alert positioned below search bar
+          // Proximity alert with matching width
           Positioned(
             top: MediaQuery.of(context).padding.top + 80,
             left: 0,
             right: 0,
-            child: Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: isDesktop ? 600 : double.infinity),
-                child: _buildProximityAlert(),
+            child: Container(
+              // SAME margin as search bar for mobile
+              margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16),
+              child: Center(
+                child: Container(
+                  width: isDesktop ? 600 : null, // SAME width constraint as search bar
+                  child: _buildAnimatedProximityAlert(),
+                ),
               ),
             ),
           ),
@@ -6930,7 +7934,7 @@ Widget _buildCurrentScreen(bool isDesktop) {
 }
 
 
-// Replace your _buildProfileScreen() method with this fixed version
+// PROFILE PAGE
 
 Widget _buildProfileScreen() {
   if (_userProfile == null) {
@@ -6945,58 +7949,60 @@ Widget _buildProfileScreen() {
       Theme.of(context).platform == TargetPlatform.windows ||
       kIsWeb;
 
-  void toggleEditMode() {
-    setState(() {
-      _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
-    });
-  }
-
-  Future<void> refreshProfile() async {
-    final user = _authService.currentUser;
-    if (user != null) {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select()
-          .eq('email', user.email as Object)
-          .single();
-
-      if (mounted) {
+      void toggleEditMode() {
         setState(() {
-          _userProfile = response;
-          _isAdmin = response['role'] == 'admin';
-          _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
-          _profileScreen.initControllers();
+          _profileScreen.setShouldScrollToTop(true);
+          _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
         });
       }
-    }
-  }
 
-  void handleSuccess() {
-    refreshProfile().then((_) {
-      setState(() {
-        _profileScreen.isEditingProfile = false;
-      });
-    });
-  }
+        Future<void> refreshProfile() async {
+          final user = _authService.currentUser;
+          if (user != null) {
+            final response = await Supabase.instance.client
+                .from('users')
+                .select()
+                .eq('email', user.email as Object)
+                .single();
 
-  // REMOVED the outer SingleChildScrollView and extra padding
-  // The ProfileScreen handles its own scrolling internally
-  return Scaffold(
-    body: SafeArea(
-      child: _profileScreen.isEditingProfile
-          ? _profileScreen.buildEditProfileForm(
-              context,
-              isDesktopOrWeb,
-              toggleEditMode,
-              onSuccess: handleSuccess,
-            )
-          : _profileScreen.buildProfileView(
-              context,
-              isDesktopOrWeb,
-              toggleEditMode,
-            ),
-    ),
-  );
+            if (mounted) {
+              setState(() {
+                _userProfile = response;
+                _isAdmin = response['role'] == 'admin';
+                _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
+                _profileScreen.initControllers();
+              });
+            }
+          }
+        }
+
+      void handleSuccess() {
+        refreshProfile().then((_) {
+          setState(() {
+            _profileScreen.setShouldScrollToTop(true);
+            _profileScreen.isEditingProfile = false;
+          });
+        });
+      }
+
+
+
+        return Scaffold(
+          body: SafeArea(
+            child: _profileScreen.isEditingProfile
+                ? _profileScreen.buildEditProfileForm(
+                    context,
+                    isDesktopOrWeb,
+                    toggleEditMode,
+                    onSuccess: handleSuccess,
+                  )
+                : _profileScreen.buildProfileView(
+                    context,
+                    isDesktopOrWeb,
+                    toggleEditMode,
+                  ),
+          ),
+        );
 }
 
 

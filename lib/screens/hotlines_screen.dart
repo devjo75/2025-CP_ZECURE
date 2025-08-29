@@ -280,48 +280,65 @@ class HotlinesScreen extends StatelessWidget {
     },
   ];
 
+
 @override
 Widget build(BuildContext context) {
-  return Scaffold(
-    backgroundColor: const Color(0xFFF8FAFC),
-    // Updated AppBar
-    appBar: AppBar(
-      title: const Text(
-        'Emergency Contacts',
-        style: TextStyle(
-          fontWeight: FontWeight.w800,
-          fontSize: 24,
-          letterSpacing: -0.8,
-          color: Color(0xFF1A1D29),
-        ),
+  return Container(
+    decoration: const BoxDecoration(
+      image: DecorationImage(
+        image: AssetImage('assets/images/LIGHT.jpg'),
+        fit: BoxFit.cover,
       ),
-
-      foregroundColor: const Color(0xFF1A1D29),
-      elevation: 0,
-      centerTitle: false, // Left align the title
-      leading: IconButton(
-        icon: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: const Color(0xFFE5E7EB),
-              width: 1,
+    ),
+    child: Container(
+      // Colored overlay
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC).withOpacity(0.2),
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        
+        // Make AppBar completely transparent
+        appBar: AppBar(
+          backgroundColor: Colors.transparent, // Make background transparent
+          elevation: 0, // Remove shadow/elevation
+          surfaceTintColor: Colors.transparent, // Remove any surface tinting
+          
+          title: const Text(
+            'Emergency Contacts',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 24,
+              letterSpacing: -0.8,
+              color: Color(0xFF1A1D29),
             ),
           ),
-          child: const Icon(
-            Icons.arrow_back_ios_rounded,
-            color: Color(0xFF6B7280),
-            size: 18,
+          foregroundColor: const Color(0xFF1A1D29),
+          centerTitle: false, // Left align the title
+          leading: IconButton(
+            icon: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFFE5E7EB),
+                  width: 1,
+                ),
+              ),
+              child: const Icon(
+                Icons.arrow_back_ios_rounded,
+                color: Color(0xFF6B7280),
+                size: 18,
+              ),
+            ),
+            onPressed: () => Navigator.pop(context),
           ),
         ),
-        onPressed: () => Navigator.pop(context),
-      ),
-      // Remove the asterisk action button completely
-    ),
-    body: CustomScrollView(
-      slivers: [
+        
+        // Your body content remains the same
+        body: CustomScrollView(
+          slivers: [
         // Updated Header Section
 SliverToBoxAdapter(
   child: Container(
@@ -644,6 +661,8 @@ SliverToBoxAdapter(
         const SliverToBoxAdapter(child: SizedBox(height: 32)),
       ],
     ),
+     ),
+      ),
   );
 }
 
