@@ -5,13 +5,21 @@
     <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
     <title>Zecure</title>
     <link rel="manifest" href="manifest.json">
+    
     <style>
         body {
             margin: 0;
             padding: 0;
+            background-image: url('assets/images/LIGHT.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
         }
+
+        /* Single unified splash screen */
         #flutter_splash_screen {
-            position: absolute;
+            position: fixed;
             top: 0;
             left: 0;
             width: 100%;
@@ -19,27 +27,72 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #ffffff;
+            background-image: url('assets/images/LIGHT.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            z-index: 9999;
         }
+
         #flutter_splash_screen img {
-            width: 150px;
-            height: 150px;
+            width: 320px;
+            height: 320px;
+            animation: pulse 2s ease-in-out infinite;
+            filter: drop-shadow(0 4px 8px rgba(0,0,0,0.2));
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.8; transform: scale(0.95); }
+            50% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0.8; transform: scale(0.95); }
+        }
+
+        /* LIGHT mode support */
+        @media (prefers-color-scheme: LIGHT) {
+            body {
+                background-image: url('assets/images/LIGHT.jpg');
+            }
+            
+            #flutter_splash_screen {
+                background-image: url('assets/images/LIGHT.jpg');
+            }
+        }
+
+        /* Loading transition */
+        .fade-out {
+            opacity: 0;
+            transition: opacity 0.5s ease-out;
         }
     </style>
+
+    <script>
+        function removeSplashFromWeb() {
+            const splash = document.getElementById("flutter_splash_screen");
+            if (splash) {
+                splash.classList.add('fade-out');
+                setTimeout(() => {
+                    splash.remove();
+                }, 500);
+            }
+            document.body.style.background = "transparent";
+        }
+    </script>
 </head>
+
 <body>
+    <!-- Single, clean splash screen -->
     <div id="flutter_splash_screen">
-        <img src="assets/images/zecure.png" alt="Loading">
+        <img src="assets/images/zecure.png" alt="ZECURE Loading...">
     </div>
+
     <script src="main.dart.js" type="application/javascript"></script>
+    
     <script>
         window.addEventListener('load', function() {
+            // Remove splash screen when Flutter app loads
             setTimeout(function() {
-                var splash = document.getElementById('flutter_splash_screen');
-                if (splash) {
-                    splash.remove();
-                }
-            }, 3000);
+                removeSplashFromWeb();
+            }, 2000); // Show for 2 seconds
         });
     </script>
 </body>

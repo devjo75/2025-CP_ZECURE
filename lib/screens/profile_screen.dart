@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -200,46 +201,141 @@ Future<void> updateProfile(BuildContext context, {required VoidCallback onSucces
   }
 }
 
-  void _showSuccessDialog(BuildContext context, String message, {VoidCallback? onOkPressed}) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Success'),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              if (onOkPressed != null) onOkPressed();
-            },
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
+void _showSuccessDialog(BuildContext context, String message, {VoidCallback? onOkPressed}) {
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
 
-  void _showInfoDialog(BuildContext context, String message) {
   showDialog(
     context: context,
-    builder: (context) => AlertDialog(
-      title: Row(
-        children: [
-          Icon(Icons.info_outline, color: Colors.blue.shade600),
-          const SizedBox(width: 8),
-          const Text('Info'),
-        ],
-      ),
-      content: Text(message),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.pop(context);
-          },
-          child: const Text('OK'),
-        ),
-      ],
-    ),
+    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    builder: (context) {
+      if (isDesktopOrWeb) {
+        // Assuming sidebar width is 240 pixels; adjust as needed
+        const double sidebarWidth = 240.0;
+        final screenWidth = MediaQuery.of(context).size.width;
+        final availableWidth = screenWidth - sidebarWidth;
+
+        return Stack(
+          children: [
+            // Center the dialog in the available content area
+            Positioned(
+              left: sidebarWidth + (availableWidth - 400) / 2, // Adjusted for new width
+              top: MediaQuery.of(context).size.height / 2 - 100, // Vertically center
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 400), // Expanded width
+                child: AlertDialog(
+                  title: const Text('Success'),
+                  content: Text(message),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        if (onOkPressed != null) onOkPressed();
+                      },
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      } else {
+        // Mobile view: Default AlertDialog with expanded width
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 500), // Expanded width
+          child: AlertDialog(
+            title: const Text('Success'),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  if (onOkPressed != null) onOkPressed();
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    },
+  );
+}
+
+void _showInfoDialog(BuildContext context, String message) {
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
+
+  showDialog(
+    context: context,
+    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    builder: (context) {
+      if (isDesktopOrWeb) {
+        // Assuming sidebar width is 240 pixels; adjust as needed
+        const double sidebarWidth = 240.0;
+        final screenWidth = MediaQuery.of(context).size.width;
+        final availableWidth = screenWidth - sidebarWidth;
+
+        return Stack(
+          children: [
+            // Center the dialog in the available content area
+            Positioned(
+              left: sidebarWidth + (availableWidth - 400) / 2, // Adjusted for new width
+              top: MediaQuery.of(context).size.height / 2 - 100, // Vertically center
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 400), // Expanded width
+                child: AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.blue.shade600),
+                      const SizedBox(width: 8),
+                      const Text('Info'),
+                    ],
+                  ),
+                  content: Text(message),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                      },
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      } else {
+        // Mobile view: Default AlertDialog with expanded width
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 500), // Expanded width
+          child: AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.blue.shade600),
+                const SizedBox(width: 8),
+                const Text('Info'),
+              ],
+            ),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    },
   );
 }
 
@@ -1303,4 +1399,923 @@ Widget _buildEnhancedPasswordField({
     ),
   );
 }
+
+
+
+
+//DESKTOP VIEW
+Widget buildDesktopProfileView(
+  BuildContext context, 
+  VoidCallback onEditPressed,
+  {VoidCallback? onClosePressed} // Add this optional parameter
+) {
+  return Center(
+    child: Container(
+      width: 480,
+      height: MediaQuery.of(context).size.height * 0.80,
+      margin: const EdgeInsets.symmetric(vertical: 40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 30,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Enhanced gradient header section
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Theme.of(context).primaryColor.withOpacity(0.8),
+                  Theme.of(context).primaryColor.withOpacity(0.6),
+                ],
+              ),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(24),
+                topRight: Radius.circular(24),
+              ),
+            ),
+            child: Stack(
+              children: [
+                // Background pattern
+                Positioned(
+                  right: -30,
+                  top: -20,
+                  child: Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.1),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 10,
+                  top: 30,
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.05),
+                    ),
+                  ),
+                ),
+                // Fixed close button - now properly closes and switches to map
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.close, size: 18, color: Colors.white),
+                      onPressed: onClosePressed ?? () {}, // Use the callback
+                    ),
+                  ),
+                ),
+                // Content - Fixed centering
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Enhanced avatar
+                      Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 15,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: CircleAvatar(
+                          backgroundColor: Colors.white,
+                          radius: 32,
+                          child: CircleAvatar(
+                            backgroundColor: Theme.of(context).primaryColor.withOpacity(0.9),
+                            radius: 30,
+                            child: Text(
+                              userProfile?['first_name']?.toString().substring(0, 1) ?? 'U',
+                              style: const TextStyle(
+                                fontSize: 28,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Name with better centering
+                      Container(
+                        width: double.infinity, // Force full width
+                        child: Text(
+                          '${userProfile?['first_name'] ?? ''}'
+                          '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                          ' ${userProfile?['last_name'] ?? ''}'
+                          '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                          textAlign: TextAlign.center, // Ensure center alignment
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 0.5,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      
+                      // Email with subtle styling
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          userProfile?['email'] ?? '',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      
+                      // Enhanced role chip
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isAdmin) ...[
+                              Icon(
+                                Icons.admin_panel_settings,
+                                size: 16,
+                                color: isAdmin ? Colors.blue : Colors.green,
+                              ),
+                              const SizedBox(width: 4),
+                            ],
+                            Text(
+                              userProfile?['role']?.toUpperCase() ?? 'USER',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: isAdmin ? Colors.blue : Colors.green,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Information section - reduced spacing
+          Expanded(
+            child: SingleChildScrollView(
+              controller: _profileViewScrollController,
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Section header with icon
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.person,
+                          color: Colors.blue.shade600,
+                          size: 18,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Personal Information',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Information cards with enhanced styling
+                  _buildDesktopInfoCard(
+                    context,
+                    icon: Icons.person_outline,
+                    label: 'Username',
+                    value: userProfile?['username'] ?? 'Not set',
+                  ),
+                  const SizedBox(height: 12),
+                  _buildDesktopInfoCard(
+                    context,
+                    icon: Icons.cake_outlined,
+                    label: 'Birthday',
+                    value: userProfile?['bday'] != null
+                        ? DateFormat('MMMM d, y').format(
+                            DateTime.parse(userProfile?['bday']))
+                        : 'Not specified',
+                  ),
+                  const SizedBox(height: 12),
+                  _buildDesktopInfoCard(
+                    context,
+                    icon: Icons.transgender,
+                    label: 'Gender',
+                    value: userProfile?['gender'] ?? 'Not specified',
+                  ),
+                  const SizedBox(height: 12),
+                  _buildDesktopInfoCard(
+                    context,
+                    icon: Icons.phone,
+                    label: 'Contact Number',
+                    value: userProfile?['contact_number'] ?? 'Not specified',
+                  ),
+                  
+                  // Reduced spacing before buttons
+                  const SizedBox(height: 16), // Reduced from 24
+                  
+                  // Enhanced action buttons - less space
+                  Container(
+                    width: double.infinity,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Theme.of(context).primaryColor,
+                          Theme.of(context).primaryColor.withOpacity(0.8),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context).primaryColor.withOpacity(0.3),
+                          blurRadius: 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: ElevatedButton(
+                      onPressed: onEditPressed,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.edit, color: Colors.white, size: 18),
+                          SizedBox(width: 8),
+                          Text(
+                            'EDIT PROFILE',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  if (isAdmin) ...[
+                    const SizedBox(height: 10), // Reduced from 12
+                    Container(
+                      width: double.infinity,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.blue.shade300,
+                          width: 2,
+                        ),
+                        color: Colors.blue.shade50,
+                      ),
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const AdminDashboardScreen(),
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: Colors.transparent,
+                          side: BorderSide.none,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.dashboard, color: Colors.blue.shade600, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              'ADMIN DASHBOARD',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue.shade600,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+// Updated buildDesktopEditProfileForm with single scrollable column and proper close functionality
+Widget buildDesktopEditProfileForm(
+  BuildContext context,
+  VoidCallback onCancel,
+  {required VoidCallback onSuccess}
+) {
+  bool showCurrentPassword = false;
+  bool showNewPassword = false;
+  bool showConfirmPassword = false;
+
+  return StatefulBuilder(
+    builder: (context, setState) {
+      return PopScope(
+        canPop: false,
+        onPopInvoked: (didPop) {
+          if (!didPop) {
+            onCancel();
+          }
+        },
+        child: Center(
+          child: Container(
+            width: 480,
+            height: MediaQuery.of(context).size.height * 0.90,
+            margin: const EdgeInsets.symmetric(vertical: 40),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.grey.shade50,
+                  Colors.white,
+                ],
+              ),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 30,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // Enhanced header
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Theme.of(context).primaryColor.withOpacity(0.8),
+                        Theme.of(context).primaryColor.withOpacity(0.6),
+                      ],
+                    ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(24),
+                      topRight: Radius.circular(24),
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      // Background pattern
+                      Positioned(
+                        right: -20,
+                        top: -10,
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.1),
+                          ),
+                        ),
+                      ),
+                      // Content
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Edit Profile',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: IconButton(
+                              icon: const Icon(Icons.close, size: 18, color: Colors.white),
+                              onPressed: onCancel,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Single scrollable form - all fields in one column
+                Expanded(
+                  child: SingleChildScrollView(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(24),
+                    child: Form(
+                      key: _profileFormKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Personal Information Section
+                          const Text(
+                            'Personal Information',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          
+                          // All fields in single column
+                          _buildCompactTextField(
+                            controller: _firstNameController,
+                            label: 'First Name',
+                            validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          _buildCompactTextField(
+                            controller: _lastNameController,
+                            label: 'Last Name',
+                            validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          _buildCompactTextField(
+                            controller: _middleNameController,
+                            label: 'Middle Name (optional)',
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          _buildCompactTextField(
+                            controller: _extNameController,
+                            label: 'Extension Name (optional)',
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          // Birthday picker
+                          Container(
+                            height: 48,
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: InkWell(
+                              onTap: () async {
+                                final date = await showDatePicker(
+                                  context: context,
+                                  initialDate: _selectedBirthday ?? DateTime.now(),
+                                  firstDate: DateTime(1900),
+                                  lastDate: DateTime.now(),
+                                );
+                                if (date != null) {
+                                  _selectedBirthday = date;
+                                  setState(() {});
+                                }
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.calendar_today, size: 18, color: Colors.grey.shade600),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _selectedBirthday == null
+                                            ? 'Select Birthday'
+                                            : DateFormat('MMM d, y').format(_selectedBirthday!),
+                                        style: TextStyle(
+                                          color: _selectedBirthday == null 
+                                              ? Colors.grey.shade600
+                                              : Colors.black87,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          // Gender dropdown
+                          Container(
+                            height: 48,
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: DropdownButtonFormField<String>(
+                              value: _selectedGender,
+                              decoration: const InputDecoration(
+                                labelText: 'Gender',
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                              items: ['Male', 'Female', 'LGBTQ+', 'Others']
+                                  .map((gender) => DropdownMenuItem(
+                                        value: gender,
+                                        child: Text(gender, style: const TextStyle(fontSize: 14)),
+                                      ))
+                                  .toList(),
+                              onChanged: (value) => _selectedGender = value,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          _buildCompactTextField(
+                            controller: _contactNumberController,
+                            label: 'Contact Number',
+                            hintText: 'e.g. +639123456789',
+                            keyboardType: TextInputType.phone,
+                            validator: (value) {
+                              if (value != null && value.isNotEmpty) {
+                                if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
+                                  return 'Please enter a valid phone number';
+                                }
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 24),
+                          
+                          // Password Section
+                          const Text(
+                            'Change Password',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.info_outline, size: 14, color: Colors.blue.shade600),
+                                const SizedBox(width: 6),
+                                const Expanded(
+                                  child: Text(
+                                    'Leave blank to keep current password',
+                                    style: TextStyle(fontSize: 12, color: Colors.blue),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          _buildCompactPasswordField(
+                            controller: _passwordController,
+                            label: 'Current Password',
+                            isVisible: showCurrentPassword,
+                            onVisibilityToggle: () {
+                              setState(() {
+                                showCurrentPassword = !showCurrentPassword;
+                              });
+                            },
+                            errorText: _currentPasswordError,
+                            validator: (value) {
+                              if (_currentPasswordError != null) {
+                                return _currentPasswordError;
+                              }
+                              if (_newPasswordController.text.isNotEmpty &&
+                                  (value?.isEmpty ?? true)) {
+                                return 'Required to change password';
+                              }
+                              return null;
+                            },
+                            onChanged: (value) {
+                              if (_currentPasswordError != null) {
+                                setState(() {
+                                  _currentPasswordError = null;
+                                });
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          _buildCompactPasswordField(
+                            controller: _newPasswordController,
+                            label: 'New Password',
+                            isVisible: showNewPassword,
+                            onVisibilityToggle: () {
+                              setState(() {
+                                showNewPassword = !showNewPassword;
+                              });
+                            },
+                            validator: (value) {
+                              if (value?.isNotEmpty ?? false) {
+                                if (value == _passwordController.text) {
+                                  return 'New password must be different';
+                                }
+                                if (value!.length < 6) {
+                                  return 'Must be at least 6 characters';
+                                }
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          _buildCompactPasswordField(
+                            controller: _confirmPasswordController,
+                            label: 'Confirm New Password',
+                            isVisible: showConfirmPassword,
+                            onVisibilityToggle: () {
+                              setState(() {
+                                showConfirmPassword = !showConfirmPassword;
+                              });
+                            },
+                            validator: (value) {
+                              if (_newPasswordController.text.isNotEmpty) {
+                                if (value?.isEmpty ?? true) {
+                                  return 'Please confirm your password';
+                                }
+                                if (value != _newPasswordController.text) {
+                                  return 'Passwords do not match';
+                                }
+                              }
+                              return null;
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                
+                // Footer with buttons
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: Colors.grey.shade200, width: 1),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: onCancel,
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(color: Colors.grey.shade300),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: const Text(
+                            'CANCEL',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => updateProfile(context, onSuccess: onSuccess),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).primaryColor,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: const Text(
+                            'SAVE',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+// Keep the existing helper methods unchanged
+Widget _buildDesktopInfoCard(
+  BuildContext context, {
+  required IconData icon,
+  required String label,
+  required String value,
+}) {
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.grey.shade200),
+    ),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: Colors.blue.shade600,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _buildCompactTextField({
+  required TextEditingController controller,
+  required String label,
+  String? hintText,
+  TextInputType? keyboardType,
+  String? Function(String?)? validator,
+}) {
+  return Container(
+    height: 48,
+    decoration: BoxDecoration(
+      border: Border.all(color: Colors.grey.shade300),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: TextFormField(
+      controller: controller,
+      keyboardType: keyboardType,
+      style: const TextStyle(fontSize: 14),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hintText,
+        border: InputBorder.none,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      ),
+      validator: validator,
+    ),
+  );
+}
+
+Widget _buildCompactPasswordField({
+  required TextEditingController controller,
+  required String label,
+  required bool isVisible,
+  required VoidCallback onVisibilityToggle,
+  String? errorText,
+  String? Function(String?)? validator,
+  void Function(String)? onChanged,
+}) {
+  return Container(
+    height: 48,
+    decoration: BoxDecoration(
+      border: Border.all(
+        color: errorText != null ? Colors.red.shade300 : Colors.grey.shade300,
+      ),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: TextFormField(
+      controller: controller,
+      obscureText: !isVisible,
+      onChanged: onChanged,
+      style: const TextStyle(fontSize: 14),
+      decoration: InputDecoration(
+        labelText: label,
+        border: InputBorder.none,
+        errorText: errorText,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        suffixIcon: IconButton(
+          icon: Icon(
+            isVisible ? Icons.visibility : Icons.visibility_off,
+            color: Colors.grey.shade600,
+            size: 18,
+          ),
+          onPressed: onVisibilityToggle,
+        ),
+      ),
+      validator: validator,
+    ),
+  );
+}
+
+
+
 }

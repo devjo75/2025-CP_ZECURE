@@ -65,76 +65,79 @@ class SafeSpotService {
 
   // UPDATED: Check if user is admin and auto-approve their submissions
   static Future<String?> createSafeSpot({
-    required int typeId,
-    required String name,
-    required String? description,
-    required LatLng location,
-    required String userId,
-  }) async {
-    try {
-      // First, check if the user is an admin
-      final userResponse = await _client
-          .from('users')
-          .select('role')
-          .eq('id', userId)
-          .single();
-      
-      final isAdmin = userResponse['role'] == 'admin';
-      final status = isAdmin ? 'approved' : 'pending';
-      final verified = isAdmin; // Admin submissions are automatically verified
-      
-      final insertData = {
-        'type_id': typeId,
-        'name': name,
-        'description': description,
-        'location': {
-          'type': 'Point',
-          'coordinates': [location.longitude, location.latitude],
-        },
-        'created_by': userId,
-        'status': status,
-        'verified': verified,
-      };
+  required int typeId,
+  required String name,
+  required String? description,
+  required LatLng location,
+  required String userId,
+}) async {
+  try {
+    // First, check if the user is an admin
+    final userResponse = await _client
+        .from('users')
+        .select('role')
+        .eq('id', userId)
+        .single();
+    
+    final isAdmin = userResponse['role'] == 'admin';
+    final status = isAdmin ? 'approved' : 'pending';
+    final verified = isAdmin; // Admin submissions are automatically verified
+    
+    final insertData = {
+      'type_id': typeId,
+      'name': name,
+    'description': description,
+      'location': {
+        'type': 'Point',
+        'coordinates': [location.longitude, location.latitude],
+      },
+      'created_by': userId,
+      'status': status,
+      'verified': verified,
+      'verified_by_admin': isAdmin, // Set to true for admin-created safe spots
+    };
 
-      final response = await _client
-          .from('safe_spots')
-          .insert(insertData)
-          .select('id')
-          .single();
+    final response = await _client
+        .from('safe_spots')
+        .insert(insertData)
+        .select('id')
+        .single();
 
-      return response['id'] as String;
-    } catch (e) {
-      throw Exception('Failed to create safe spot: $e');
-    }
+    return response['id'] as String;
+  } catch (e) {
+    throw Exception('Failed to create safe spot: $e');
   }
+}
 
-  // Update safe spot status (admin only)
-  static Future<void> updateSafeSpotStatus({
-    required String safeSpotId,
-    required String status,
-    String? rejectionReason,
-  }) async {
-    try {
-      final Map<String, dynamic> updateData = {
-        'status': status,
-        'updated_at': DateTime.now().toIso8601String(),
-      };
+// Update safe spot status (admin only)
+static Future<void> updateSafeSpotStatus({
+  required String safeSpotId,
+  required String status,
+  String? rejectionReason,
+}) async {
+  try {
+    final Map<String, dynamic> updateData = {
+      'status': status,
+      'updated_at': DateTime.now().toIso8601String(),
+      'verified': status == 'approved' ? true : false,
+      'verified_by_admin': status == 'approved' ? true : false, // Set to true for admin-approved safe spots
+    };
 
-      if (status == 'rejected' && rejectionReason != null) {
-        updateData['rejection_reason'] = rejectionReason;
-      } else if (status == 'approved') {
-        // When approving, remove any rejection reason by setting to null
-        updateData['rejection_reason'] = null;
-      }
-
-      await _client
-          .from('safe_spots')
-          .update(updateData)
-          .eq('id', safeSpotId);
-    } catch (e) {
-      throw Exception('Failed to update safe spot status: $e');
+    if (status == 'rejected' && rejectionReason != null) {
+      updateData['rejection_reason'] = rejectionReason;
+    } else if (status == 'approved') {
+      // When approving, remove any rejection reason by setting to null
+      updateData['rejection_reason'] = null;
     }
+
+    await _client
+        .from('safe_spots')
+        .update(updateData)
+        .eq('id', safeSpotId);
+  } catch (e) {
+    throw Exception('Failed to update safe spot status: $e');
   }
+}
 
   // Delete safe spot
   static Future<void> deleteSafeSpot(String safeSpotId) async {

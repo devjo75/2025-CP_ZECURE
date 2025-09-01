@@ -668,11 +668,11 @@ Widget _buildHeader(bool isWeb) {
         // Logo
         Image.asset(
           'assets/images/zecure.png',
-          height: isWeb ? 100 : 100,
-          width: isWeb ? 100 : 100,
+          height: isWeb ? 150 : 130,
+          width: isWeb ? 150 : 130,
           errorBuilder: (context, error, stackTrace) => Container(
-            height: isWeb ? 100 : 100,
-            width: isWeb ? 100 : 100,
+            height: isWeb ? 150 : 130,
+            width: isWeb ? 150 : 130,
             decoration: BoxDecoration(
               color: Colors.blue.shade600,
               borderRadius: BorderRadius.circular(isWeb ? 40 : 35),

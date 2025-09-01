@@ -34,11 +34,22 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     const SizedBox(height: 16),
                     
                     // Severity filters
-                    const Text('Severity:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Padding(
+                      padding: EdgeInsets.only(left: 8.0),
+                      child: Text(
+                        'Severity',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     buildFilterToggle(
                       context,
                       'Critical',
-                      FontAwesomeIcons.exclamationTriangle,  // Updated to match mobile
+                      FontAwesomeIcons.exclamationTriangle,
                       const Color.fromARGB(255, 219, 0, 0),
                       filterService.showCritical,
                       (value) => filterService.toggleCritical(),
@@ -46,7 +57,7 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     buildFilterToggle(
                       context,
                       'High',
-                      Icons.priority_high,  // Updated to match mobile
+                      Icons.priority_high,
                       const Color.fromARGB(255, 223, 106, 11),
                       filterService.showHigh,
                       (value) => filterService.toggleHigh(),
@@ -54,7 +65,7 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     buildFilterToggle(
                       context,
                       'Medium',
-                      Icons.remove,  // Updated to match mobile
+                      Icons.remove,
                       const Color.fromARGB(167, 116, 66, 9),
                       filterService.showMedium,
                       (value) => filterService.toggleMedium(),
@@ -62,7 +73,7 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     buildFilterToggle(
                       context,
                       'Low',
-                      Icons.low_priority,  // Updated to match mobile
+                      Icons.low_priority,
                       const Color.fromARGB(255, 216, 187, 23),
                       filterService.showLow,
                       (value) => filterService.toggleLow(),
@@ -70,36 +81,47 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     const SizedBox(height: 16),
                     
                     // Category filters
-                    const Text('Categories:', style: TextStyle(fontWeight: FontWeight.bold)),
-                    buildFilterToggle(
-                      context,
-                      'Property',
-                      Icons.home_outlined,  // Updated to match mobile
-                      Colors.blue,
-                      filterService.showProperty,
-                      (value) => filterService.toggleProperty(),
+                    const Padding(
+                      padding: EdgeInsets.only(left: 8.0),
+                      child: Text(
+                        'Categories',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey,
+                        ),
+                      ),
                     ),
+                    const SizedBox(height: 8),
                     buildFilterToggle(
                       context,
                       'Violent',
-                      Icons.priority_high,  // Updated to match mobile
-                      Colors.red,
+                      FontAwesomeIcons.triangleExclamation,
+                      Colors.blueGrey,
                       filterService.showViolent,
                       (value) => filterService.toggleViolent(),
                     ),
                     buildFilterToggle(
                       context,
+                      'Property',
+                      FontAwesomeIcons.bagShopping,
+                      Colors.blueGrey,
+                      filterService.showProperty,
+                      (value) => filterService.toggleProperty(),
+                    ),
+                    buildFilterToggle(
+                      context,
                       'Drug',
-                      FontAwesomeIcons.syringe,
-                      Colors.purple,
+                      FontAwesomeIcons.cannabis,
+                      Colors.blueGrey,
                       filterService.showDrug,
                       (value) => filterService.toggleDrug(),
                     ),
                     buildFilterToggle(
                       context,
                       'Public Order',
-                      Icons.balance,  // Updated to match mobile
-                      Colors.orange,
+                      Icons.balance,
+                      Colors.blueGrey,
                       filterService.showPublicOrder,
                       (value) => filterService.togglePublicOrder(),
                     ),
@@ -107,14 +129,14 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                       context,
                       'Financial',
                       Icons.attach_money,
-                      Colors.green,
+                      Colors.blueGrey,
                       filterService.showFinancial,
                       (value) => filterService.toggleFinancial(),
                     ),
                     buildFilterToggle(
                       context,
                       'Traffic',
-                      Icons.traffic,  // Updated to match mobile
+                      Icons.traffic,
                       Colors.blueGrey,
                       filterService.showTraffic,
                       (value) => filterService.toggleTraffic(),
@@ -122,8 +144,8 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     buildFilterToggle(
                       context,
                       'Alerts',
-                      Icons.campaign,  // Updated to match mobile
-                      Colors.deepPurple,
+                      Icons.campaign,
+                      Colors.blueGrey,
                       filterService.showAlerts,
                       (value) => filterService.toggleAlerts(),
                     ),
@@ -131,30 +153,41 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     
                     // Status filters (only for logged-in users)
                     if (userProfile != null) ...[
-                      const Text('Status:', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const Padding(
+                        padding: EdgeInsets.only(left: 8.0),
+                        child: Text(
+                          'Status',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       buildFilterToggle(
                         context,
                         'Pending',
-                        Icons.hourglass_empty,  // Updated to match mobile
-                        Colors.amber,  // Updated color to match mobile
+                        Icons.hourglass_empty,
+                        Colors.deepPurple,
                         filterService.showPending,
                         (value) => filterService.togglePending(),
                       ),
                       buildFilterToggle(
                         context,
                         'Rejected',
-                        Icons.cancel_outlined,  // Updated to match mobile
+                        Icons.cancel_outlined,
                         Colors.grey,
                         filterService.showRejected,
                         (value) => filterService.toggleRejected(),
                       ),
                       
-                      // Active/Inactive filters (only for admin and regular users) - ADDED
+                      // Active/Inactive filters (only for admin and regular users)
                       if (userProfile?['role'] == 'admin' || userProfile?['role'] == 'user') ...[
                         buildFilterToggle(
                           context,
                           'Active',
-                          Icons.check_circle_outline,  // Active icon
+                          Icons.check_circle_outline,
                           Colors.green,
                           filterService.showActive,
                           (value) => filterService.toggleActive(),
@@ -162,7 +195,7 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                         buildFilterToggle(
                           context,
                           'Inactive',
-                          Icons.pause_circle_outline,  // Inactive icon
+                          Icons.pause_circle_outline,
                           Colors.grey,
                           filterService.showInactive,
                           (value) => filterService.toggleInactive(),

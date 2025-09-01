@@ -135,55 +135,58 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
   }
 
   Future<void> _submitForm() async {
-    if (!_formKey.currentState!.validate() || _selectedTypeId == null) {
-      return;
-    }
+  if (!_formKey.currentState!.validate() || _selectedTypeId == null) {
+    return;
+  }
 
-    setState(() {
-      _isSubmitting = true;
-    });
+  setState(() {
+    _isSubmitting = true;
+  });
 
-    try {
-      await SafeSpotService.createSafeSpot(
-        typeId: _selectedTypeId!,
-        name: _nameController.text.trim(),
-        description: _descriptionController.text.trim().isEmpty 
-            ? null 
-            : _descriptionController.text.trim(),
-        location: widget.position,
-        userId: widget.userProfile!['id'],
+  try {
+    await SafeSpotService.createSafeSpot(
+      typeId: _selectedTypeId!,
+      name: _nameController.text.trim(),
+      description: _descriptionController.text.trim().isEmpty 
+          ? null 
+          : _descriptionController.text.trim(),
+      location: widget.position,
+      userId: widget.userProfile!['id'],
+    );
+
+    if (mounted) {
+      Navigator.pop(context); // Close the modal first
+      
+      // Different messages for admin vs regular users
+      final successMessage = isAdmin
+          ? 'Safe spot created successfully! It is now visible to all users.'
+          : 'Safe spot submitted successfully! It will be visible after approval.';
+          
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(successMessage),
+          duration: Duration(seconds: 3),
+        ),
       );
-
-      if (mounted) {
-        widget.onUpdate(); // Call the update callback
-        Navigator.pop(context); // Close the modal
-        
-        // Different messages for admin vs regular users
-        final successMessage = isAdmin
-            ? 'Safe spot created successfully! It is now visible to all users.'
-            : 'Safe spot submitted successfully! It will be visible after approval.';
-            
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(successMessage),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to submit safe spot: ${e.toString()}'),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
+      
+      // Add delay before refreshing to ensure database commit is complete
+      await Future.delayed(const Duration(milliseconds: 500));
+      widget.onUpdate(); // Call the update callback after delay
+    }
+  } catch (e) {
+    if (mounted) {
+      setState(() {
+        _isSubmitting = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to submit safe spot: ${e.toString()}'),
+          duration: const Duration(seconds: 5),
+        ),
+      );
     }
   }
+}
 
   IconData _getIconFromString(String iconName) {
     switch (iconName) {

@@ -75,6 +75,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0  # Updated lints
+  flutter_native_splash: ^2.4.1  # Added for splash screen generation
 
 flutter:
   uses-material-design: true
@@ -83,3 +84,17 @@ flutter:
     - assets/images/LIGHT.jpg
     - assets/images/DARK.jpg
     - .env
+
+
+flutter_native_splash:
+  background_image: assets/images/LIGHT.png
+  image: assets/images/zecure.png
+
+  # Android specific settings
+  android_12:
+    image: assets/images/zecure.png
+    background_image: assets/images/LIGHT.png
+  
+  # Disable other platforms
+  web: false
+  ios: false

@@ -65,13 +65,10 @@ class DesktopSidebar extends StatelessWidget {
       height: double.infinity,
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(
-          right: BorderSide(
-            color: Color(0xFFE5E7EB),
-            width: 1,
-          ),
-        ),
+        // ← Removed the entire border property
       ),
+              
+      
       child: isVisible ? _buildSidebarContent() : null,
     );
   }
@@ -102,21 +99,30 @@ class DesktopSidebar extends StatelessWidget {
                 const SizedBox(height: 4),
                 _buildModernNavItem(
                   index: 1,
-                  icon: Icons.notifications_rounded,
-                  title: 'Notifications',
-                  subtitle: 'Alerts & updates',
+                  icon: Icons.safety_check_rounded,
+                  title: 'Quick Access',
+                  subtitle: 'Safety features',
                   isActive: currentIndex == 1,
                   onTap: () => onTap(1),
-                  badge: unreadNotificationCount > 0 ? unreadNotificationCount : null,
                 ),
                 const SizedBox(height: 4),
                 _buildModernNavItem(
                   index: 2,
+                  icon: Icons.notifications_rounded,
+                  title: 'Notifications',
+                  subtitle: 'Alerts & updates',
+                  isActive: currentIndex == 2,
+                  onTap: () => onTap(2),
+                  badge: unreadNotificationCount > 0 ? unreadNotificationCount : null,
+                ),
+                const SizedBox(height: 4),
+                _buildModernNavItem(
+                  index: 3,
                   icon: Icons.person_rounded,
                   title: 'Profile',
                   subtitle: 'Account settings',
-                  isActive: currentIndex == 2,
-                  onTap: () => onTap(2),
+                  isActive: currentIndex == 3,
+                  onTap: () => onTap(3),
                 ),
                 
                 // Extra space for scrolling
@@ -132,6 +138,7 @@ class DesktopSidebar extends StatelessWidget {
     );
   }
 
+  
   Widget _buildGradientHeader() {
     return Container(
       width: double.infinity,
