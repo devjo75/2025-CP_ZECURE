@@ -71,12 +71,13 @@ class SafeSpotEditForm {
 static bool _canUserEditSafeSpot(Map<String, dynamic> safeSpot, Map<String, dynamic>? userProfile) {
   if (userProfile == null) return false;
   
-  final isAdmin = userProfile['role'] == 'admin';
+  final userRole = userProfile['role'];
+  final isAdminOrOfficer = userRole == 'admin' || userRole == 'officer';
   final isOwner = safeSpot['created_by'] == userProfile['id'];
   final status = safeSpot['status'] ?? 'pending';
   
-  // Admin can edit all safe spots
-  if (isAdmin) return true;
+  // Admin or Officer can edit all safe spots
+  if (isAdminOrOfficer) return true;
   
   // Regular users can only edit their own pending safe spots
   return isOwner && status == 'pending';
@@ -112,9 +113,10 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
   bool _isLoading = true;
   bool _isSubmitting = false;
 
-  bool get isAdmin {
-    return widget.userProfile?['role'] == 'admin';
-  }
+bool get isAdminOrOfficer {
+  final role = widget.userProfile?['role'];
+  return role == 'admin' || role == 'officer';
+}
 
   @override
   void initState() {
@@ -178,6 +180,12 @@ Future<void> _submitForm() async {
   });
 
   try {
+    // Use the userId from widget.userProfile instead of an empty string
+    final userId = widget.userProfile?['id'];
+    if (userId == null || userId.isEmpty) {
+      throw Exception('User ID is missing or invalid');
+    }
+
     await SafeSpotService.updateSafeSpot(
       safeSpotId: widget.safeSpot['id'],
       typeId: _selectedTypeId!,
@@ -185,6 +193,7 @@ Future<void> _submitForm() async {
       description: _descriptionController.text.trim().isEmpty 
           ? null 
           : _descriptionController.text.trim(),
+      userId: userId, // Pass the actual userId
     );
 
     if (mounted) {
@@ -199,20 +208,20 @@ Future<void> _submitForm() async {
         ),
       );
     }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to update safe spot: ${e.toString()}'),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
+  } catch (e) {
+    if (mounted) {
+      setState(() {
+        _isSubmitting = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update safe spot: ${e.toString()}'),
+          duration: const Duration(seconds: 5),
+        ),
+      );
     }
   }
+}
 
   IconData _getIconFromString(String iconName) {
     switch (iconName) {
@@ -456,8 +465,8 @@ Future<void> _submitForm() async {
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          isAdmin
-                                              ? 'Admin: You can edit this safe spot at any time.'
+                                          isAdminOrOfficer
+                                              ? 'Admin/Officer: You can edit this safe spot at any time.'
                                               : 'You can only edit this safe spot while it\'s pending approval.',
                                           style: TextStyle(
                                             color: Colors.orange.shade700,

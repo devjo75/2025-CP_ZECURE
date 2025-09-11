@@ -8,12 +8,12 @@ import 'package:zecure/screens/admin_dashboard.dart';
 class ProfileScreen {
   final AuthService _authService;
   Map<String, dynamic>? userProfile;
-  final bool isAdmin;
+  final bool isAdmin;  // Keep this for admin-only features
+  final bool hasAdminPermissions;  // Keep this for shared admin/officer features
   final ScrollController _scrollController = ScrollController();
   final ScrollController _profileViewScrollController = ScrollController(); 
 
-  ProfileScreen(this._authService, this.userProfile, this.isAdmin);
-  
+  ProfileScreen(this._authService, this.userProfile, this.isAdmin, this.hasAdminPermissions);
 
   // Controllers and state
   late TextEditingController _firstNameController;
@@ -38,7 +38,11 @@ class ProfileScreen {
 //PROFILE PAGE TO ALWAYS START FROM THE TOP
   bool _shouldScrollToTop = false;
 
-  
+  // Add these after your existing controllers and state variables
+  List<Map<String, dynamic>> _policeRanks = [];
+  List<Map<String, dynamic>> _policeStations = [];
+  int? _selectedPoliceRankId;
+  int? _selectedPoliceStationId;
 
   void initControllers() {
     _firstNameController = TextEditingController(text: userProfile?['first_name'] ?? '');
@@ -51,6 +55,12 @@ class ProfileScreen {
     _contactNumberController = TextEditingController(text: userProfile?['contact_number'] ?? '');
     _selectedGender = userProfile?['gender'];
     _selectedBirthday = userProfile?['bday'] != null ? DateTime.parse(userProfile?['bday']) : null;
+    _selectedPoliceRankId = userProfile?['police_rank_id'];
+    _selectedPoliceStationId = userProfile?['police_station_id'];
+
+      if (userProfile?['role'] == 'officer') {
+    _loadPoliceData();
+  }
   }
 
   void disposeControllers() {
@@ -66,7 +76,23 @@ class ProfileScreen {
     _profileViewScrollController.dispose();
   }
 
-  bool _hasProfileChanges() {
+int? _calculateAge(DateTime? birthDate) {
+  if (birthDate == null) return null;
+  
+  final today = DateTime.now();
+  int age = today.year - birthDate.year;
+  
+  // Check if birthday hasn't occurred this year yet
+  if (today.month < birthDate.month || 
+      (today.month == birthDate.month && today.day < birthDate.day)) {
+    age--;
+  }
+  
+  return age;
+}
+
+
+bool _hasProfileChanges() {
   return _firstNameController.text != (userProfile?['first_name'] ?? '') ||
          _lastNameController.text != (userProfile?['last_name'] ?? '') ||
          _middleNameController.text != (userProfile?['middle_name'] ?? '') ||
@@ -74,7 +100,9 @@ class ProfileScreen {
          _selectedGender != userProfile?['gender'] ||
          _contactNumberController.text != (userProfile?['contact_number'] ?? '') ||
          (_selectedBirthday?.toIso8601String().split('T')[0] != 
-          (userProfile?['bday'] != null ? DateTime.parse(userProfile!['bday']).toIso8601String().split('T')[0] : null));
+          (userProfile?['bday'] != null ? DateTime.parse(userProfile!['bday']).toIso8601String().split('T')[0] : null)) ||
+         _selectedPoliceRankId != userProfile?['police_rank_id'] ||
+         _selectedPoliceStationId != userProfile?['police_station_id'];
 }
 
 bool _hasValidPasswordChange() {
@@ -148,34 +176,38 @@ Future<void> updateProfile(BuildContext context, {required VoidCallback onSucces
     }
 
     // Update user profile data only if there are changes
-    if (hasProfileChanges) {
-      final updateData = {
-        'first_name': _firstNameController.text,
-        'last_name': _lastNameController.text,
-        'middle_name': _middleNameController.text.isEmpty ? null : _middleNameController.text,
-        'ext_name': _extNameController.text.isEmpty ? null : _extNameController.text,
-        'gender': _selectedGender,
-        'bday': _selectedBirthday?.toIso8601String(),
-        'contact_number': _contactNumberController.text.isEmpty ? null : _contactNumberController.text,
-        'updated_at': DateTime.now().toIso8601String(),
-      };
+// Update user profile data only if there are changes
+if (hasProfileChanges) {
+  final updateData = {
+    'first_name': _firstNameController.text,
+    'last_name': _lastNameController.text,
+    'middle_name': _middleNameController.text.isEmpty ? null : _middleNameController.text,
+    'ext_name': _extNameController.text.isEmpty ? null : _extNameController.text,
+    'gender': _selectedGender,
+    'bday': _selectedBirthday?.toIso8601String(),
+    'contact_number': _contactNumberController.text.isEmpty ? null : _contactNumberController.text,
+    'police_rank_id': _selectedPoliceRankId,
+    'police_station_id': _selectedPoliceStationId,
+    'updated_at': DateTime.now().toIso8601String(),
+  };
 
-      final response = await Supabase.instance.client
-          .from('users')
-          .update(updateData)
-          .eq('id', userProfile!['id'] as Object)
-          .select()
-          .single();
+  final response = await Supabase.instance.client
+      .from('users')
+      .update(updateData)
+      .eq('id', userProfile!['id'] as Object)
+      .select()
+      .single();
 
-      userProfile = response;
-      profileChanged = true;
-    }
+  userProfile = response;
+  profileChanged = true;
+}
     
     // Clear password fields and error
     _passwordController.clear();
     _newPasswordController.clear();
     _confirmPasswordController.clear();
     _currentPasswordError = null;
+
     
     // Show appropriate success message based on what was changed
     String successMessage;
@@ -350,6 +382,24 @@ void _showInfoDialog(BuildContext context, String message) {
   _shouldScrollToTop = value;
 }
 
+Future<void> _loadPoliceData() async {
+  try {
+    final ranksResponse = await Supabase.instance.client
+        .from('police_ranks')
+        .select('*')
+        .order('rank_level');
+    _policeRanks = List<Map<String, dynamic>>.from(ranksResponse);
+
+    final stationsResponse = await Supabase.instance.client
+        .from('police_stations')
+        .select('*')
+        .order('station_number');
+    _policeStations = List<Map<String, dynamic>>.from(stationsResponse);
+  } catch (e) {
+    print('Error loading police data: $e');
+  }
+}
+
 
 
 Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback onEditPressed) {
@@ -374,7 +424,7 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Enhanced header section with gradient - modified as requested
+        // Enhanced header section with gradient
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
@@ -386,7 +436,7 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
                 Theme.of(context).primaryColor.withOpacity(0.6),
               ],
             ),
-            borderRadius: BorderRadius.zero, // Removed border radius
+            borderRadius: BorderRadius.zero,
           ),
           child: Stack(
             children: [
@@ -417,41 +467,41 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
               ),
               // Content - removed top padding
               Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24), // Removed top padding
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     // Enhanced avatar with border and shadow
-Container(
-  margin: const EdgeInsets.only(top: 20), // Add top margin here
-  decoration: BoxDecoration(
-    shape: BoxShape.circle,
-    boxShadow: [
-      BoxShadow(
-        color: Colors.black.withOpacity(0.2),
-        blurRadius: 15,
-        offset: const Offset(0, 8),
-      ),
-    ],
-  ),
-  child: CircleAvatar(
-    backgroundColor: Colors.white,
-    radius: 38,
-    child: CircleAvatar(
-      backgroundColor: Theme.of(context).primaryColor.withOpacity(0.8),
-      radius: 35,
-      child: Text(
-        userProfile?['first_name']?.toString().substring(0, 1) ?? 'U',
-        style: const TextStyle(
-          fontSize: 36,
-          color: Colors.white,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    ),
-  ),
-),
+                    Container(
+                      margin: const EdgeInsets.only(top: 20),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 15,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: CircleAvatar(
+                        backgroundColor: Colors.white,
+                        radius: 38,
+                        child: CircleAvatar(
+                          backgroundColor: Theme.of(context).primaryColor.withOpacity(0.8),
+                          radius: 35,
+                          child: Text(
+                            userProfile?['first_name']?.toString().substring(0, 1) ?? 'U',
+                            style: const TextStyle(
+                              fontSize: 36,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 20),
                     // Name with better typography - properly centered
                     Container(
@@ -516,7 +566,14 @@ Container(
                               Icon(
                                 Icons.admin_panel_settings,
                                 size: 18,
-                                color: isAdmin ? Colors.blue : Colors.green,
+                                color: Colors.blue,
+                              ),
+                              const SizedBox(width: 6),
+                            ] else if (userProfile?['role'] == 'officer') ...[
+                              Icon(
+                                Icons.local_police,
+                                size: 18,
+                                color: Colors.indigo,
                               ),
                               const SizedBox(width: 6),
                             ],
@@ -525,7 +582,8 @@ Container(
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.bold,
-                                color: isAdmin ? Colors.blue : Colors.green,
+                                color: isAdmin ? Colors.blue : 
+                                      (userProfile?['role'] == 'officer' ? Colors.indigo : Colors.green),
                                 letterSpacing: 0.5,
                               ),
                             ),
@@ -540,7 +598,7 @@ Container(
           ),
         ),
         
-        // Enhanced information section
+        // Personal information section
         Container(
           margin: const EdgeInsets.all(10),
           decoration: BoxDecoration(
@@ -607,6 +665,14 @@ Container(
                     ),
                     _buildProfileInfoItem(
                       context,
+                      icon: Icons.calendar_today,
+                      label: 'Age',
+                      value: userProfile?['bday'] != null
+                          ? '${_calculateAge(DateTime.parse(userProfile!['bday']))} years old'
+                          : 'Not specified',
+                    ),
+                    _buildProfileInfoItem(
+                      context,
                       icon: Icons.transgender,
                       label: 'Gender',
                       value: userProfile?['gender'] ?? 'Not specified',
@@ -624,6 +690,78 @@ Container(
             ],
           ),
         ),
+
+        // Police information section (shown only for officers)
+        if (userProfile?['role'] == 'officer') ...[
+          Container(
+            margin: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.withOpacity(0.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.local_police,
+                          color: Colors.indigo.shade600,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Police Information',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1, indent: 20, endIndent: 20),
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      _buildProfileInfoItem(
+                        context,
+                        icon: Icons.military_tech,
+                        label: 'Police Rank',
+                        value: _getPoliceRankName(userProfile?['police_rank_id']) ?? 'Not assigned',
+                      ),
+                      _buildProfileInfoItem(
+                        context,
+                        icon: Icons.location_on,
+                        label: 'Assigned Station',
+                        value: _getPoliceStationName(userProfile?['police_station_id']) ?? 'Not assigned',
+                        isLast: true,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
 
         // Enhanced action buttons
         Padding(
@@ -840,22 +978,22 @@ Widget buildEditProfileForm(
             onCancel();
           }
         },
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.grey.shade50,
-              Colors.white,
-            ],
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.grey.shade50,
+                Colors.white,
+              ],
+            ),
           ),
-        ),
-        child: SingleChildScrollView(
-          controller: _scrollController, // Add this line
-          child: Padding(
+          child: SingleChildScrollView(
+            controller: _scrollController,
+            child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: isDesktopOrWeb ? 16.0 : 12.0,  // Reduced from 24/20
+                horizontal: isDesktopOrWeb ? 16.0 : 12.0,
                 vertical: isDesktopOrWeb ? 24.0 : 20.0,
               ),
               child: Form(
@@ -879,423 +1017,613 @@ Widget buildEditProfileForm(
                       ),
                       const SizedBox(height: 8),
                     ],
-                  // Enhanced Personal Information Card
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.grey.withOpacity(0.1),
-                          blurRadius: 15,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isDesktopOrWeb ? 20.0 : 16.0,  // Reduced from 28/20
-                        vertical: isDesktopOrWeb ? 28.0 : 20.0,
+                    // Personal Information Card
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.1),
+                            blurRadius: 15,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
                       ),
-                      child: Column(
-                        children: [
-                          // Header with icon
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isDesktopOrWeb ? 20.0 : 16.0,
+                          vertical: isDesktopOrWeb ? 28.0 : 20.0,
+                        ),
+                        child: Column(
+                          children: [
+                            // Header with icon
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(
+                                    Icons.person,
+                                    color: Colors.blue.shade600,
+                                    size: 24,
+                                  ),
                                 ),
-                                child: Icon(
-                                  Icons.person,
-                                  color: Colors.blue.shade600,
-                                  size: 24,
+                                const SizedBox(width: 12),
+                                const Text(
+                                  'Personal Information',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 12),
-                              const Text(
-                                'Personal Information',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
-                          
-                          // Form fields with enhanced styling
-                          _buildEnhancedTextField(
-                            controller: _firstNameController,
-                            label: 'First Name',
-                            icon: Icons.person_outline,
-                            validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
-                          ),
-                          const SizedBox(height: 16),
-                          _buildEnhancedTextField(
-                            controller: _lastNameController,
-                            label: 'Last Name',
-                            icon: Icons.person_outline,
-                            validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
-                          ),
-                          const SizedBox(height: 16),
-                          _buildEnhancedTextField(
-                            controller: _middleNameController,
-                            label: 'Middle Name (optional)',
-                            icon: Icons.person_outline,
-                          ),
-                          const SizedBox(height: 16),
-                          _buildEnhancedTextField(
-                            controller: _extNameController,
-                            label: 'Extension Name (optional)',
-                            icon: Icons.person_outline,
-                          ),
-                          const SizedBox(height: 16),
-                          
-                          // Enhanced Birthday Selector
-                          Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(12),
-                              color: Colors.grey.shade50,
+                              ],
                             ),
-                            child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              leading: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Icon(
-                                  Icons.calendar_today,
-                                  size: 20,
-                                  color: Colors.blue.shade600,
-                                ),
-                              ),
-                              title: Text(
-                                _selectedBirthday == null
-                                    ? 'Select Birthday'
-                                    : 'Birthday: ${DateFormat('MMM d, y').format(_selectedBirthday!)}',
-                                style: TextStyle(
-                                  color: _selectedBirthday == null 
-                                      ? Colors.grey.shade600
-                                      : Colors.black87,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              trailing: Icon(
-                                Icons.arrow_forward_ios,
-                                size: 16,
-                                color: Colors.grey.shade600,
-                              ),
-                              onTap: () async {
-                                final date = await showDatePicker(
-                                  context: context,
-                                  initialDate: _selectedBirthday ?? DateTime.now(),
-                                  firstDate: DateTime(1900),
-                                  lastDate: DateTime.now(),
-                                );
-                                if (date != null) {
-                                  _selectedBirthday = date;
-                                  setState(() {});
-                                }
-                              },
-                              shape: RoundedRectangleBorder(
+                            const SizedBox(height: 24),
+                            // Form fields
+                            _buildEnhancedTextField(
+                              controller: _firstNameController,
+                              label: 'First Name',
+                              icon: Icons.person_outline,
+                              validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                            ),
+                            const SizedBox(height: 16),
+                            _buildEnhancedTextField(
+                              controller: _lastNameController,
+                              label: 'Last Name',
+                              icon: Icons.person_outline,
+                              validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                            ),
+                            const SizedBox(height: 16),
+                            _buildEnhancedTextField(
+                              controller: _middleNameController,
+                              label: 'Middle Name (optional)',
+                              icon: Icons.person_outline,
+                            ),
+                            const SizedBox(height: 16),
+                            _buildEnhancedTextField(
+                              controller: _extNameController,
+                              label: 'Extension Name (optional)',
+                              icon: Icons.person_outline,
+                            ),
+                            const SizedBox(height: 16),
+                            // Birthday Selector
+                            Container(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade300),
                                 borderRadius: BorderRadius.circular(12),
+                                color: Colors.grey.shade50,
                               ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          
-                          // Enhanced Dropdown
-                          Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(12),
-                              color: Colors.grey.shade50,
-                            ),
-                            child: DropdownButtonFormField<String>(
-                              value: _selectedGender,
-                              decoration: InputDecoration(
-                                labelText: 'Gender',
-                                border: InputBorder.none,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                                prefixIcon: Container(
-                                  margin: const EdgeInsets.only(left: 12, right: 8),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                leading: Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
                                     color: Colors.blue.withOpacity(0.1),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Icon(
-                                    Icons.transgender,
+                                    Icons.calendar_today,
                                     size: 20,
                                     color: Colors.blue.shade600,
                                   ),
                                 ),
-                              ),
-                              items: ['Male', 'Female', 'LGBTQ+', 'Others']
-                                  .map((gender) => DropdownMenuItem(
-                                        value: gender,
-                                        child: Text(gender),
-                                      ))
-                                  .toList(),
-                              onChanged: (value) => _selectedGender = value,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          _buildEnhancedTextField(
-                            controller: _contactNumberController,
-                            label: 'Contact Number',
-                            icon: Icons.phone,
-                            hintText: 'e.g. +639123456789',
-                            keyboardType: TextInputType.phone,
-                            validator: (value) {
-                              if (value != null && value.isNotEmpty) {
-                                if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
-                                  return 'Please enter a valid phone number';
-                                }
-                              }
-                              return null;
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 24),
-                  
-                  // Enhanced Password Change Card
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.grey.withOpacity(0.1),
-                          blurRadius: 15,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isDesktopOrWeb ? 20.0 : 16.0,  // Reduced from 28/20
-                        vertical: isDesktopOrWeb ? 28.0 : 20.0,
-                      ),
-                      child: Column(
-                        children: [
-                          // Header with icon
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Icon(
-                                  Icons.lock,
-                                  color: Colors.orange.shade600,
-                                  size: 24,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              const Text(
-                                'Change Password',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.blue.shade200),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(Icons.info_outline, size: 16, color: Colors.blue.shade600),
-                                const SizedBox(width: 8),
-                                const Expanded(
-                                  child: Text(
-                                    'Leave blank to keep current password',
-                                    style: TextStyle(fontSize: 12, color: Colors.blue),
+                                title: Text(
+                                  _selectedBirthday == null
+                                      ? 'Select Birthday'
+                                      : 'Birthday: ${DateFormat('MMM d, y').format(_selectedBirthday!)}',
+                                  style: TextStyle(
+                                    color: _selectedBirthday == null 
+                                        ? Colors.grey.shade600
+                                        : Colors.black87,
+                                    fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          
-                          // Password fields with enhanced styling
-                          _buildEnhancedPasswordField(
-                            controller: _passwordController,
-                            label: 'Current Password',
-                            isVisible: showCurrentPassword,
-                            onVisibilityToggle: () {
-                              setState(() {
-                                showCurrentPassword = !showCurrentPassword;
-                              });
-                            },
-                            errorText: _currentPasswordError,
-                            validator: (value) {
-                              if (_currentPasswordError != null) {
-                                return _currentPasswordError;
-                              }
-                              if (_newPasswordController.text.isNotEmpty &&
-                                  (value?.isEmpty ?? true)) {
-                                return 'Required to change password';
-                              }
-                              return null;
-                            },
-                            onChanged: (value) {
-                              if (_currentPasswordError != null) {
-                                setState(() {
-                                  _currentPasswordError = null;
-                                });
-                              }
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          _buildEnhancedPasswordField(
-                            controller: _newPasswordController,
-                            label: 'New Password',
-                            isVisible: showNewPassword,
-                            onVisibilityToggle: () {
-                              setState(() {
-                                showNewPassword = !showNewPassword;
-                              });
-                            },
-                            validator: (value) {
-                              if (value?.isNotEmpty ?? false) {
-                                if (value == _passwordController.text) {
-                                  return 'New password must be different';
-                                }
-                                if (value!.length < 6) {
-                                  return 'Must be at least 6 characters';
-                                }
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          _buildEnhancedPasswordField(
-                            controller: _confirmPasswordController,
-                            label: 'Confirm New Password',
-                            isVisible: showConfirmPassword,
-                            onVisibilityToggle: () {
-                              setState(() {
-                                showConfirmPassword = !showConfirmPassword;
-                              });
-                            },
-                            validator: (value) {
-                              if (_newPasswordController.text.isNotEmpty) {
-                                if (value?.isEmpty ?? true) {
-                                  return 'Please confirm your password';
-                                }
-                                if (value != _newPasswordController.text) {
-                                  return 'Passwords do not match';
-                                }
-                              }
-                              return null;
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 32),
-                  
-                  // Enhanced Action Buttons
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Container(
-                          height: 56,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.grey.shade300, width: 2),
-                          ),
-                          child: OutlinedButton(
-                            onPressed: onCancel,
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide.none,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
+                                trailing: Icon(
+                                  Icons.arrow_forward_ios,
+                                  size: 16,
+                                  color: Colors.grey.shade600,
+                                ),
+                                onTap: () async {
+                                  final date = await showDatePicker(
+                                    context: context,
+                                    initialDate: _selectedBirthday ?? DateTime.now(),
+                                    firstDate: DateTime(1900),
+                                    lastDate: DateTime.now(),
+                                  );
+                                  if (date != null) {
+                                    _selectedBirthday = date;
+                                    setState(() {});
+                                  }
+                                },
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
                               ),
                             ),
-                            child: Text(
-                              'CANCEL',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: Colors.grey.shade600,
+                            const SizedBox(height: 16),
+                            // Gender Dropdown
+                            Container(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade300),
+                                borderRadius: BorderRadius.circular(12),
+                                color: Colors.grey.shade50,
+                              ),
+                              child: DropdownButtonFormField<String>(
+                                value: _selectedGender,
+                                decoration: InputDecoration(
+                                  labelText: 'Gender',
+                                  border: InputBorder.none,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                  prefixIcon: Container(
+                                    margin: const EdgeInsets.only(left: 12, right: 8),
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(
+                                      Icons.transgender,
+                                      size: 20,
+                                      color: Colors.blue.shade600,
+                                    ),
+                                  ),
+                                ),
+                                items: ['Male', 'Female', 'LGBTQ+', 'Others']
+                                    .map((gender) => DropdownMenuItem(
+                                          value: gender,
+                                          child: Text(gender),
+                                        ))
+                                    .toList(),
+                                onChanged: (value) => _selectedGender = value,
                               ),
                             ),
-                          ),
+                            const SizedBox(height: 16),
+                            _buildEnhancedTextField(
+                              controller: _contactNumberController,
+                              label: 'Contact Number',
+                              icon: Icons.phone,
+                              hintText: 'e.g. +639123456789',
+                              keyboardType: TextInputType.phone,
+                              validator: (value) {
+                                if (value != null && value.isNotEmpty) {
+                                  if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
+                                    return 'Please enter a valid phone number';
+                                  }
+                                }
+                                return null;
+                              },
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Container(
-                          height: 56,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Theme.of(context).primaryColor,
-                                Theme.of(context).primaryColor.withOpacity(0.8),
-                              ],
+                    ),
+                    // Police Information Card (shown only for officers)
+                    if (userProfile?['role'] == 'officer') ...[
+                      const SizedBox(height: 24),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.grey.withOpacity(0.1),
+                              blurRadius: 15,
+                              offset: const Offset(0, 8),
                             ),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Theme.of(context).primaryColor.withOpacity(0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 6),
+                          ],
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: isDesktopOrWeb ? 20.0 : 16.0,
+                            vertical: isDesktopOrWeb ? 28.0 : 20.0,
+                          ),
+                          child: Column(
+                            children: [
+                              // Header with icon
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.indigo.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      Icons.local_police,
+                                      color: Colors.indigo.shade600,
+                                      size: 24,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Text(
+                                    'Police Information',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 24),
+                              // Police Rank Dropdown
+                              FutureBuilder<void>(
+                                future: _policeRanks.isEmpty ? _loadPoliceData() : null,
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState == ConnectionState.waiting) {
+                                    return Container(
+                                      height: 56,
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.grey.shade300),
+                                        borderRadius: BorderRadius.circular(12),
+                                        color: Colors.grey.shade50,
+                                      ),
+                                      child: const Center(
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            ),
+                                            SizedBox(width: 8),
+                                            Text('Loading ranks...'),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                  return Container(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(12),
+                                      color: Colors.grey.shade50,
+                                    ),
+                                    child: DropdownButtonFormField<int>(
+                                      value: _selectedPoliceRankId,
+                                      decoration: InputDecoration(
+                                        labelText: 'Police Rank',
+                                        border: InputBorder.none,
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                        prefixIcon: Container(
+                                          margin: const EdgeInsets.only(left: 12, right: 8),
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.indigo.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Icon(
+                                            Icons.military_tech,
+                                            size: 20,
+                                            color: Colors.indigo.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                      isExpanded: true,
+                                      items: _policeRanks
+                                          .map((rank) => DropdownMenuItem<int>(
+                                                value: rank['id'],
+                                                child: Text(
+                                                  rank['new_rank'] ?? 'Unknown',
+                                                  overflow: TextOverflow.ellipsis,
+                                                  maxLines: 1,
+                                                ),
+                                              ))
+                                          .toList(),
+                                      onChanged: (value) {
+                                        setState(() {
+                                          _selectedPoliceRankId = value;
+                                        });
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              // Police Station Dropdown
+                              FutureBuilder<void>(
+                                future: _policeStations.isEmpty ? _loadPoliceData() : null,
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState == ConnectionState.waiting) {
+                                    return Container(
+                                      height: 56,
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.grey.shade300),
+                                        borderRadius: BorderRadius.circular(12),
+                                        color: Colors.grey.shade50,
+                                      ),
+                                      child: const Center(
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            ),
+                                            SizedBox(width: 8),
+                                            Text('Loading stations...'),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                  return Container(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(12),
+                                      color: Colors.grey.shade50,
+                                    ),
+                                    child: DropdownButtonFormField<int>(
+                                      value: _selectedPoliceStationId,
+                                      decoration: InputDecoration(
+                                        labelText: 'Assigned Station',
+                                        border: InputBorder.none,
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                        prefixIcon: Container(
+                                          margin: const EdgeInsets.only(left: 12, right: 8),
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.indigo.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Icon(
+                                            Icons.location_on,
+                                            size: 20,
+                                            color: Colors.indigo.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                      items: _policeStations
+                                          .map((station) => DropdownMenuItem<int>(
+                                                value: station['id'],
+                                                child: Text(station['name'] ?? 'Unknown'),
+                                              ))
+                                          .toList(),
+                                      onChanged: (value) {
+                                        setState(() {
+                                          _selectedPoliceStationId = value;
+                                        });
+                                      },
+                                    ),
+                                  );
+                                },
                               ),
                             ],
-                          ),
-                          child: ElevatedButton(
-                            onPressed: () => updateProfile(context, onSuccess: onSuccess),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.transparent,
-                              shadowColor: Colors.transparent,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                            ),
-                            child: const Text(
-                              'SAVE ',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: Colors.white,
-                              ),
-                            ),
                           ),
                         ),
                       ),
                     ],
-                  ),
-                  if (isDesktopOrWeb) const SizedBox(height: 16),
-                ],
+                    const SizedBox(height: 24),
+                    // Password Change Card
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.1),
+                            blurRadius: 15,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isDesktopOrWeb ? 20.0 : 16.0,
+                          vertical: isDesktopOrWeb ? 28.0 : 20.0,
+                        ),
+                        child: Column(
+                          children: [
+                            // Header with icon
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(
+                                    Icons.lock,
+                                    color: Colors.orange.shade600,
+                                    size: 24,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Text(
+                                  'Change Password',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.blue.shade200),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.info_outline, size: 16, color: Colors.blue.shade600),
+                                  const SizedBox(width: 8),
+                                  const Expanded(
+                                    child: Text(
+                                      'Leave blank to keep current password',
+                                      style: TextStyle(fontSize: 12, color: Colors.blue),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            // Password fields
+                            _buildEnhancedPasswordField(
+                              controller: _passwordController,
+                              label: 'Current Password',
+                              isVisible: showCurrentPassword,
+                              onVisibilityToggle: () {
+                                setState(() {
+                                  showCurrentPassword = !showCurrentPassword;
+                                });
+                              },
+                              errorText: _currentPasswordError,
+                              validator: (value) {
+                                if (_currentPasswordError != null) {
+                                  return _currentPasswordError;
+                                }
+                                if (_newPasswordController.text.isNotEmpty &&
+                                    (value?.isEmpty ?? true)) {
+                                  return 'Required to change password';
+                                }
+                                return null;
+                              },
+                              onChanged: (value) {
+                                if (_currentPasswordError != null) {
+                                  setState(() {
+                                    _currentPasswordError = null;
+                                  });
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _buildEnhancedPasswordField(
+                              controller: _newPasswordController,
+                              label: 'New Password',
+                              isVisible: showNewPassword,
+                              onVisibilityToggle: () {
+                                setState(() {
+                                  showNewPassword = !showNewPassword;
+                                });
+                              },
+                              validator: (value) {
+                                if (value?.isNotEmpty ?? false) {
+                                  if (value == _passwordController.text) {
+                                    return 'New password must be different';
+                                  }
+                                  if (value!.length < 6) {
+                                    return 'Must be at least 6 characters';
+                                  }
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _buildEnhancedPasswordField(
+                              controller: _confirmPasswordController,
+                              label: 'Confirm New Password',
+                              isVisible: showConfirmPassword,
+                              onVisibilityToggle: () {
+                                setState(() {
+                                  showConfirmPassword = !showConfirmPassword;
+                                });
+                              },
+                              validator: (value) {
+                                if (_newPasswordController.text.isNotEmpty) {
+                                  if (value?.isEmpty ?? true) {
+                                    return 'Please confirm your password';
+                                  }
+                                  if (value != _newPasswordController.text) {
+                                    return 'Passwords do not match';
+                                  }
+                                }
+                                return null;
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    // Action Buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            height: 56,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade300, width: 2),
+                            ),
+                            child: OutlinedButton(
+                              onPressed: onCancel,
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide.none,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: Text(
+                                'CANCEL',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Container(
+                            height: 56,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Theme.of(context).primaryColor,
+                                  Theme.of(context).primaryColor.withOpacity(0.8),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Theme.of(context).primaryColor.withOpacity(0.3),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: ElevatedButton(
+                              onPressed: () => updateProfile(context, onSuccess: onSuccess),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.transparent,
+                                shadowColor: Colors.transparent,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: const Text(
+                                'SAVE',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (isDesktopOrWeb) const SizedBox(height: 16),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
         ),
       );
     },
@@ -1407,12 +1735,26 @@ Widget _buildEnhancedPasswordField({
 Widget buildDesktopProfileView(
   BuildContext context, 
   VoidCallback onEditPressed,
-  {VoidCallback? onClosePressed} // Add this optional parameter
+  {VoidCallback? onClosePressed}
 ) {
+  // Only scroll to top when explicitly requested (when returning from edit mode)
+  if (_shouldScrollToTop) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_profileViewScrollController.hasClients) {
+        _profileViewScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+    _shouldScrollToTop = false; // Reset the flag
+  }
+
   return Center(
     child: Container(
       width: 480,
-      height: MediaQuery.of(context).size.height * 0.80,
+      height: MediaQuery.of(context).size.height * 0.85,
       margin: const EdgeInsets.symmetric(vertical: 40),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1448,11 +1790,11 @@ Widget buildDesktopProfileView(
               children: [
                 // Background pattern
                 Positioned(
-                  right: -30,
-                  top: -20,
+                  right: -50,
+                  top: -30,
                   child: Container(
-                    width: 80,
-                    height: 80,
+                    width: 120,
+                    height: 120,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: Colors.white.withOpacity(0.1),
@@ -1461,17 +1803,17 @@ Widget buildDesktopProfileView(
                 ),
                 Positioned(
                   right: 10,
-                  top: 30,
+                  top: 50,
                   child: Container(
-                    width: 40,
-                    height: 40,
+                    width: 60,
+                    height: 60,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: Colors.white.withOpacity(0.05),
                     ),
                   ),
                 ),
-                // Fixed close button - now properly closes and switches to map
+                // Close button
                 Positioned(
                   top: 16,
                   right: 16,
@@ -1482,19 +1824,20 @@ Widget buildDesktopProfileView(
                     ),
                     child: IconButton(
                       icon: const Icon(Icons.close, size: 18, color: Colors.white),
-                      onPressed: onClosePressed ?? () {}, // Use the callback
+                      onPressed: onClosePressed ?? () {},
                     ),
                   ),
                 ),
-                // Content - Fixed centering
+                // Content
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // Enhanced avatar
+                      // Enhanced avatar with border and shadow
                       Container(
+                        margin: const EdgeInsets.only(top: 10),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           boxShadow: [
@@ -1507,14 +1850,14 @@ Widget buildDesktopProfileView(
                         ),
                         child: CircleAvatar(
                           backgroundColor: Colors.white,
-                          radius: 32,
+                          radius: 35,
                           child: CircleAvatar(
-                            backgroundColor: Theme.of(context).primaryColor.withOpacity(0.9),
-                            radius: 30,
+                            backgroundColor: Theme.of(context).primaryColor.withOpacity(0.8),
+                            radius: 32,
                             child: Text(
                               userProfile?['first_name']?.toString().substring(0, 1) ?? 'U',
                               style: const TextStyle(
-                                fontSize: 28,
+                                fontSize: 32,
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -1522,19 +1865,19 @@ Widget buildDesktopProfileView(
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      
-                      // Name with better centering
+                      const SizedBox(height: 18),
+                      // Name with better typography
                       Container(
-                        width: double.infinity, // Force full width
+                        width: double.infinity,
+                        alignment: Alignment.center,
                         child: Text(
                           '${userProfile?['first_name'] ?? ''}'
                           '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
                           ' ${userProfile?['last_name'] ?? ''}'
                           '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                          textAlign: TextAlign.center, // Ensure center alignment
+                          textAlign: TextAlign.center,
                           style: const TextStyle(
-                            fontSize: 18,
+                            fontSize: 20,
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
                             letterSpacing: 0.5,
@@ -1542,62 +1885,73 @@ Widget buildDesktopProfileView(
                           ),
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      
+                      const SizedBox(height: 10),
                       // Email with subtle styling
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Text(
-                          userProfile?['email'] ?? '',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w500,
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Text(
+                            userProfile?['email'] ?? '',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      
+                      const SizedBox(height: 14),
                       // Enhanced role chip
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 8,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (isAdmin) ...[
-                              Icon(
-                                Icons.admin_panel_settings,
-                                size: 16,
-                                color: isAdmin ? Colors.blue : Colors.green,
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(22),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 8,
+                                offset: const Offset(0, 4),
                               ),
-                              const SizedBox(width: 4),
                             ],
-                            Text(
-                              userProfile?['role']?.toUpperCase() ?? 'USER',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: isAdmin ? Colors.blue : Colors.green,
-                                letterSpacing: 0.5,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (isAdmin) ...[
+                                Icon(
+                                  Icons.admin_panel_settings,
+                                  size: 16,
+                                  color: Colors.blue,
+                                ),
+                                const SizedBox(width: 6),
+                              ] else if (userProfile?['role'] == 'officer') ...[
+                                Icon(
+                                  Icons.local_police,
+                                  size: 16,
+                                  color: Colors.indigo,
+                                ),
+                                const SizedBox(width: 6),
+                              ],
+                              Text(
+                                userProfile?['role']?.toUpperCase() ?? 'USER',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: isAdmin ? Colors.blue : 
+                                        (userProfile?['role'] == 'officer' ? Colors.indigo : Colors.green),
+                                  letterSpacing: 0.5,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ],
@@ -1607,7 +1961,7 @@ Widget buildDesktopProfileView(
             ),
           ),
           
-          // Information section - reduced spacing
+          // Information section with scrolling
           Expanded(
             child: SingleChildScrollView(
               controller: _profileViewScrollController,
@@ -1615,7 +1969,7 @@ Widget buildDesktopProfileView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Section header with icon
+                  // Personal Information Section
                   Row(
                     children: [
                       Container(
@@ -1643,15 +1997,15 @@ Widget buildDesktopProfileView(
                   ),
                   const SizedBox(height: 16),
                   
-                  // Information cards with enhanced styling
-                  _buildDesktopInfoCard(
+                  // Information items with enhanced styling
+                  _buildDesktopInfoItem(
                     context,
                     icon: Icons.person_outline,
                     label: 'Username',
                     value: userProfile?['username'] ?? 'Not set',
                   ),
                   const SizedBox(height: 12),
-                  _buildDesktopInfoCard(
+                  _buildDesktopInfoItem(
                     context,
                     icon: Icons.cake_outlined,
                     label: 'Birthday',
@@ -1661,27 +2015,79 @@ Widget buildDesktopProfileView(
                         : 'Not specified',
                   ),
                   const SizedBox(height: 12),
-                  _buildDesktopInfoCard(
+                  _buildDesktopInfoItem(
+                    context,
+                    icon: Icons.calendar_today,
+                    label: 'Age',
+                    value: userProfile?['bday'] != null
+                        ? '${_calculateAge(DateTime.parse(userProfile!['bday']))} years old'
+                        : 'Not specified',
+                  ),
+                  const SizedBox(height: 12),
+                  _buildDesktopInfoItem(
                     context,
                     icon: Icons.transgender,
                     label: 'Gender',
                     value: userProfile?['gender'] ?? 'Not specified',
                   ),
                   const SizedBox(height: 12),
-                  _buildDesktopInfoCard(
+                  _buildDesktopInfoItem(
                     context,
                     icon: Icons.phone,
                     label: 'Contact Number',
                     value: userProfile?['contact_number'] ?? 'Not specified',
                   ),
+
+                  // Police information section (shown only for officers)
+                  if (userProfile?['role'] == 'officer') ...[
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.indigo.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.local_police,
+                            color: Colors.indigo.shade600,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Text(
+                          'Police Information',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    _buildDesktopInfoItem(
+                      context,
+                      icon: Icons.military_tech,
+                      label: 'Police Rank',
+                      value: _getPoliceRankName(userProfile?['police_rank_id']) ?? 'Not assigned',
+                    ),
+                    const SizedBox(height: 12),
+                    _buildDesktopInfoItem(
+                      context,
+                      icon: Icons.location_on,
+                      label: 'Assigned Station',
+                      value: _getPoliceStationName(userProfile?['police_station_id']) ?? 'Not assigned',
+                    ),
+                  ],
                   
-                  // Reduced spacing before buttons
-                  const SizedBox(height: 16), // Reduced from 24
+                  const SizedBox(height: 24),
                   
-                  // Enhanced action buttons - less space
+                  // Enhanced action buttons
                   Container(
                     width: double.infinity,
-                    height: 48,
+                    height: 50,
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: [
@@ -1689,7 +2095,7 @@ Widget buildDesktopProfileView(
                           Theme.of(context).primaryColor.withOpacity(0.8),
                         ],
                       ),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(14),
                       boxShadow: [
                         BoxShadow(
                           color: Theme.of(context).primaryColor.withOpacity(0.3),
@@ -1704,7 +2110,7 @@ Widget buildDesktopProfileView(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(14),
                         ),
                       ),
                       child: const Row(
@@ -1716,6 +2122,7 @@ Widget buildDesktopProfileView(
                             'EDIT PROFILE',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
+                              fontSize: 15,
                               color: Colors.white,
                               letterSpacing: 0.5,
                             ),
@@ -1726,12 +2133,12 @@ Widget buildDesktopProfileView(
                   ),
                   
                   if (isAdmin) ...[
-                    const SizedBox(height: 10), // Reduced from 12
+                    const SizedBox(height: 12),
                     Container(
                       width: double.infinity,
-                      height: 48,
+                      height: 50,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(14),
                         border: Border.all(
                           color: Colors.blue.shade300,
                           width: 2,
@@ -1749,7 +2156,7 @@ Widget buildDesktopProfileView(
                           backgroundColor: Colors.transparent,
                           side: BorderSide.none,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(14),
                           ),
                         ),
                         child: Row(
@@ -1761,6 +2168,7 @@ Widget buildDesktopProfileView(
                               'ADMIN DASHBOARD',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
+                                fontSize: 15,
                                 color: Colors.blue.shade600,
                                 letterSpacing: 0.5,
                               ),
@@ -1780,6 +2188,70 @@ Widget buildDesktopProfileView(
   );
 }
 
+// Enhanced _buildDesktopInfoItem method
+Widget _buildDesktopInfoItem(
+  BuildContext context, {
+  required IconData icon,
+  required String label,
+  required String value,
+}) {
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+        color: Colors.grey.shade200,
+        width: 1,
+      ),
+    ),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: Colors.blue.shade600,
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey.shade600,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+
 // Updated buildDesktopEditProfileForm with single scrollable column and proper close functionality
 Widget buildDesktopEditProfileForm(
   BuildContext context,
@@ -1790,18 +2262,34 @@ Widget buildDesktopEditProfileForm(
   bool showNewPassword = false;
   bool showConfirmPassword = false;
 
+  // Only scroll to top when explicitly requested (when entering edit mode)
+  if (_shouldScrollToTop) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+    _shouldScrollToTop = false; // Reset the flag
+  }
+
   return StatefulBuilder(
     builder: (context, setState) {
       return PopScope(
         canPop: false,
         onPopInvoked: (didPop) {
           if (!didPop) {
+            // Set flag to scroll to top when returning to profile view
+            _shouldScrollToTop = true;
             onCancel();
           }
         },
         child: Center(
           child: Container(
-            width: 480,
+            width: 500,
             height: MediaQuery.of(context).size.height * 0.90,
             margin: const EdgeInsets.symmetric(vertical: 40),
             decoration: BoxDecoration(
@@ -1824,7 +2312,7 @@ Widget buildDesktopEditProfileForm(
             ),
             child: Column(
               children: [
-                // Enhanced header
+                // Enhanced header with gradient
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(24),
@@ -1877,7 +2365,11 @@ Widget buildDesktopEditProfileForm(
                             ),
                             child: IconButton(
                               icon: const Icon(Icons.close, size: 18, color: Colors.white),
-                              onPressed: onCancel,
+                              onPressed: () {
+                                // Set flag to scroll to top when returning to profile view
+                                _shouldScrollToTop = true;
+                                onCancel();
+                              },
                             ),
                           ),
                         ],
@@ -1886,7 +2378,7 @@ Widget buildDesktopEditProfileForm(
                   ),
                 ),
                 
-                // Single scrollable form - all fields in one column
+                // Scrollable form content
                 Expanded(
                   child: SingleChildScrollView(
                     controller: _scrollController,
@@ -1896,233 +2388,545 @@ Widget buildDesktopEditProfileForm(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Personal Information Section
-                          const Text(
-                            'Personal Information',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          
-                          // All fields in single column
-                          _buildCompactTextField(
-                            controller: _firstNameController,
-                            label: 'First Name',
-                            validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          _buildCompactTextField(
-                            controller: _lastNameController,
-                            label: 'Last Name',
-                            validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          _buildCompactTextField(
-                            controller: _middleNameController,
-                            label: 'Middle Name (optional)',
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          _buildCompactTextField(
-                            controller: _extNameController,
-                            label: 'Extension Name (optional)',
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          // Birthday picker
+                          // Personal Information Card
                           Container(
-                            height: 48,
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(8),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.grey.withOpacity(0.1),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
                             ),
-                            child: InkWell(
-                              onTap: () async {
-                                final date = await showDatePicker(
-                                  context: context,
-                                  initialDate: _selectedBirthday ?? DateTime.now(),
-                                  firstDate: DateTime(1900),
-                                  lastDate: DateTime.now(),
-                                );
-                                if (date != null) {
-                                  _selectedBirthday = date;
-                                  setState(() {});
-                                }
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.calendar_today, size: 18, color: Colors.grey.shade600),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
+                            child: Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Header with icon
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          Icons.person,
+                                          color: Colors.blue.shade600,
+                                          size: 20,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      const Text(
+                                        'Personal Information',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 20),
+                                  
+                                  // Form fields
+                                  _buildDesktopTextField(
+                                    controller: _firstNameController,
+                                    label: 'First Name',
+                                    icon: Icons.person_outline,
+                                    validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  _buildDesktopTextField(
+                                    controller: _lastNameController,
+                                    label: 'Last Name',
+                                    icon: Icons.person_outline,
+                                    validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  _buildDesktopTextField(
+                                    controller: _middleNameController,
+                                    label: 'Middle Name (optional)',
+                                    icon: Icons.person_outline,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  _buildDesktopTextField(
+                                    controller: _extNameController,
+                                    label: 'Extension Name (optional)',
+                                    icon: Icons.person_outline,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  
+                                  // Birthday Selector
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(10),
+                                      color: Colors.grey.shade50,
+                                    ),
+                                    child: ListTile(
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                      leading: Container(
+                                        padding: const EdgeInsets.all(6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Icon(
+                                          Icons.calendar_today,
+                                          size: 18,
+                                          color: Colors.blue.shade600,
+                                        ),
+                                      ),
+                                      title: Text(
                                         _selectedBirthday == null
                                             ? 'Select Birthday'
-                                            : DateFormat('MMM d, y').format(_selectedBirthday!),
+                                            : 'Birthday: ${DateFormat('MMM d, y').format(_selectedBirthday!)}',
                                         style: TextStyle(
                                           color: _selectedBirthday == null 
                                               ? Colors.grey.shade600
                                               : Colors.black87,
+                                          fontWeight: FontWeight.w500,
                                           fontSize: 14,
                                         ),
                                       ),
+                                      trailing: Icon(
+                                        Icons.arrow_forward_ios,
+                                        size: 14,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                      onTap: () async {
+                                        final date = await showDatePicker(
+                                          context: context,
+                                          initialDate: _selectedBirthday ?? DateTime.now(),
+                                          firstDate: DateTime(1900),
+                                          lastDate: DateTime.now(),
+                                        );
+                                        if (date != null) {
+                                          _selectedBirthday = date;
+                                          setState(() {});
+                                        }
+                                      },
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  
+                                  // Gender Dropdown
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(10),
+                                      color: Colors.grey.shade50,
+                                    ),
+                                    child: DropdownButtonFormField<String>(
+                                      value: _selectedGender,
+                                      decoration: InputDecoration(
+                                        labelText: 'Gender',
+                                        border: InputBorder.none,
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                        prefixIcon: Container(
+                                          margin: const EdgeInsets.only(left: 10, right: 6),
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.blue.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Icon(
+                                            Icons.transgender,
+                                            size: 18,
+                                            color: Colors.blue.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                      items: ['Male', 'Female', 'LGBTQ+', 'Others']
+                                          .map((gender) => DropdownMenuItem(
+                                                value: gender,
+                                                child: Text(gender, style: const TextStyle(fontSize: 14)),
+                                              ))
+                                          .toList(),
+                                      onChanged: (value) => _selectedGender = value,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  
+                                  _buildDesktopTextField(
+                                    controller: _contactNumberController,
+                                    label: 'Contact Number',
+                                    icon: Icons.phone,
+                                    hintText: 'e.g. +639123456789',
+                                    keyboardType: TextInputType.phone,
+                                    validator: (value) {
+                                      if (value != null && value.isNotEmpty) {
+                                        if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
+                                          return 'Please enter a valid phone number';
+                                        }
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          // Police Information Card (shown only for officers)
+                          if (userProfile?['role'] == 'officer') ...[
+                            const SizedBox(height: 20),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.grey.withOpacity(0.1),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Header with icon
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.indigo.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Icon(
+                                            Icons.local_police,
+                                            color: Colors.indigo.shade600,
+                                            size: 20,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        const Text(
+                                          'Police Information',
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 20),
+                                    
+                                    // Police Rank Dropdown
+                                    FutureBuilder<void>(
+                                      future: _policeRanks.isEmpty ? _loadPoliceData() : null,
+                                      builder: (context, snapshot) {
+                                        if (snapshot.connectionState == ConnectionState.waiting) {
+                                          return Container(
+                                            height: 50,
+                                            decoration: BoxDecoration(
+                                              border: Border.all(color: Colors.grey.shade300),
+                                              borderRadius: BorderRadius.circular(10),
+                                              color: Colors.grey.shade50,
+                                            ),
+                                            child: const Center(
+                                              child: Row(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  SizedBox(
+                                                    width: 14,
+                                                    height: 14,
+                                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                                  ),
+                                                  SizedBox(width: 8),
+                                                  Text('Loading ranks...', style: TextStyle(fontSize: 14)),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                        return Container(
+                                          decoration: BoxDecoration(
+                                            border: Border.all(color: Colors.grey.shade300),
+                                            borderRadius: BorderRadius.circular(10),
+                                            color: Colors.grey.shade50,
+                                          ),
+                                          child: DropdownButtonFormField<int>(
+                                            value: _selectedPoliceRankId,
+                                            decoration: InputDecoration(
+                                              labelText: 'Police Rank',
+                                              border: InputBorder.none,
+                                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                              prefixIcon: Container(
+                                                margin: const EdgeInsets.only(left: 10, right: 6),
+                                                padding: const EdgeInsets.all(6),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.indigo.withOpacity(0.1),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                ),
+                                                child: Icon(
+                                                  Icons.military_tech,
+                                                  size: 18,
+                                                  color: Colors.indigo.shade600,
+                                                ),
+                                              ),
+                                            ),
+                                            isExpanded: true,
+                                            items: _policeRanks
+                                                .map((rank) => DropdownMenuItem<int>(
+                                                      value: rank['id'],
+                                                      child: Text(
+                                                        rank['new_rank'] ?? 'Unknown',
+                                                        overflow: TextOverflow.ellipsis,
+                                                        maxLines: 1,
+                                                        style: const TextStyle(fontSize: 14),
+                                                      ),
+                                                    ))
+                                                .toList(),
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _selectedPoliceRankId = value;
+                                              });
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(height: 14),
+                                    
+                                    // Police Station Dropdown
+                                    FutureBuilder<void>(
+                                      future: _policeStations.isEmpty ? _loadPoliceData() : null,
+                                      builder: (context, snapshot) {
+                                        if (snapshot.connectionState == ConnectionState.waiting) {
+                                          return Container(
+                                            height: 50,
+                                            decoration: BoxDecoration(
+                                              border: Border.all(color: Colors.grey.shade300),
+                                              borderRadius: BorderRadius.circular(10),
+                                              color: Colors.grey.shade50,
+                                            ),
+                                            child: const Center(
+                                              child: Row(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  SizedBox(
+                                                    width: 14,
+                                                    height: 14,
+                                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                                  ),
+                                                  SizedBox(width: 8),
+                                                  Text('Loading stations...', style: TextStyle(fontSize: 14)),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                        return Container(
+                                          decoration: BoxDecoration(
+                                            border: Border.all(color: Colors.grey.shade300),
+                                            borderRadius: BorderRadius.circular(10),
+                                            color: Colors.grey.shade50,
+                                          ),
+                                          child: DropdownButtonFormField<int>(
+                                            value: _selectedPoliceStationId,
+                                            decoration: InputDecoration(
+                                              labelText: 'Assigned Station',
+                                              border: InputBorder.none,
+                                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                              prefixIcon: Container(
+                                                margin: const EdgeInsets.only(left: 10, right: 6),
+                                                padding: const EdgeInsets.all(6),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.indigo.withOpacity(0.1),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                ),
+                                                child: Icon(
+                                                  Icons.location_on,
+                                                  size: 18,
+                                                  color: Colors.indigo.shade600,
+                                                ),
+                                              ),
+                                            ),
+                                            items: _policeStations
+                                                .map((station) => DropdownMenuItem<int>(
+                                                      value: station['id'],
+                                                      child: Text(
+                                                        station['name'] ?? 'Unknown',
+                                                        style: const TextStyle(fontSize: 14),
+                                                      ),
+                                                    ))
+                                                .toList(),
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _selectedPoliceStationId = value;
+                                              });
+                                            },
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 12),
+                          ],
+
+                          const SizedBox(height: 20),
                           
-                          // Gender dropdown
+                          // Password Change Card
                           Container(
-                            height: 48,
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: DropdownButtonFormField<String>(
-                              value: _selectedGender,
-                              decoration: const InputDecoration(
-                                labelText: 'Gender',
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              ),
-                              items: ['Male', 'Female', 'LGBTQ+', 'Others']
-                                  .map((gender) => DropdownMenuItem(
-                                        value: gender,
-                                        child: Text(gender, style: const TextStyle(fontSize: 14)),
-                                      ))
-                                  .toList(),
-                              onChanged: (value) => _selectedGender = value,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          _buildCompactTextField(
-                            controller: _contactNumberController,
-                            label: 'Contact Number',
-                            hintText: 'e.g. +639123456789',
-                            keyboardType: TextInputType.phone,
-                            validator: (value) {
-                              if (value != null && value.isNotEmpty) {
-                                if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
-                                  return 'Please enter a valid phone number';
-                                }
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 24),
-                          
-                          // Password Section
-                          const Text(
-                            'Change Password',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(Icons.info_outline, size: 14, color: Colors.blue.shade600),
-                                const SizedBox(width: 6),
-                                const Expanded(
-                                  child: Text(
-                                    'Leave blank to keep current password',
-                                    style: TextStyle(fontSize: 12, color: Colors.blue),
-                                  ),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.grey.withOpacity(0.1),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
                                 ),
                               ],
                             ),
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          _buildCompactPasswordField(
-                            controller: _passwordController,
-                            label: 'Current Password',
-                            isVisible: showCurrentPassword,
-                            onVisibilityToggle: () {
-                              setState(() {
-                                showCurrentPassword = !showCurrentPassword;
-                              });
-                            },
-                            errorText: _currentPasswordError,
-                            validator: (value) {
-                              if (_currentPasswordError != null) {
-                                return _currentPasswordError;
-                              }
-                              if (_newPasswordController.text.isNotEmpty &&
-                                  (value?.isEmpty ?? true)) {
-                                return 'Required to change password';
-                              }
-                              return null;
-                            },
-                            onChanged: (value) {
-                              if (_currentPasswordError != null) {
-                                setState(() {
-                                  _currentPasswordError = null;
-                                });
-                              }
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          _buildCompactPasswordField(
-                            controller: _newPasswordController,
-                            label: 'New Password',
-                            isVisible: showNewPassword,
-                            onVisibilityToggle: () {
-                              setState(() {
-                                showNewPassword = !showNewPassword;
-                              });
-                            },
-                            validator: (value) {
-                              if (value?.isNotEmpty ?? false) {
-                                if (value == _passwordController.text) {
-                                  return 'New password must be different';
-                                }
-                                if (value!.length < 6) {
-                                  return 'Must be at least 6 characters';
-                                }
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          
-                          _buildCompactPasswordField(
-                            controller: _confirmPasswordController,
-                            label: 'Confirm New Password',
-                            isVisible: showConfirmPassword,
-                            onVisibilityToggle: () {
-                              setState(() {
-                                showConfirmPassword = !showConfirmPassword;
-                              });
-                            },
-                            validator: (value) {
-                              if (_newPasswordController.text.isNotEmpty) {
-                                if (value?.isEmpty ?? true) {
-                                  return 'Please confirm your password';
-                                }
-                                if (value != _newPasswordController.text) {
-                                  return 'Passwords do not match';
-                                }
-                              }
-                              return null;
-                            },
+                            child: Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Header with icon
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.orange.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          Icons.lock,
+                                          color: Colors.orange.shade600,
+                                          size: 20,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      const Text(
+                                        'Change Password',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.blue.shade200),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.info_outline, size: 14, color: Colors.blue.shade600),
+                                        const SizedBox(width: 8),
+                                        const Expanded(
+                                          child: Text(
+                                            'Leave blank to keep current password',
+                                            style: TextStyle(fontSize: 12, color: Colors.blue),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  
+                                  // Password fields
+                                  _buildDesktopPasswordField(
+                                    controller: _passwordController,
+                                    label: 'Current Password',
+                                    isVisible: showCurrentPassword,
+                                    onVisibilityToggle: () {
+                                      setState(() {
+                                        showCurrentPassword = !showCurrentPassword;
+                                      });
+                                    },
+                                    errorText: _currentPasswordError,
+                                    validator: (value) {
+                                      if (_currentPasswordError != null) {
+                                        return _currentPasswordError;
+                                      }
+                                      if (_newPasswordController.text.isNotEmpty &&
+                                          (value?.isEmpty ?? true)) {
+                                        return 'Required to change password';
+                                      }
+                                      return null;
+                                    },
+                                    onChanged: (value) {
+                                      if (_currentPasswordError != null) {
+                                        setState(() {
+                                          _currentPasswordError = null;
+                                        });
+                                      }
+                                    },
+                                  ),
+                                  const SizedBox(height: 14),
+                                  
+                                  _buildDesktopPasswordField(
+                                    controller: _newPasswordController,
+                                    label: 'New Password',
+                                    isVisible: showNewPassword,
+                                    onVisibilityToggle: () {
+                                      setState(() {
+                                        showNewPassword = !showNewPassword;
+                                      });
+                                    },
+                                    validator: (value) {
+                                      if (value?.isNotEmpty ?? false) {
+                                        if (value == _passwordController.text) {
+                                          return 'New password must be different';
+                                        }
+                                        if (value!.length < 6) {
+                                          return 'Must be at least 6 characters';
+                                        }
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                  const SizedBox(height: 14),
+                                  
+                                  _buildDesktopPasswordField(
+                                    controller: _confirmPasswordController,
+                                    label: 'Confirm New Password',
+                                    isVisible: showConfirmPassword,
+                                    onVisibilityToggle: () {
+                                      setState(() {
+                                        showConfirmPassword = !showConfirmPassword;
+                                      });
+                                    },
+                                    validator: (value) {
+                                      if (_newPasswordController.text.isNotEmpty) {
+                                        if (value?.isEmpty ?? true) {
+                                          return 'Please confirm your password';
+                                        }
+                                        if (value != _newPasswordController.text) {
+                                          return 'Passwords do not match';
+                                        }
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -2130,7 +2934,7 @@ Widget buildDesktopEditProfileForm(
                   ),
                 ),
                 
-                // Footer with buttons
+                // Footer with action buttons
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
@@ -2141,37 +2945,71 @@ Widget buildDesktopEditProfileForm(
                   child: Row(
                     children: [
                       Expanded(
-                        child: OutlinedButton(
-                          onPressed: onCancel,
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: Colors.grey.shade300),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
+                        child: Container(
+                          height: 50,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.grey.shade300, width: 2),
                           ),
-                          child: const Text(
-                            'CANCEL',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                          child: OutlinedButton(
+                            onPressed: () {
+                              // Set flag to scroll to top when returning to profile view
+                              _shouldScrollToTop = true;
+                              onCancel();
+                            },
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide.none,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: Text(
+                              'CANCEL',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 16),
                       Expanded(
-                        child: ElevatedButton(
-                          onPressed: () => updateProfile(context, onSuccess: onSuccess),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(context).primaryColor,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          height: 50,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                Theme.of(context).primaryColor,
+                                Theme.of(context).primaryColor.withOpacity(0.8),
+                              ],
                             ),
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Theme.of(context).primaryColor.withOpacity(0.3),
+                                blurRadius: 12,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
                           ),
-                          child: const Text(
-                            'SAVE',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
+                          child: ElevatedButton(
+                            onPressed: () => updateProfile(context, onSuccess: onSuccess),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              shadowColor: Colors.transparent,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: const Text(
+                              'SAVE',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
@@ -2188,77 +3026,20 @@ Widget buildDesktopEditProfileForm(
   );
 }
 
-// Keep the existing helper methods unchanged
-Widget _buildDesktopInfoCard(
-  BuildContext context, {
-  required IconData icon,
-  required String label,
-  required String value,
-}) {
-  return Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Colors.grey.shade200),
-    ),
-    child: Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            icon,
-            size: 18,
-            color: Colors.blue.shade600,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.grey.shade600,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-Widget _buildCompactTextField({
+// Helper method for desktop text fields
+Widget _buildDesktopTextField({
   required TextEditingController controller,
   required String label,
+  required IconData icon,
   String? hintText,
   TextInputType? keyboardType,
   String? Function(String?)? validator,
 }) {
   return Container(
-    height: 48,
     decoration: BoxDecoration(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(10),
       border: Border.all(color: Colors.grey.shade300),
-      borderRadius: BorderRadius.circular(8),
     ),
     child: TextFormField(
       controller: controller,
@@ -2268,14 +3049,28 @@ Widget _buildCompactTextField({
         labelText: label,
         hintText: hintText,
         border: InputBorder.none,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        prefixIcon: Container(
+          margin: const EdgeInsets.only(left: 10, right: 6),
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: Colors.blue.shade600,
+          ),
+        ),
       ),
       validator: validator,
     ),
   );
 }
 
-Widget _buildCompactPasswordField({
+// Helper method for desktop password fields
+Widget _buildDesktopPasswordField({
   required TextEditingController controller,
   required String label,
   required bool isVisible,
@@ -2285,12 +3080,12 @@ Widget _buildCompactPasswordField({
   void Function(String)? onChanged,
 }) {
   return Container(
-    height: 48,
     decoration: BoxDecoration(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(10),
       border: Border.all(
         color: errorText != null ? Colors.red.shade300 : Colors.grey.shade300,
       ),
-      borderRadius: BorderRadius.circular(8),
     ),
     child: TextFormField(
       controller: controller,
@@ -2301,19 +3096,83 @@ Widget _buildCompactPasswordField({
         labelText: label,
         border: InputBorder.none,
         errorText: errorText,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        suffixIcon: IconButton(
-          icon: Icon(
-            isVisible ? Icons.visibility : Icons.visibility_off,
-            color: Colors.grey.shade600,
-            size: 18,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        prefixIcon: Container(
+          margin: const EdgeInsets.only(left: 10, right: 6),
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(6),
           ),
-          onPressed: onVisibilityToggle,
+          child: Icon(
+            Icons.lock_outline,
+            size: 18,
+            color: Colors.orange.shade600,
+          ),
+        ),
+        suffixIcon: Container(
+          margin: const EdgeInsets.only(right: 6),
+          child: IconButton(
+            icon: Icon(
+              isVisible ? Icons.visibility : Icons.visibility_off,
+              color: Colors.grey.shade600,
+              size: 18,
+            ),
+            onPressed: onVisibilityToggle,
+          ),
         ),
       ),
       validator: validator,
     ),
   );
+}
+
+// Keep the existing helper methods unchanged
+
+
+
+String? _getPoliceRankName(int? rankId) {
+  if (rankId == null) return null;
+  
+  // If data not loaded yet, return a placeholder or fetch it
+  if (_policeRanks.isEmpty) {
+    return 'Loading...'; // or fetch the specific rank from database
+  }
+  
+  final rank = _policeRanks.firstWhere(
+    (r) => r['id'] == rankId,
+    orElse: () => {},
+  );
+  
+  if (rank.isEmpty) return 'Unknown Rank';
+  
+  final newRank = rank['new_rank']?.toString();
+  final oldRank = rank['old_rank']?.toString();
+  
+  if (newRank != null && oldRank != null) {
+    return '$newRank ($oldRank)';
+  } else if (newRank != null) {
+    return newRank;
+  } else if (oldRank != null) {
+    return oldRank;
+  } else {
+    return 'Unknown Rank';
+  }
+}
+
+String? _getPoliceStationName(int? stationId) {
+  if (stationId == null) return null;
+  
+  // If data not loaded yet, return a placeholder or fetch it
+  if (_policeStations.isEmpty) {
+    return 'Loading...'; // or fetch the specific station from database
+  }
+  
+  final station = _policeStations.firstWhere(
+    (s) => s['id'] == stationId,
+    orElse: () => {},
+  );
+  return station.isNotEmpty ? station['name'] : 'Unknown Station';
 }
 
 

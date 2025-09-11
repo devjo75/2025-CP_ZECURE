@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -35,7 +34,9 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with TickerProviderStateMixin {
-  DateTime _startDate = DateTime.now().subtract(const Duration(days: 30));
+  // Initialize _startDate to the first day of the previous month
+  // Initialize _endDate to the current date
+  DateTime _startDate = DateTime(DateTime.now().year, DateTime.now().month - 1, 1);
   DateTime _endDate = DateTime.now();
   
   Map<String, dynamic> _userStats = {};
@@ -47,6 +48,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   List<Map<String, dynamic>> _reportsData = [];
   bool _isLoading = true;
   
+
+// OFFICER CONTROLLER
+final TextEditingController _officerSearchController = TextEditingController();
+String _selectedOfficerGender = 'All Genders';
+String _officerSortBy = 'date_joined';
+bool _officerSortAscending = false;
+List<Map<String, dynamic>> _officersData = [];
+List<Map<String, dynamic>> _filteredOfficersData = [];
+List<String> _availableOfficerGenders = ['All Genders'];
+
+final Set<String> _expandedOfficerCards = <String>{};
+List<String> _availablePoliceRanks = ['All Ranks'];
+List<String> _availablePoliceStations = ['All Stations'];
+String _selectedOfficerRank = 'All Ranks';
+String _selectedOfficerStation = 'All Stations';
+
 
   // Animation controllers
   late AnimationController _fadeController;
@@ -110,16 +127,22 @@ Map<String, dynamic> _safeSpotStats = {};
 
 
 @override
-void initState() {
-  super.initState();
-  _initAnimations();
-  _loadDashboardData();
-  
-  // Add listeners for search controllers
-  _userSearchController.addListener(_filterUsers);
-  _reportSearchController.addListener(_filterReports);
-  _safeSpotSearchController.addListener(_filterSafeSpots);
-}
+  void initState() {
+    super.initState();
+    
+    // Ensure dates are set to midnight local time to avoid time-based discrepancies
+    _startDate = DateTime(_startDate.year, _startDate.month, _startDate.day);
+    _endDate = DateTime(_endDate.year, _endDate.month, _endDate.day);
+    
+    _initAnimations();
+    _loadDashboardData();
+    
+    // Add listeners for search controllers
+    _userSearchController.addListener(_filterUsers);
+    _reportSearchController.addListener(_filterReports);
+    _safeSpotSearchController.addListener(_filterSafeSpots);
+    _officerSearchController.addListener(_filterOfficers);
+  }
 
   void _initAnimations() {
     _fadeController = AnimationController(
@@ -179,13 +202,196 @@ void dispose() {
   _slideController.dispose();
   _chartController.dispose();
   _sidebarController.dispose();
-  _userSearchController.dispose();  // Add this
-  _reportSearchController.dispose();  // Add this
+  _userSearchController.dispose();  
+  _reportSearchController.dispose();  
   _safeSpotSearchController.dispose();
-  
+  _officerSearchController.dispose();
+
   super.dispose();
 }
 
+
+
+
+void _updateOfficerFilter(String filterType, String value) {
+  setState(() {
+    switch (filterType) {
+      case 'gender':
+        _selectedOfficerGender = value;
+        break;
+      case 'rank':
+        _selectedOfficerRank = value;
+        break;
+      case 'station':
+        _selectedOfficerStation = value;
+        break;
+      case 'sort':
+        if (_officerSortBy == value) {
+          _officerSortAscending = !_officerSortAscending;
+        } else {
+          _officerSortBy = value;
+          _officerSortAscending = true;
+        }
+        break;
+    }
+  });
+  _filterOfficers();
+}
+
+void _clearOfficerFilters() {
+  setState(() {
+    _officerSearchController.clear();
+    _selectedOfficerGender = 'All Genders';
+    _selectedOfficerRank = 'All Ranks';
+    _selectedOfficerStation = 'All Stations';
+    _officerSortBy = 'date_joined';
+    _officerSortAscending = false;
+  });
+  _filterOfficers();
+}
+
+Future<void> _loadOfficersData() async {
+  try {
+    print('Loading officers data...'); // Debug print
+    
+    // Updated query with proper joins to get rank and station data
+    final response = await Supabase.instance.client
+        .from('users')
+        .select('''
+          *,
+          police_ranks:police_rank_id (
+            id,
+            old_rank,
+            new_rank,
+            rank_level
+          ),
+          police_stations:police_station_id (
+            id,
+            station_number,
+            name
+          )
+        ''')
+        .eq('role', 'officer')
+        .order('created_at', ascending: false);
+    
+    print('Officers response: ${response.length} officers found'); // Debug print
+    print('Sample officer data: ${response.isNotEmpty ? response[0] : 'No officers'}'); // Debug print
+    
+    setState(() {
+      _officersData = List<Map<String, dynamic>>.from(response);
+      
+      // Update available filter options
+      _availableOfficerGenders = ['All Genders', ...{..._officersData.map((o) => o['gender']?.toString() ?? '').where((g) => g.isNotEmpty)}];
+      
+      // Extract unique ranks and stations for filters
+      _availablePoliceRanks = ['All Ranks'];
+      _availablePoliceStations = ['All Stations'];
+      
+      for (var officer in _officersData) {
+      // Add ranks
+      final rank = officer['police_ranks']?['old_rank']?.toString();
+      if (rank != null && rank.isNotEmpty && !_availablePoliceRanks.contains(rank)) {
+        _availablePoliceRanks.add(rank);
+      }
+        
+        // Add stations
+        final station = officer['police_stations']?['name']?.toString();
+        if (station != null && station.isNotEmpty && !_availablePoliceStations.contains(station)) {
+          _availablePoliceStations.add(station);
+        }
+      }
+      
+      // Initialize filtered data
+      _filteredOfficersData = List.from(_officersData);
+    });
+    
+    _filterOfficers();
+    print('Filtered officers: ${_filteredOfficersData.length}'); // Debug print
+  } catch (e) {
+    print('Error loading officers data: $e');
+    // Show error to user
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Error loading officers: $e'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+}
+
+// Also update your filter function to use the correct field names
+void _filterOfficers() {
+  setState(() {
+    _filteredOfficersData = _officersData.where((officer) {
+      // Search filter
+      final searchQuery = _officerSearchController.text.toLowerCase();
+      final fullName = '${officer['first_name'] ?? ''} ${officer['last_name'] ?? ''}'.toLowerCase();
+      final email = (officer['email']?.toString() ?? '').toLowerCase();
+      final username = (officer['username']?.toString() ?? '').toLowerCase();
+      final rank = officer['police_ranks']?['old_rank']?.toString().toLowerCase() ?? '';
+      final station = officer['police_stations']?['name']?.toString().toLowerCase() ?? '';
+      
+      final matchesSearch = searchQuery.isEmpty || 
+          fullName.contains(searchQuery) ||
+          email.contains(searchQuery) ||
+          username.contains(searchQuery) ||
+          rank.contains(searchQuery) ||
+          station.contains(searchQuery);
+
+      // Gender filter
+      final matchesGender = _selectedOfficerGender == 'All Genders' || 
+          (officer['gender']?.toString() ?? '') == _selectedOfficerGender;
+
+// Rank filter - using old_rank field
+final matchesRank = _selectedOfficerRank == 'All Ranks' || 
+    (officer['police_ranks']?['old_rank']?.toString() ?? '') == _selectedOfficerRank;
+
+      // Station filter
+      final matchesStation = _selectedOfficerStation == 'All Stations' || 
+          (officer['police_stations']?['name']?.toString() ?? '') == _selectedOfficerStation;
+
+      return matchesSearch && matchesGender && matchesRank && matchesStation;
+    }).toList();
+
+    // Sorting
+    _filteredOfficersData.sort((a, b) {
+      dynamic aValue, bValue;
+
+      switch (_officerSortBy) {
+        case 'name':
+          aValue = '${a['first_name'] ?? ''} ${a['last_name'] ?? ''}'.trim().toLowerCase();
+          bValue = '${b['first_name'] ?? ''} ${b['last_name'] ?? ''}'.trim().toLowerCase();
+          break;
+        case 'email':
+          aValue = (a['email']?.toString() ?? '').toLowerCase();
+          bValue = (b['email']?.toString() ?? '').toLowerCase();
+          break;
+        case 'rank':
+          aValue = (a['police_ranks']?['old_rank']?.toString() ?? '').toLowerCase();
+          bValue = (b['police_ranks']?['old_rank']?.toString() ?? '').toLowerCase();
+          break;
+        case 'station':
+          aValue = (a['police_stations']?['name']?.toString() ?? '').toLowerCase();
+          bValue = (b['police_stations']?['name']?.toString() ?? '').toLowerCase();
+          break;
+        case 'date_joined':
+          aValue = a['created_at'] != null ? DateTime.parse(a['created_at'].toString()) : DateTime.now();
+          bValue = b['created_at'] != null ? DateTime.parse(b['created_at'].toString()) : DateTime.now();
+          break;
+        default:
+          aValue = '';
+          bValue = '';
+      }
+
+      if (aValue is DateTime && bValue is DateTime) {
+        return _officerSortAscending ? aValue.compareTo(bValue) : bValue.compareTo(aValue);
+      }
+
+      int comparison = aValue.toString().compareTo(bValue.toString());
+      return _officerSortAscending ? comparison : -comparison;
+    });
+  });
+}
 
 // ADD THESE METHODS FOR SAFESPOT FILTERING
 
@@ -469,6 +675,94 @@ Future<void> _loadSafeSpotStats() async {
     _filterReports();
   }
 
+Future<void> _loadUserStats() async {
+    try {
+      String startDateStr = DateFormat('yyyy-MM-dd').format(_startDate);
+      String endDateStr = DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1)));
+
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('gender, role, created_at')
+          .gte('created_at', startDateStr)
+          .lt('created_at', endDateStr);
+
+      Map<String, int> genderCounts = {};
+      Map<String, int> roleCounts = {};
+      int officerCount = 0;
+
+      for (var user in response) {
+        String gender = user['gender'] ?? 'Not specified';
+        genderCounts[gender] = (genderCounts[gender] ?? 0) + 1;
+
+        String role = user['role'] ?? 'user';
+        roleCounts[role] = (roleCounts[role] ?? 0) + 1;
+
+        if (role == 'officer') {
+          officerCount++;
+        }
+      }
+
+      print('Role counts: $roleCounts'); // Debug print
+      print('Officer count: $officerCount'); // Debug print
+
+      setState(() {
+        _userStats = {
+          'gender': genderCounts,
+          'role': roleCounts,
+          'total': response.length,
+          'officers': officerCount,
+        };
+        // Removed setting _availableRoles and _availableGenders here to avoid potential overwrites from concurrent loads.
+        // These are now only set in _loadUsersData for consistency.
+      });
+
+      _filterUsers();
+    } catch (e) {
+      print('Error loading user stats: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading user stats: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _loadUsersData() async {
+    try {
+      String startDateStr = DateFormat('yyyy-MM-dd').format(_startDate);
+      String endDateStr = DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1)));
+
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('*')
+          .gte('created_at', startDateStr)
+          .lt('created_at', endDateStr)
+          .order('created_at', ascending: false);
+
+      setState(() {
+        _usersData = List<Map<String, dynamic>>.from(response);
+
+        // Update available filter options (this ensures consistency and avoids race conditions from parallel loads)
+        _availableRoles = SearchAndFilterService.getUniqueRoles(_usersData);
+        _availableGenders = SearchAndFilterService.getUniqueGenders(_usersData);
+
+        // Initialize filtered data
+        _filteredUsersData = List.from(_usersData);
+      });
+
+      _filterUsers();
+    } catch (e) {
+      print('Error loading users data: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading users: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> _loadDashboardData() async {
     setState(() {
       _isLoading = true;
@@ -477,10 +771,12 @@ Future<void> _loadSafeSpotStats() async {
       await Future.wait([
         _loadUserStats(),
         _loadCrimeStats(),
+        _loadUsersData(),
         _loadReportStats(),
         _loadActivityStats(),
         _loadHotspotData(),
         _loadSafeSpotsData(),
+        _loadOfficersData(),
       ]);
       
       // Start animations after data loads
@@ -498,43 +794,6 @@ Future<void> _loadSafeSpotStats() async {
     }
   }
 
-  
-
-  Future<void> _loadUserStats() async {
-    try {
-      final genderResponse = await Supabase.instance.client
-          .from('users')
-          .select('gender')
-          .not('gender', 'is', null);
-
-      final roleResponse = await Supabase.instance.client
-          .from('users')
-          .select('role');
-
-      Map<String, int> genderCounts = {};
-      Map<String, int> roleCounts = {};
-
-      for (var user in genderResponse) {
-        String gender = user['gender'] ?? 'Not specified';
-        genderCounts[gender] = (genderCounts[gender] ?? 0) + 1;
-      }
-
-      for (var user in roleResponse) {
-        String role = user['role'] ?? 'user';
-        roleCounts[role] = (roleCounts[role] ?? 0) + 1;
-      }
-
-      setState(() {
-        _userStats = {
-          'gender': genderCounts,
-          'role': roleCounts,
-          'total': roleResponse.length,
-        };
-      });
-    } catch (e) {
-      print('Error loading user stats: $e');
-    }
-  }
 
   Future<void> _loadCrimeStats() async {
     try {
@@ -675,51 +934,75 @@ Future<void> _loadSafeSpotStats() async {
     }
   }
 
-  Future<void> _selectDateRange() async {
-    DateTimeRange? picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
-      initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFF6366F1),
-              brightness: Brightness.light,
-            ),
+Future<void> _selectDateRange() async {
+  DateTime firstDate = DateTime(2020, 1, 1);
+  DateTime lastDate = DateTime.now();
+
+  DateTimeRange? picked = await showDateRangePicker(
+    context: context,
+    firstDate: firstDate,
+    lastDate: lastDate,
+    initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
+    builder: (context, child) {
+      final isDesktop = MediaQuery.of(context).size.width > 600;
+      final size = MediaQuery.of(context).size;
+
+      return Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF6366F1),
+            brightness: Brightness.light,
           ),
-          child: child!,
-        );
-      },
-    );
-    
-    if (picked != null) {
-      if (picked.start.isAfter(picked.end)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Start date must be before end date'),
-            backgroundColor: Colors.red.shade400,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
-        return;
-      }
-      
-      setState(() {
-        _startDate = picked.start;
-        _endDate = picked.end;
-      });
-      
-      // Reset animations
-      _fadeController.reset();
-      _slideController.reset();
-      _chartController.reset();
-      
-      _loadDashboardData();
+        ),
+        child: isDesktop
+            ? Center(
+                child: IntrinsicHeight( // 👈 lets the picker shrink/expand naturally
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: 470,          // fixed modal width
+                      maxHeight: size.height * 0.9, // safety cap
+                    ),
+                    child: Material(
+                      elevation: 10,
+                      borderRadius: BorderRadius.circular(20),
+                      clipBehavior: Clip.antiAlias,
+                      child: child,
+                    ),
+                  ),
+                ),
+              )
+            : child!,
+      );
+    },
+  );
+
+  if (picked != null) {
+    if (picked.start.isAfter(picked.end)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Start date must be before end date'),
+          backgroundColor: Colors.red.shade400,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+      return;
     }
+
+    setState(() {
+      _startDate = DateTime(picked.start.year, picked.start.month, picked.start.day);
+      _endDate = DateTime(picked.end.year, picked.end.month, picked.end.day);
+    });
+
+    _fadeController.reset();
+    _slideController.reset();
+    _chartController.reset();
+
+    _loadDashboardData();
   }
+}
+
+
 
 @override
 Widget build(BuildContext context) {
@@ -754,6 +1037,37 @@ Widget build(BuildContext context) {
   );
 }
 
+
+String _getPageTitle() {
+  switch (_currentPage) {
+    case 'users':
+      return 'User Management';
+    case 'reports':
+      return 'Crime Reports';
+    case 'safespots':  // ADD THIS CASE
+      return 'Safe Spots';
+      case 'officers':
+  return 'Officer Management';
+    default:
+      return 'Admin Dashboard';
+  }
+}
+
+
+String _getPageSubtitle() {
+  switch (_currentPage) {
+    case 'users':
+      return 'Manage system users';
+    case 'reports':
+      return 'Manage crime reports';
+    case 'safespots':  // ADD THIS CASE
+      return 'Manage safe spot reports';
+    case 'officers':
+    return 'Manage system officers';
+    default:
+      return 'Crime Analytics & Reports';
+  }
+}
 
 // Fixed sidebar widget that handles keyboard properly
 Widget _buildSidebar() {
@@ -904,6 +1218,14 @@ Widget _buildSidebar() {
                             isActive: _currentPage == 'users',
                             onTap: () => _navigateToPage('users'),
                           ),
+
+                        const SizedBox(height: 4),
+                        _buildNavItem(
+                          icon:  Icons.local_police,
+                          title: 'Officer Management',
+                          isActive: _currentPage == 'officers',
+                          onTap: () => _navigateToPage('officers'),
+                        ),
                           const SizedBox(height: 4),
                           _buildNavItem(
                             icon: Icons.report_gmailerrorred_rounded,
@@ -918,6 +1240,8 @@ Widget _buildSidebar() {
                           isActive: _currentPage == 'safespots',
                           onTap: () => _navigateToPage('safespots'),
                         ),
+
+
                           
                           // Extra space to push content up when scrolling
                           const SizedBox(height: 100),
@@ -1132,6 +1456,8 @@ void _navigateToPage(String page) {
     _loadReportsData();
   } else if (page == 'safespots') { // ADD THIS
     _loadSafeSpotsData();
+    } else if (page == 'officers') {
+  _loadOfficersData();
   }
 }
 
@@ -1143,6 +1469,8 @@ Widget _buildCurrentPage() {
       return _buildReportsPage();
     case 'safespots': // ADD THIS CASE
       return _buildSafeSpotsPage();
+    case 'officers':
+    return _buildOfficersPage();
     default:
       return _isLoading
           ? _buildLoadingState()
@@ -1156,30 +1484,27 @@ Widget _buildCurrentPage() {
   }
 }
 
-// Add data loading methods
-  Future<void> _loadUsersData() async {
-    try {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('*')
-          .order('created_at', ascending: false);
-      
-      setState(() {
-        _usersData = List<Map<String, dynamic>>.from(response);
-        
-        // Update available filter options
-        _availableRoles = SearchAndFilterService.getUniqueRoles(_usersData);
-        _availableGenders = SearchAndFilterService.getUniqueGenders(_usersData);
-        
-        // Initialize filtered data
-        _filteredUsersData = List.from(_usersData);
-      });
-      
-      _filterUsers();
-    } catch (e) {
-      print('Error loading users data: $e');
+
+
+  int? _calculateAge(String? bdayString) {
+  if (bdayString == null) return null;
+  
+  try {
+    final bday = DateTime.parse(bdayString);
+    final today = DateTime.now();
+    int age = today.year - bday.year;
+    
+    // Check if birthday hasn't occurred this year yet
+    if (today.month < bday.month || 
+        (today.month == bday.month && today.day < bday.day)) {
+      age--;
     }
+    
+    return age;
+  } catch (e) {
+    return null;
   }
+}
 
   Future<void> _loadReportsData() async {
     try {
@@ -1211,6 +1536,378 @@ Widget _buildCurrentPage() {
       print('Error loading reports data: $e');
     }
   }
+
+
+void _showChangeRoleDialog(Map<String, dynamic> user) {
+  String selectedRole = user['role'] ?? 'user';
+  final availableRoles = ['user', 'admin', 'officer'];
+  final currentRole = user['role'] ?? 'user';
+  final hasPoliceData = user['police_rank_id'] != null || user['police_station_id'] != null;
+  final isCurrentUser = user['id'] == Supabase.instance.client.auth.currentUser?.id;
+
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          final willLosePoliceData = currentRole == 'officer' && selectedRole != 'officer' && hasPoliceData;
+
+          return AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.admin_panel_settings, color: Colors.blue[600]),
+                const SizedBox(width: 8),
+                const Text('Change User Role'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'User: ${user['first_name'] ?? ''} ${user['last_name'] ?? ''}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Email: ${user['email'] ?? 'No email'}',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                ),
+                const SizedBox(height: 16),
+                if (isCurrentUser) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red[200]!),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning, color: Colors.red[600], size: 16),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'You cannot change your own role.',
+                            style: TextStyle(fontSize: 12, color: Colors.red),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else ...[
+                  const Text(
+                    'Select new role:',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey[300]!),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: DropdownButton<String>(
+                      value: selectedRole,
+                      underline: const SizedBox(),
+                      isExpanded: true,
+                      items: availableRoles.map((role) {
+                        return DropdownMenuItem(
+                          value: role,
+                          child: Row(
+                            children: [
+                              Icon(
+                                role == 'admin'
+                                    ? Icons.admin_panel_settings
+                                    : role == 'officer'
+                                        ? Icons.local_police
+                                        : Icons.person,
+                                size: 18,
+                                color: _getRoleColor(role),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(role.toUpperCase()),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() {
+                            selectedRole = value;
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                  if (willLosePoliceData) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange[200]!),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.warning, color: Colors.orange[600], size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Warning: Police Data Will Be Removed',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.orange[800],
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'This user\'s police rank and station assignments will be permanently removed when changing from Officer role.',
+                                  style: TextStyle(
+                                    color: Colors.orange[700],
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              OutlinedButton(
+                onPressed: isCurrentUser || selectedRole == user['role']
+                    ? null // Disable if current user or no role change
+                    : () {
+                        Navigator.of(context).pop();
+                        _changeUserRole(user['id'], selectedRole);
+                      },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: willLosePoliceData ? Colors.orange[700] : Colors.blue[700],
+                  backgroundColor: Colors.transparent,
+                  side: BorderSide(
+                    color: willLosePoliceData
+                        ? Colors.orange.withOpacity(0.5)
+                        : Colors.blue.withOpacity(0.5),
+                    width: 1.5,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(willLosePoliceData ? 'Change Role & Remove Data' : 'Change Role'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+// Updated _showDeleteUserDialog
+void _showDeleteUserDialog(Map<String, dynamic> user) {
+  final isCurrentUser = user['id'] == Supabase.instance.client.auth.currentUser?.id;
+
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.red[600]),
+            const SizedBox(width: 8),
+            const Text('Delete User'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Are you sure you want to delete this user?',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'User: ${user['first_name'] ?? ''} ${user['last_name'] ?? ''}',
+              style: const TextStyle(fontSize: 14),
+            ),
+            Text(
+              'Email: ${user['email'] ?? 'No email'}',
+              style: TextStyle(color: Colors.grey[600], fontSize: 14),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red[200]!),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info, color: Colors.red[600], size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      isCurrentUser
+                          ? 'You cannot delete your own account.'
+                          : 'This action cannot be undone.',
+                      style: const TextStyle(fontSize: 12, color: Colors.red),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          OutlinedButton(
+            onPressed: isCurrentUser
+                ? null // Disable if current user
+                : () {
+                    Navigator.of(context).pop();
+                    _deleteUser(user['id']);
+                  },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.red[700],
+              backgroundColor: Colors.transparent,
+              side: BorderSide(
+                color: Colors.red.withOpacity(0.5),
+                width: 1.5,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text('Delete User'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+// Method to change user role with notification cleanup
+Future<void> _changeUserRole(String userId, String newRole) async {
+  try {
+    // Build update data
+    final updateData = <String, dynamic>{'role': newRole};
+    
+    // If changing FROM officer to another role, clear police data
+    if (newRole != 'officer') {
+      updateData['police_rank_id'] = null;
+      updateData['police_station_id'] = null;
+    }
+    
+    // Update user role
+    await Supabase.instance.client
+        .from('users')
+        .update(updateData)
+        .eq('id', userId);
+
+    // If changing TO 'user' role, clear admin/officer notifications
+    if (newRole == 'user') {
+      await _clearAdminOfficerNotifications(userId);
+    }
+
+    // Show success message
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('User role changed to $newRole successfully'),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    // Refresh the user data
+    await _loadUserStats();
+    _loadUsersData();
+  } catch (e) {
+    print('Error changing user role: $e');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Error changing user role: $e'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+}
+
+// Method to clear admin/officer specific notifications
+Future<void> _clearAdminOfficerNotifications(String userId) async {
+  try {
+    print('Clearing admin/officer notifications for user: $userId');
+    
+    // Delete notifications that are only relevant to admins/officers
+    await Supabase.instance.client
+        .from('notifications')
+        .delete()
+        .eq('user_id', userId)
+        .inFilter('type', [
+          'report',                // Hotspot reports
+          'safe_spot_report',     // Safe spot reports
+          'hotspot_approval',     // Hotspot approvals (if any)
+          'hotspot_rejection',    // Hotspot rejections (if any)
+        ]);
+    
+    print('Admin/officer notifications cleared successfully');
+  } catch (e) {
+    print('Error clearing admin/officer notifications: $e');
+    // Don't throw error here, just log it as it's not critical
+  }
+}
+
+Future<void> _deleteUser(String userId) async {
+  try {
+    // Call the admin_delete_user stored procedure
+    await Supabase.instance.client
+        .rpc('admin_delete_user', params: {'target_user_id': userId});
+
+    // Show success message
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('User deleted successfully'),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    // Refresh the user data
+    await _loadUserStats();
+    _loadUsersData();
+  } catch (e) {
+    print('Error deleting user: $e');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Error deleting user: $e'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+}
+// USER LIST PAGE
 
 Widget _buildUsersPage() {
   return Column(
@@ -1498,22 +2195,16 @@ Widget _buildUserCard(Map<String, dynamic> user) {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: user['role'] == 'admin' 
-                                  ? const Color(0xFFDC2626).withOpacity(0.1)
-                                  : const Color(0xFF059669).withOpacity(0.1),
+                              color: _getRoleColor(user['role']).withOpacity(0.1),
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: user['role'] == 'admin' 
-                                    ? const Color(0xFFDC2626).withOpacity(0.3)
-                                    : const Color(0xFF059669).withOpacity(0.3),
+                                color: _getRoleColor(user['role']).withOpacity(0.3),
                               ),
                             ),
                             child: Text(
                               (user['role'] ?? 'user').toUpperCase(),
                               style: TextStyle(
-                                color: user['role'] == 'admin' 
-                                    ? const Color(0xFFDC2626)
-                                    : const Color(0xFF059669),
+                                color: _getRoleColor(user['role']),
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -1596,6 +2287,22 @@ Widget _buildUserCard(Map<String, dynamic> user) {
                 ),
                 const SizedBox(height: 12),
                 _buildDetailItem(
+                  icon: Icons.cake,
+                  label: 'Birthday',
+                  value: user['bday'] != null
+                      ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['bday']))
+                      : 'Not provided',
+                ),
+                const SizedBox(height: 12),
+                _buildDetailItem(
+                  icon: Icons.person,
+                  label: 'Age',
+                  value: user['bday'] != null
+                      ? '${_calculateAge(user['bday']) ?? 'Unknown'} years old'
+                      : 'Not provided',
+                ),
+                const SizedBox(height: 12),
+                _buildDetailItem(
                   icon: Icons.phone,
                   label: 'Contact',
                   value: user['contact_number'] ?? 'Not provided',
@@ -1607,6 +2314,86 @@ Widget _buildUserCard(Map<String, dynamic> user) {
                   value: user['created_at'] != null
                       ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['created_at']))
                       : 'Unknown',
+                ),
+                
+                // Action Buttons Section
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F9FA),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Actions',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF374151),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // If it's the current user, show note instead of buttons
+                      if (user['id'] == Supabase.instance.client.auth.currentUser?.id)
+                        const Text(
+                          "You cannot change your own role or delete your own account.",
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontStyle: FontStyle.italic,
+                            color: Color(0xFF6B7280),
+                          ),
+                        )
+                      else
+                        Row(
+                          children: [
+                            // Change Role Button
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _showChangeRoleDialog(user),
+                                icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
+                                label: const Text('Change Role'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.grey[800],
+                                  side: BorderSide(
+                                    color: Colors.grey.withOpacity(0.5),
+                                    width: 1.5,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            // Delete User Button
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _showDeleteUserDialog(user),
+                                icon: const Icon(Icons.delete_outlined, size: 16),
+                                label: const Text('Delete User'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red[700],
+                                  side: BorderSide(
+                                    color: Colors.red.withOpacity(0.5),
+                                    width: 1.5,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -1620,7 +2407,7 @@ Widget _buildUserCard(Map<String, dynamic> user) {
 Widget _buildDetailItem({
   required IconData icon,
   required String label,
-  required String value,
+  required String value, String? subtitle,
 }) {
   return Row(
     children: [
@@ -1664,6 +2451,9 @@ Widget _buildDetailItem({
     ],
   );
 }
+
+
+// REPORT PAGE
 
 Widget _buildReportsPage() {
   return Column(
@@ -2211,12 +3001,24 @@ Widget _buildReportCard(Map<String, dynamic> report) {
                       Row(
                         children: [
                           Expanded(
-                            child: _buildDetailItem(
-                              icon: Icons.access_time,
-                              label: 'Reported At',
-                              value: report['created_at'] != null
-                                  ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['created_at']))} at ${DateFormat('HH:mm').format(DateTime.parse(report['created_at']))}'
-                                  : 'Unknown date',
+                            child: Column(
+                              children: [
+                                _buildDetailItem(
+                                  icon: Icons.access_time, 
+                                  label: 'Time of Incident',
+                                  value: report['time'] != null
+                                      ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['time']))} at ${DateFormat('h:mm a').format(DateTime.parse(report['time']))}'
+                                      : 'Unknown time',
+                                ),
+                                const SizedBox(height: 12),
+                                _buildDetailItem(
+                                  icon: Icons.event_note, // or Icons.send for reported
+                                  label: 'Reported At',
+                                  value: report['created_at'] != null
+                                      ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['created_at']))} at ${DateFormat('h:mm a').format(DateTime.parse(report['created_at']))}'
+                                      : 'Unknown date',
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -2233,62 +3035,10 @@ Widget _buildReportCard(Map<String, dynamic> report) {
   );
 }
 
-// Helper methods (add these if you don't have them):
-String _getInitials(String name) {
-  if (name.isEmpty) return 'U';
-  final words = name.trim().split(' ');
-  if (words.length == 1) return words[0][0].toUpperCase();
-  return '${words[0][0]}${words[1][0]}'.toUpperCase();
-}
-
-String _getTimeAgo(DateTime dateTime) {
-  final now = DateTime.now();
-  final difference = now.difference(dateTime);
-  
-  if (difference.inDays > 7) {
-    return '${(difference.inDays / 7).floor()}w ago';
-  } else if (difference.inDays > 0) {
-    return '${difference.inDays}d ago';
-  } else if (difference.inHours > 0) {
-    return '${difference.inHours}h ago';
-  } else if (difference.inMinutes > 0) {
-    return '${difference.inMinutes}m ago';
-  } else {
-    return 'Just now';
-  }
-}
-
-// Add helper methods
-Color _getGenderColor(String? gender) {
-  switch (gender?.toLowerCase()) {
-    case 'male':
-      return const Color(0xFF3B82F6);
-    case 'female':
-      return const Color(0xFFEC4899);
-    case 'lgbtq+':
-      return const Color(0xFF8B5CF6);
-    default:
-      return const Color(0xFF6B7280);
-  }
-}
-
-Color _getCrimeLevelColor(String? level) {
-  switch (level?.toLowerCase()) {
-    case 'critical':
-      return const Color(0xFFDC2626);
-    case 'high':
-      return const Color(0xFFEA580C);
-    case 'medium':
-      return const Color(0xFFD97706);
-    case 'low':
-      return const Color(0xFF65A30D);
-    default:
-      return const Color(0xFF6B7280);
-  }
-}
 
 
-// FIXED SAFESPOTS PAGE METHOD
+
+// SAFE SPOTS PAGE 
 Widget _buildSafeSpotsPage() {
   return Column(
     children: [
@@ -2868,8 +3618,581 @@ Widget _buildSafeSpotCard(Map<String, dynamic> safeSpot) {
   );
 }
 
+// OFFICER PAGE
+Widget _buildOfficersPage() {
+  return Column(
+    children: [
+      // Search and Filter Bar
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+          ),
+        ),
+        child: Column(
+          children: [
+            // Main Search Row
+            Row(
+              children: [
+                // Expanded Search Bar
+                Expanded(
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: TextField(
+                      controller: _officerSearchController,
+                      onChanged: (value) {
+                        _filterOfficers();
+                      },
+                      decoration: const InputDecoration(
+                        hintText: 'Search officers by name, email, or username...',
+                        hintStyle: TextStyle(
+                          color: Color(0xFF9CA3AF),
+                          fontSize: 14,
+                        ),
+                        prefixIcon: Icon(
+                          Icons.search,
+                          color: Color(0xFF9CA3AF),
+                          size: 20,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                
+                // Filter Toggle Button
+                Container(
+                  height: 44,
+                  width: 44,
+                  decoration: BoxDecoration(
+                    color: _showFilters ? const Color(0xFF6366F1) : const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _showFilters ? const Color(0xFF6366F1) : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _showFilters = !_showFilters;
+                      });
+                    },
+                    icon: Icon(
+                      Icons.tune,
+                      color: _showFilters ? Colors.white : const Color(0xFF6B7280),
+                      size: 20,
+                    ),
+                    tooltip: 'Toggle Filters',
+                  ),
+                ),
+                
+                // Clear Filters Button
+              if (_officerSearchController.text.isNotEmpty || 
+                  _selectedOfficerGender != 'All Genders' ||
+                  _selectedOfficerRank != 'All Ranks' ||
+                  _selectedOfficerStation != 'All Stations')
+                  Container(
+                    margin: const EdgeInsets.only(left: 8),
+                    height: 44,
+                    width: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF87171).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFF87171).withOpacity(0.3)),
+                    ),
+                    child: IconButton(
+                      onPressed: _clearOfficerFilters,
+                      icon: const Icon(
+                        Icons.clear,
+                        color: Color(0xFFF87171),
+                        size: 20,
+                      ),
+                      tooltip: 'Clear Filters',
+                    ),
+                  ),
+              ],
+            ),
+            
+// Collapsible Filters Row
+AnimatedContainer(
+  duration: const Duration(milliseconds: 300),
+  height: _showFilters ? 120 : 0, // Increased height for two rows
+  child: AnimatedOpacity(
+    duration: const Duration(milliseconds: 300),
+    opacity: _showFilters ? 1.0 : 0.0,
+    child: _showFilters
+        ? Container(
+            margin: const EdgeInsets.only(top: 16),
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  // First row: Gender and Rank
+                  Row(
+                    children: [
+                      // Gender Filter Dropdown
+                      Expanded(
+                        child: Container(
+                          height: 44,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: DropdownButton<String>(
+                            value: _selectedOfficerGender,
+                            underline: const SizedBox(),
+                            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                            isExpanded: true,
+                            items: _availableOfficerGenders.map((gender) {
+                              return DropdownMenuItem(
+                                value: gender,
+                                child: Text(gender),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                _updateOfficerFilter('gender', value);
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // Rank Filter Dropdown
+                      Expanded(
+                        child: Container(
+                          height: 44,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: DropdownButton<String>(
+                            value: _selectedOfficerRank,
+                            underline: const SizedBox(),
+                            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                            isExpanded: true,
+                            items: _availablePoliceRanks.map((rank) {
+                              return DropdownMenuItem(
+                                value: rank,
+                                child: Text(rank),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                _updateOfficerFilter('rank', value);
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Second row: Station and Sort
+                  Row(
+                    children: [
+                      // Station Filter Dropdown
+                      Expanded(
+                        child: Container(
+                          height: 44,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: DropdownButton<String>(
+                            value: _selectedOfficerStation,
+                            underline: const SizedBox(),
+                            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                            isExpanded: true,
+                            items: _availablePoliceStations.map((station) {
+                              return DropdownMenuItem(
+                                value: station,
+                                child: Text(station, overflow: TextOverflow.ellipsis),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                _updateOfficerFilter('station', value);
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // Sort Options
+                      Expanded(
+                        child: Container(
+                          height: 44,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: DropdownButton<String>(
+                            value: _officerSortBy,
+                            underline: const SizedBox(),
+                            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                            isExpanded: true,
+                            items: const [
+                              DropdownMenuItem(value: 'name', child: Text('Sort by Name')),
+                              DropdownMenuItem(value: 'email', child: Text('Sort by Email')),
+                              DropdownMenuItem(value: 'rank', child: Text('Sort by Rank')),
+                              DropdownMenuItem(value: 'station', child: Text('Sort by Station')),
+                              DropdownMenuItem(value: 'date_joined', child: Text('Date Joined')),
+                            ],
+                            onChanged: (value) {
+                              if (value != null) {
+                                _updateOfficerFilter('sort', value);
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          )
+        : const SizedBox(),
+  ),
+),
+          ],
+        ),
+      ),
+      
+      // Officer List
+      Expanded(
+        child: Container(
+          width: double.infinity,
+          color: const Color(0xFFFAFAFA),
+          child: _filteredOfficersData.isEmpty
+              ? const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.shield_outlined,
+                        size: 64,
+                        color: Color(0xFF9CA3AF),
+                      ),
+                      SizedBox(height: 16),
+                      Text(
+                        'No officers found',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Try adjusting your search or filters',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF9CA3AF),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _filteredOfficersData.length,
+                  itemBuilder: (context, index) {
+                    final officer = _filteredOfficersData[index];
+                    return _buildOfficerCard(officer);
+                  },
+                ),
+        ),
+      ),
+    ],
+  );
+}
 
 
+Widget _buildOfficerCard(Map<String, dynamic> officer) {
+  final officerId = officer['id'] ?? 0;
+  final isExpanded = _expandedOfficerCards.contains(officerId);
+  
+  return Container(
+    margin: const EdgeInsets.only(bottom: 12),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.indigo.withOpacity(0.2)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.indigo.withOpacity(0.05),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+        // Main Card Content
+        InkWell(
+          onTap: () {
+            setState(() {
+              if (isExpanded) {
+                _expandedOfficerCards.remove(officerId);
+              } else {
+                _expandedOfficerCards.add(officerId);
+              }
+            });
+          },
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                // Officer Avatar with shield
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.indigo.withOpacity(0.3),
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      Center(
+                        child: Text(
+                          _getInitials('${officer['first_name'] ?? ''} ${officer['last_name'] ?? ''}'),
+                          style: const TextStyle(
+                            color: Colors.indigo,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 2,
+                        right: 2,
+                        child: Container(
+                          width: 14,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: Colors.indigo,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                                Icons.local_police,
+                            size: 10,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                
+                // Main Officer Info
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${officer['first_name'] ?? ''} ${officer['last_name'] ?? ''}'.trim(),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 16,
+                                color: Color(0xFF111827),
+                              ),
+                            ),
+                          ),
+                          // Officer Badge with rank if available (using old rank for familiarity)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.indigo.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: Colors.indigo.withOpacity(0.3),
+                              ),
+                            ),
+                            child: Text(
+                              officer['police_ranks']?['old_rank'] ?? 'OFFICER',
+                              style: const TextStyle(
+                                color: Colors.indigo,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        officer['email'] ?? 'No email',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          if (officer['gender'] != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _getGenderColor(officer['gender']).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: _getGenderColor(officer['gender']).withOpacity(0.3),
+                                ),
+                              ),
+                              child: Text(
+                                officer['gender'] ?? 'N/A',
+                                style: TextStyle(
+                                  color: _getGenderColor(officer['gender']),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(width: 8),
+                          // Show station if available
+                          if (officer['police_stations']?['name'] != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: Colors.green.withOpacity(0.3),
+                                ),
+                              ),
+                              child: Text(
+                                officer['police_stations']['name'],
+                                style: const TextStyle(
+                                  color: Colors.green,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          const Spacer(),
+                          Text(
+                            officer['created_at'] != null
+                                ? _getTimeAgo(DateTime.parse(officer['created_at']))
+                                : 'Unknown',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF9CA3AF),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(
+                            isExpanded ? Icons.expand_less : Icons.expand_more,
+                            color: const Color(0xFF6B7280),
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+        // Expanded Details Section
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          child: isExpanded ? Container(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            decoration: const BoxDecoration(
+              border: Border(
+                top: BorderSide(color: Color(0xFFF3F4F6), width: 1),
+              ),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(height: 16),
+                _buildDetailItem(
+                  icon: Icons.alternate_email,
+                  label: 'Username',
+                  value: officer['username'] ?? 'Not provided',
+                ),
+                const SizedBox(height: 12),
+                _buildDetailItem(
+                  icon: Icons.cake,
+                  label: 'Birthday',
+                  value: officer['bday'] != null
+                      ? DateFormat('MMM d, yyyy').format(DateTime.parse(officer['bday']))
+                      : 'Not provided',
+                ),
+                const SizedBox(height: 12),
+                _buildDetailItem(
+                  icon: Icons.person,
+                  label: 'Age',
+                  value: officer['bday'] != null
+                      ? '${_calculateAge(officer['bday']) ?? 'Unknown'} years old'
+                      : 'Not provided',
+                ),
+                const SizedBox(height: 12),
+                _buildDetailItem(
+                  icon: Icons.phone,
+                  label: 'Contact',
+                  value: officer['contact_number'] ?? 'Not provided',
+                ),
+
+                // Updated police rank and station fields
+                const SizedBox(height: 12),
+              _buildDetailItem(
+                icon: Icons.military_tech,
+                label: 'Police Rank',
+                value: officer['police_ranks']?['new_rank'] != null && officer['police_ranks']?['old_rank'] != null
+                    ? '${officer['police_ranks']['new_rank']} (${officer['police_ranks']['old_rank']})'
+                    : officer['police_ranks']?['new_rank'] ?? officer['police_ranks']?['old_rank'] ?? 'Not assigned',
+                subtitle: null,
+              ),
+                const SizedBox(height: 12),
+                _buildDetailItem(
+                  icon: Icons.location_city,
+                  label: 'Assigned Station',
+                  value: officer['police_stations']?['name'] ?? 'Not assigned',
+                  subtitle: officer['police_stations']?['station_number'] != null 
+                      ? 'Station #${officer['police_stations']['station_number']}'
+                      : null,
+                ),
+              ],
+            ),
+          ) : const SizedBox(),
+        ),
+      ],
+    ),
+  );
+}
+
+// Update the _buildDetailItem helper to support subtitles
 
 
 
@@ -2963,32 +4286,7 @@ Widget _buildModernAppBar() {
 }
 
 
-String _getPageTitle() {
-  switch (_currentPage) {
-    case 'users':
-      return 'User Management';
-    case 'reports':
-      return 'Crime Reports';
-    case 'safespots':  // ADD THIS CASE
-      return 'Safe Spots';
-    default:
-      return 'Admin Dashboard';
-  }
-}
 
-
-String _getPageSubtitle() {
-  switch (_currentPage) {
-    case 'users':
-      return 'Manage system users';
-    case 'reports':
-      return 'Manage crime reports';
-    case 'safespots':  // ADD THIS CASE
-      return 'Manage safe spot reports';
-    default:
-      return 'Crime Analytics & Reports';
-  }
-}
 
   Widget _buildLoadingState() {
     return const Center(
@@ -3013,44 +4311,10 @@ String _getPageSubtitle() {
     );
   }
 
-  Widget _buildDashboardContent() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildDateRangeCard(),
-          const SizedBox(height: 24),
-          _buildOverviewCards(),
-          const SizedBox(height: 32),
-          // Use LayoutBuilder for responsive design
-          LayoutBuilder(
-            builder: (context, constraints) {
-              bool isWide = constraints.maxWidth > 800;
-              return Column(
-                children: [
-                  _buildUserChartsSection(isWide: isWide),
-                  const SizedBox(height: 32),
-                  _buildCrimeChartsSection(isWide: isWide),
-                  const SizedBox(height: 32),
-                  _buildStatusChartsSection(isWide: isWide),
-                  const SizedBox(height: 32),
-                  _buildHotspotTrendSection(),
-                  const SizedBox(height: 32),
-                _buildSafeSpotChartsSection(isWide: isWide),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
 
-
-
-// ALL SAFE SPOT CHARTS STARTS HERE
-
+/// ======================
+/// ALL SAFE SPOT CHARTS SECTION
+/// ======================
 Widget _buildSafeSpotChartsSection({bool isWide = false}) {
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -3064,42 +4328,212 @@ Widget _buildSafeSpotChartsSection({bool isWide = false}) {
         ),
       ),
       const SizedBox(height: 20),
-      isWide
-          ? Row(
-              children: [
-                Expanded(child: _buildSafeSpotStatusChart()),
-                const SizedBox(width: 20),
-                Expanded(child: _buildSafeSpotTypesChart()),
-              ],
-            )
-          : Column(
-              children: [
-                _buildSafeSpotStatusChart(),
-                const SizedBox(height: 20),
-                _buildSafeSpotTypesChart(),
-              ],
+
+      // Desktop Layout
+      if (isWide)
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+            
+                child: _buildSafeSpotStatusChartDesktop(isCombined: true),
+              
             ),
+            const SizedBox(width: 20),
+            Expanded(
+              child: _buildSafeSpotTypesChartDesktop(),
+            ),
+          ],
+        )
+      // Mobile Layout
+      else
+        Column(
+          children: [
+            _buildSafeSpotStatusChartMobile(), // 👈 mobile version
+            const SizedBox(height: 20),
+            _buildSafeSpotVerificationChart(),
+            const SizedBox(height: 20),
+            _buildSafeSpotTypesChart(),
+          ],
+        ),
+
       const SizedBox(height: 20),
-      isWide
-          ? Row(
-              children: [
-                Expanded(child: _buildSafeSpotVerificationChart()),
-                const SizedBox(width: 20),
-                Expanded(child: _buildSafeSpotTrendChart()),
-              ],
-            )
-          : Column(
-              children: [
-                _buildSafeSpotVerificationChart(),
-                const SizedBox(height: 20),
-                _buildSafeSpotTrendChart(),
-              ],
-            ),
+      _buildSafeSpotTrendChart(),
     ],
   );
 }
 
-Widget _buildSafeSpotStatusChart() {
+
+/// ======================
+/// DESKTOP VERSION
+/// ======================
+Widget _buildSafeSpotStatusChartDesktop({bool isCombined = false}) {
+  final totalSafeSpots = _safeSpotStats['total'] ?? 0;
+  Map<String, int> statusData = Map.from(_safeSpotStats['status'] ?? {});
+  Map<String, int> verificationData = Map.from(_safeSpotStats['verification'] ?? {});
+
+  // Combine if requested
+  Map<String, int> combinedData = isCombined
+      ? {...statusData, ...verificationData}
+      : statusData;
+
+  combinedData.removeWhere((key, value) => value == 0);
+
+  if (totalSafeSpots == 0) {
+    // ✅ Empty card (no forced height, same as other charts)
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: _buildEmptyCard('No SafeSpot data available'),
+    );
+  }
+
+  // ✅ Chart container (fixed height for actual data)
+  return Container(
+    height: 420,
+    padding: const EdgeInsets.all(24),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 10,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+        Text(
+          isCombined
+              ? 'SafeSpots by Status & Verification'
+              : 'SafeSpots by Status',
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: AnimatedBuilder(
+            animation: _chartAnimation,
+            builder: (context, child) {
+              return PieChart(
+                PieChartData(
+                  sections: combinedData.entries.map((entry) {
+                    double percentage = (entry.value / totalSafeSpots) * 100;
+                    double animatedValue =
+                        entry.value.toDouble() * _chartAnimation.value;
+
+                    return PieChartSectionData(
+                      color: isCombined &&
+                              verificationData.containsKey(entry.key)
+                          ? _getVerificationColor(entry.key)
+                          : _getSafeSpotStatusColor(entry.key),
+                      value: animatedValue,
+                      title: _chartAnimation.value > 0.8
+                          ? '${percentage.toStringAsFixed(1)}%'
+                          : '',
+                      radius: 45 + (8 * _chartAnimation.value),
+                      titleStyle: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: combinedData.entries.map((entry) {
+            final color = isCombined &&
+                    verificationData.containsKey(entry.key)
+                ? _getVerificationColor(entry.key)
+                : _getSafeSpotStatusColor(entry.key);
+
+            return Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: color.withOpacity(0.2),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            entry.key.toUpperCase(),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF374151),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '${entry.value}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: color,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    ),
+  );
+}
+
+
+
+
+/// ======================
+/// STATUS (MOBILE)
+/// ======================
+Widget _buildSafeSpotStatusChartMobile() {
   final totalSafeSpots = _safeSpotStats['total'] ?? 0;
   Map<String, int> statusData = _safeSpotStats['status'] ?? {};
   statusData.removeWhere((key, value) => value == 0);
@@ -3141,7 +4575,8 @@ Widget _buildSafeSpotStatusChart() {
                 PieChartData(
                   sections: statusData.entries.map((entry) {
                     double percentage = (entry.value / totalSafeSpots) * 100;
-                    double animatedValue = entry.value.toDouble() * _chartAnimation.value;
+                    double animatedValue =
+                        entry.value.toDouble() * _chartAnimation.value;
 
                     return PieChartSectionData(
                       color: _getSafeSpotStatusColor(entry.key),
@@ -3149,7 +4584,7 @@ Widget _buildSafeSpotStatusChart() {
                       title: _chartAnimation.value > 0.8
                           ? '${percentage.toStringAsFixed(1)}%'
                           : '',
-                      radius: 60 + (10 * _chartAnimation.value),
+                      radius: 60 + (10 * _chartAnimation.value), // 👈 same as gender chart
                       titleStyle: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -3227,6 +4662,10 @@ Widget _buildSafeSpotStatusChart() {
   );
 }
 
+
+/// ======================
+/// MOBILE VERSION
+/// ======================
 Widget _buildSafeSpotTypesChart() {
   Map<String, int> typesData = _safeSpotStats['types'] ?? {};
 
@@ -3234,8 +4673,6 @@ Widget _buildSafeSpotTypesChart() {
     return _buildEmptyCard('No SafeSpot types data available');
   }
 
-  int maxValue = typesData.values.isEmpty ? 1 : typesData.values.reduce((a, b) => a > b ? a : b);
-  
   return Container(
     padding: const EdgeInsets.all(24),
     decoration: BoxDecoration(
@@ -3249,105 +4686,188 @@ Widget _buildSafeSpotTypesChart() {
         ),
       ],
     ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'SafeSpots by Type',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF1F2937),
+    child: _buildSafeSpotTypesChartContent(autoGrow: false),
+  );
+}
+
+/// ======================
+/// DESKTOP VERSION
+/// ======================
+Widget _buildSafeSpotTypesChartDesktop() {
+  Map<String, int> typesData = _safeSpotStats['types'] ?? {};
+  int itemCount = typesData.length;
+
+  if (typesData.isEmpty) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
           ),
-        ),
-        const SizedBox(height: 24),
-        AnimatedBuilder(
-          animation: _chartAnimation,
-          builder: (context, child) {
-            return Column(
-              children: typesData.entries.map((entry) {
-                Color barColor = _getSafeSpotTypeColor(entry.key);
-                double progress = (entry.value / maxValue) * _chartAnimation.value;
-                
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              entry.key,
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF374151),
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          Text(
-                            entry.value.toString(),
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: barColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF3F4F6),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            return Stack(
-                              children: [
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 300),
-                                  width: constraints.maxWidth * progress,
-                                  height: 12,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(6),
-                                    gradient: LinearGradient(
-                                      colors: [
-                                        barColor.withOpacity(0.8),
-                                        barColor,
-                                      ],
-                                      begin: Alignment.centerLeft,
-                                      end: Alignment.centerRight,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: barColor.withOpacity(0.3),
-                                        blurRadius: 4,
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            );
-          },
+        ],
+      ),
+      child: _buildEmptyCard('No SafeSpot types data available'),
+    );
+  }
+
+  return Container(
+    height: 420,
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 10,
+          offset: const Offset(0, 2),
         ),
       ],
     ),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: itemCount <= 3
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: _buildSafeSpotTypesChartContent(autoGrow: true),
+              ),
+            )
+          : Scrollbar(
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: _buildSafeSpotTypesChartContent(),
+              ),
+            ),
+    ),
   );
 }
+
+
+
+/// ======================
+/// REUSABLE CONTENT
+/// ======================
+Widget _buildSafeSpotTypesChartContent({bool autoGrow = false}) {
+  Map<String, int> typesData = _safeSpotStats['types'] ?? {};
+
+  if (typesData.isEmpty) {
+    return _buildEmptyCard('No SafeSpot types data available');
+  }
+
+  int maxValue = typesData.values.isEmpty ? 1 : typesData.values.reduce((a, b) => a > b ? a : b);
+  int itemCount = typesData.length;
+
+  // Dynamic sizing
+  double fontSize = (autoGrow && itemCount <= 3) ? 16 : 14;
+  double barHeight = (autoGrow && itemCount <= 3) ? 18 : 12;
+  double spacing = (autoGrow && itemCount <= 3) ? 24 : 16;
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text(
+        'SafeSpots by Type',
+        style: TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Color(0xFF1F2937),
+        ),
+      ),
+      const SizedBox(height: 24),
+      AnimatedBuilder(
+        animation: _chartAnimation,
+        builder: (context, child) {
+          return Column(
+            children: typesData.entries.map((entry) {
+              Color barColor = _getSafeSpotTypeColor(entry.key);
+              double progress = (entry.value / maxValue) * _chartAnimation.value;
+
+              return Padding(
+                padding: EdgeInsets.only(bottom: spacing),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            entry.key,
+                            style: TextStyle(
+                              fontSize: fontSize,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF374151),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          entry.value.toString(),
+                          style: TextStyle(
+                            fontSize: fontSize - 2,
+                            fontWeight: FontWeight.w500,
+                            color: barColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      height: barHeight,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return Stack(
+                            children: [
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 300),
+                                width: constraints.maxWidth * progress,
+                                height: barHeight,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(6),
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      barColor.withOpacity(0.8),
+                                      barColor,
+                                    ],
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: barColor.withOpacity(0.3),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    ],
+  );
+}
+
+
+
 
 Widget _buildSafeSpotVerificationChart() {
   final totalSafeSpots = _safeSpotStats['total'] ?? 0;
@@ -3472,8 +4992,6 @@ Widget _buildSafeSpotVerificationChart() {
     ),
   );
 }
-
-
 
 Widget _buildSafeSpotTrendChart() {
   if (_safeSpotsData.isEmpty) {
@@ -3852,124 +5370,212 @@ List<Map<String, dynamic>> chartData = dailyCounts.entries
 }
 
 
-    // SELECT DATE
-  Widget _buildDateRangeCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF6366F1).withOpacity(0.3),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          const Text(
-            'Data Range',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
+// SELECT DATE - Updated for full width in mobile view
+Widget _buildDateRangeCard() {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      final isDesktop = constraints.maxWidth > 600;
+      return Center(
+        child: Container(
+          width: isDesktop ? ((_getMaxWidth() ?? 300) + 70) : double.infinity,
+ // Full width for mobile, constrained for desktop
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${DateFormat('MMM d, y').format(_startDate)} - ${DateFormat('MMM d, y').format(_endDate)}',
-            style: const TextStyle(
-              fontSize: 16,
-              color: Colors.white70,
-            ),
-          ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: _selectDateRange,
-            icon: const Icon(Icons.date_range),
-            label: const Text('Change Range'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: const Color(0xFF6366F1),
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(25),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6366F1).withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
-    );
-  }
+          child: Column(
+            children: [
+              const Text(
+                'Data Range',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '${DateFormat('MMM d, y').format(_startDate)} - ${DateFormat('MMM d, y').format(_endDate)}',
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _selectDateRange,
+                icon: const Icon(Icons.date_range),
+                label: const Text('Change Range'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF6366F1),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(25),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
 
-
-// CARDS CARDS CARDS
+// CARDS CARDS CARDS - Unchanged from previous update
 Widget _buildOverviewCards() {
   return LayoutBuilder(
     builder: (context, constraints) {
-      return Column(
+      final isDesktop = constraints.maxWidth > 600;
+      return Center(
+        child: Container(
+          width: _getMaxWidth(),
+          child: isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
+        ),
+      );
+    },
+  );
+}
+
+// Desktop layout (unchanged: all five cards in a single row)
+Widget _buildDesktopLayout() {
+  return Row(
+    children: [
+      Expanded(
+        child: _buildStatsCard(
+          title: 'Total Reports',
+          value: '${_crimeStats['total'] ?? 0}',
+          icon: Icons.report_outlined,
+          gradient: const [Color(0xFFEC4899), Color(0xFFBE185D)],
+          delay: 0,
+        ),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: _buildStatsCard(
+          title: 'Pending Reports',
+          value: '${_reportStats['status']?['pending'] ?? 0}',
+          icon: Icons.pending_outlined,
+          gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
+          delay: 100,
+        ),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: _buildStatsCard(
+          title: 'Total SafeSpots',
+          value: '${_safeSpotStats['total'] ?? 0}',
+          icon: Icons.place_outlined,
+          gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+          delay: 200,
+        ),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: _buildStatsCard(
+          title: 'Pending SafeSpot',
+          value: '${_safeSpotStats['status']?['pending'] ?? 0}',
+          icon: Icons.pending_outlined,
+          gradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+          delay: 300,
+        ),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: _buildStatsCard(
+          title: 'Registered Users',
+          value: '${_userStats['total'] ?? 0}',
+          icon: Icons.people_alt_outlined,
+          gradient: const [Color(0xFF06B6D4), Color(0xFF0891B2)],
+          delay: 400,
+        ),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: _buildStatsCard(
+          title: 'Officers',
+          value: '${_userStats['officers'] ?? 0}',
+          icon: Icons.security_outlined,
+          gradient: const [Color(0xFF8B5CF6), Color(0xFF6D28D9)],
+          delay: 500,
+        ),
+      ),
+    ],
+  );
+}
+
+// Mobile layout (unchanged: two cards per row, Registered Users full-width)
+Widget _buildMobileLayout() {
+  return Column(
+    children: [
+      // First Row: Total Reports | Pending Reports
+      Row(
         children: [
-          // First Row: Total Reports | Pending Hotspot
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatsCard(
-                  title: 'Total Reports',
-                  value: '${_crimeStats['total'] ?? 0}',
-                  icon: Icons.report_outlined,
-                  gradient: const [Color(0xFFEC4899), Color(0xFFBE185D)],
-                  delay: 0,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _buildStatsCard(
-                  title: 'Pending Reports',
-                  value: '${_reportStats['status']?['pending'] ?? 0}',
-                  icon: Icons.pending_outlined,
-                  gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
-                  delay: 100,
-                ),
-              ),
-            ],
+          Expanded(
+            child: _buildStatsCard(
+              title: 'Total Reports',
+              value: '${_crimeStats['total'] ?? 0}',
+              icon: Icons.report_outlined,
+              gradient: const [Color(0xFFEC4899), Color(0xFFBE185D)],
+              delay: 0,
+            ),
           ),
-          const SizedBox(height: 16),
-          // Second Row: SafeSpots | Pending SafeSpot
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatsCard(
-                  title: 'Total SafeSpots',
-                  value: '${_safeSpotStats['total'] ?? 0}',
-                  icon: Icons.place_outlined,
-                  gradient: const [Color(0xFF10B981), Color(0xFF059669)],
-                  delay: 200,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _buildStatsCard(
-                  title: 'Pending SafeSpot',
-                  value: '${_safeSpotStats['status']?['pending'] ?? 0}',
-                  icon: Icons.pending_outlined,
-                  gradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
-                  delay: 300,
-                ),
-              ),
-            ],
+          const SizedBox(width: 16),
+          Expanded(
+            child: _buildStatsCard(
+              title: 'Pending Reports',
+              value: '${_reportStats['status']?['pending'] ?? 0}',
+              icon: Icons.pending_outlined,
+              gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
+              delay: 100,
+            ),
           ),
-          const SizedBox(height: 16),
-          // Third Row: Registered Users (full width)
-          SizedBox(
-            width: double.infinity, // Ensure full width
+        ],
+      ),
+      const SizedBox(height: 16),
+      // Second Row: Total SafeSpots | Pending SafeSpot
+      Row(
+        children: [
+          Expanded(
+            child: _buildStatsCard(
+              title: 'Total SafeSpots',
+              value: '${_safeSpotStats['total'] ?? 0}',
+              icon: Icons.place_outlined,
+              gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+              delay: 200,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _buildStatsCard(
+              title: 'Pending SafeSpot',
+              value: '${_safeSpotStats['status']?['pending'] ?? 0}',
+              icon: Icons.pending_outlined,
+              gradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+              delay: 300,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+      // Third Row: Registered Users | Officers
+      Row(
+        children: [
+          Expanded(
             child: _buildStatsCard(
               title: 'Registered Users',
               value: '${_userStats['total'] ?? 0}',
@@ -3978,85 +5584,177 @@ Widget _buildOverviewCards() {
               delay: 400,
             ),
           ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _buildStatsCard(
+              title: 'Officers',
+              value: '${_userStats['officers'] ?? 0}',
+              icon: Icons.security_outlined,
+              gradient: const [Color(0xFF8B5CF6), Color(0xFF6D28D9)],
+              delay: 500,
+            ),
+          ),
         ],
+      ),
+    ],
+  );
+}
+
+// Stats card (unchanged)
+Widget _buildStatsCard({
+  required String title,
+  required String value,
+  required IconData icon,
+  required List<Color> gradient,
+  required int delay,
+}) {
+  return AnimatedBuilder(
+    animation: _chartAnimation,
+    builder: (context, child) {
+      return Transform.scale(
+        scale: 0.8 + (_chartAnimation.value * 0.2),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: gradient,
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: gradient[0].withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Icon(
+                icon,
+                size: 32,
+                color: Colors.white,
+              ),
+              const SizedBox(height: 12),
+              AnimatedBuilder(
+                animation: _chartAnimation,
+                builder: (context, child) {
+                  final animatedValue = (int.parse(value) * _chartAnimation.value).toInt();
+                  return Text(
+                    '$animatedValue',
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  );
+                },
+              ),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
       );
     },
   );
 }
 
-  Widget _buildStatsCard({
-    required String title,
-    required String value,
-    required IconData icon,
-    required List<Color> gradient,
-    required int delay,
-  }) {
-    return AnimatedBuilder(
-      animation: _chartAnimation,
-      builder: (context, child) {
-        return Transform.scale(
-          scale: 0.8 + (_chartAnimation.value * 0.2),
-          child: Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: gradient,
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: gradient[0].withOpacity(0.3),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                Icon(
-                  icon,
-                  size: 32,
-                  color: Colors.white,
-                ),
-                const SizedBox(height: 12),
-                AnimatedBuilder(
-                  animation: _chartAnimation,
-                  builder: (context, child) {
-                    final animatedValue = (int.parse(value) * _chartAnimation.value).toInt();
-                    return Text(
-                      '$animatedValue',
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    );
-                  },
-                ),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 
 
-//USER STATISTICS
-  Widget _buildUserChartsSection({bool isWide = false}) {
-    return Column(
+// UPDATED DASHBOARD CONTENT METHOD
+Widget _buildDashboardContent() {
+  return SingleChildScrollView(
+    padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+    child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildDateRangeCard(),
+        const SizedBox(height: 24),
+        _buildOverviewCards(),
+        const SizedBox(height: 32),
+        // Use LayoutBuilder for responsive design
+        LayoutBuilder(
+          builder: (context, constraints) {
+            bool isWide = constraints.maxWidth > 800;
+            return Column(
+              children: [
+                // Combined User and Crime Statistics
+                _buildUserAndCrimeChartsSection(isWide: isWide),
+                const SizedBox(height: 32),
+                // Keep Status Charts separate as before
+                _buildStatusChartsSection(isWide: isWide),
+                const SizedBox(height: 32),
+                _buildHotspotTrendSection(),
+                const SizedBox(height: 32),
+                _buildSafeSpotChartsSection(isWide: isWide),
+              ],
+            );
+          },
+        ),
+      ],
+    ),
+  );
+}
+
+
+// COMBINED USER AND CRIME STATISTICS SECTION
+Widget _buildUserAndCrimeChartsSection({bool isWide = false}) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // Only show main title on desktop
+      if (isWide) ...[
+        const Text(
+          'User & Crime Statistics',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937),
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+      isWide 
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // LEFT SIDE - User Statistics
+                Expanded(
+                  flex: 1,
+                  child: Column(
+                    children: [
+                      _buildCompactGenderChartCards(), // Changed to compact version
+                      const SizedBox(height: 20),
+                      _buildCompactRoleChart(), // Changed to compact version
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 20),
+                // RIGHT SIDE - Crime Statistics  
+                Expanded(
+                  flex: 1,
+                  child: Column(
+                    children: [
+                      _buildCompactCrimeLevelsChart(), // Changed to compact version
+                      const SizedBox(height: 20),
+                      _buildCompactCrimeCategoriesChart(), // Changed to compact version
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
           'User Statistics',
@@ -4066,34 +5764,615 @@ Widget _buildOverviewCards() {
             color: Color(0xFF1F2937),
           ),
         ),
-        const SizedBox(height: 20),
-        isWide 
-            ? Row(
-                children: [
-                  Expanded(flex: 2, child: _buildGenderChartCards()),
-                  const SizedBox(width: 20),
-                  Expanded(flex: 3, child: _buildRoleChart()),
-                ],
-              )
-            : Column(
-                children: [
-                  _buildGenderChartCards(),
-                  const SizedBox(height: 20),
-                  _buildRoleChart(),
-                ],
-              ),
-      ],
-    );
-  }
+                const SizedBox(height: 16),
+                _buildGenderChartCards(),
+                const SizedBox(height: 20),
+                _buildRoleChart(),
+                const SizedBox(height: 32),
+                const Text(
+                  'Crime Statistics',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1F2937),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _buildCrimeLevelsChart(),
+                const SizedBox(height: 20),
+                _buildCrimeCategoriesChart(),
+              ],
+            ),
+    ],
+  );
+}
 
-  // USERS BY GENDER
+// COMPACT VERSIONS FOR DESKTOP
 
-  Widget _buildGenderChartCards() {
+Widget _buildCompactGenderChartCards() {
   // Define all possible genders you want to display
   List<String> allGenders = ['Male', 'Female', 'Others', 'LGBTQ+'];
 
   // Initialize genderData with actual data or an empty map
   Map<String, int> genderData = _userStats['gender'] ?? {};
+
+  // Check if genderData is empty
+  if (genderData.isEmpty) {
+    return _buildEmptyCard('No gender data available');
+  }
+
+  // Ensure all genders are present in genderData with a default value of 0
+  for (var gender in allGenders) {
+    genderData.putIfAbsent(gender, () => 0);
+  }
+
+  List<Color> colors = [
+    const Color.fromARGB(255, 99, 137, 241),
+    const Color(0xFFEC4899),
+    const Color(0xFF8B5CF6),
+    const Color(0xFFF59E0B),
+  ];
+
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xFFE5E7EB)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+        const Text(
+          'Users by Gender',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937),
+          ),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 270,
+          child: AnimatedBuilder(
+            animation: _chartAnimation,
+            builder: (context, child) {
+              return PieChart(
+                PieChartData(
+                  sections: genderData.entries.map((entry) {
+                    int index = allGenders.indexOf(entry.key);
+                    double percentage = (entry.value / (_userStats['total'] ?? 1)) * 100;
+                    double animatedValue = entry.value.toDouble() * _chartAnimation.value;
+
+                    return PieChartSectionData(
+                      color: colors[index % colors.length],
+                      value: animatedValue,
+                      title: _chartAnimation.value > 0.8 ? '${percentage.toStringAsFixed(1)}%' : '',
+                      radius: 45 + (8 * _chartAnimation.value),
+                      titleStyle: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: allGenders.map((gender) {
+            int index = allGenders.indexOf(gender);
+            int value = genderData[gender] ?? 0;
+            final color = colors[index % colors.length];
+
+            return Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: color.withOpacity(0.2),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: color,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      gender.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                    Text(
+                      value == 0 ? 'None' : '$value',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    ),
+  );
+}
+
+// COMPACT USER ROLE (Desktop)
+Widget _buildCompactRoleChart() {
+  Map<String, int> roleData = _userStats['role'] ?? {};
+
+  if (roleData.isEmpty) {
+    return _buildEmptyCard('No role data available');
+  }
+
+  return Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+        const Text(
+          'Users by Role',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937),
+          ),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 320,
+          child: AnimatedBuilder(
+            animation: _chartAnimation,
+            builder: (context, child) {
+              return BarChart(
+                        BarChartData(
+                          alignment: BarChartAlignment.spaceAround,
+                          maxY: roleData.values.isEmpty
+                              ? 10
+                              : roleData.values.reduce((a, b) => a > b ? a : b).toDouble() * 1.2,
+                        barTouchData: BarTouchData(
+                          enabled: true,
+                          touchTooltipData: BarTouchTooltipData(
+                            getTooltipColor: (group) => Colors.white, // bright background
+                            tooltipPadding: const EdgeInsets.all(8),
+                            tooltipMargin: 8,
+                            getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                              return BarTooltipItem(
+                                rod.toY.toInt().toString(),
+                                const TextStyle(
+                                  color: Colors.black, // readable text
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+
+                        barGroups: roleData.entries.map((entry) {
+                          int index = roleData.keys.toList().indexOf(entry.key);
+                          double animatedHeight =
+                              entry.value.toDouble() * _chartAnimation.value;
+                    
+                  return BarChartGroupData(
+                      x: index,
+                      barRods: [
+                        BarChartRodData(
+                          toY: animatedHeight,
+                          color: entry.key == 'admin' 
+                              ? const Color(0xFF6366F1) 
+                              : entry.key == 'officer' 
+                                  ? const Color.fromARGB(255, 60, 162, 245) 
+                                  : const Color(0xFF10B981),
+                          width: 24,
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                          gradient: LinearGradient(
+                            colors: entry.key == 'admin' 
+                                ? [const Color(0xFF6366F1), const Color(0xFF8B5CF6)]
+                                : entry.key == 'officer'
+                                    ? [const Color.fromARGB(255, 60, 162, 245) , const Color.fromARGB(255, 48, 129, 223)]
+                                    : [const Color(0xFF10B981), const Color(0xFF059669)],
+                            begin: Alignment.bottomCenter,
+                            end: Alignment.topCenter,
+                          ),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                  titlesData: FlTitlesData(
+                    leftTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: true, reservedSize: 30),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        getTitlesWidget: (value, meta) {
+                          List<String> keys = roleData.keys.toList();
+                          if (value.toInt() >= 0 && value.toInt() < keys.length) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 6.0),
+                              child: Text(
+                                keys[value.toInt()].toUpperCase(),
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF6B7280),
+                                ),
+                              ),
+                            );
+                          }
+                          return const Text('');
+                        },
+                      ),
+                    ),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  ),
+                  gridData: FlGridData(
+                    show: true,
+                    drawVerticalLine: false,
+                    horizontalInterval: 1,
+                    getDrawingHorizontalLine: (value) {
+                      return const FlLine(
+                        color: Color(0xFFE5E7EB),
+                        strokeWidth: 1,
+                      );
+                    },
+                  ),
+                  borderData: FlBorderData(show: false),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// COMPACT CRIMES BY SEVERITY LEVEL (Desktop)
+Widget _buildCompactCrimeLevelsChart() {
+  // Define all possible crime severity levels
+  List<String> allLevels = ['critical', 'high', 'medium', 'low'];
+
+  // Initialize levelData with all levels and default value of 0
+  Map<String, int> levelData = {for (var level in allLevels) level: 0};
+
+  // Update levelData with actual data if it exists
+  if (_crimeStats['levels'] != null) {
+    _crimeStats['levels'].forEach((key, value) {
+      if (levelData.containsKey(key)) {
+        levelData[key] = value;
+      }
+    });
+  }
+
+  // Check if there's any actual data (all values are 0 means no data)
+  int totalCrimes = levelData.values.fold(0, (sum, value) => sum + value);
+  
+  if (totalCrimes == 0) {
+    return _buildEmptyCard('No crime severity data available');
+  }
+
+  Map<String, Color> levelColors = {
+    'critical': const Color.fromARGB(255, 247, 26, 10),
+    'high': const Color.fromARGB(255, 223, 106, 11),
+    'medium': const Color.fromARGB(155, 202, 130, 49),
+    'low': const Color.fromARGB(255, 216, 187, 23),
+  };
+
+  return Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+        const Text(
+          'Crimes by Severity Level',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937),
+          ),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 270,
+          child: AnimatedBuilder(
+            animation: _chartAnimation,
+            builder: (context, child) {
+              return PieChart(
+                PieChartData(
+                  sections: levelData.entries.map((entry) {
+                    double percentage = (entry.value / totalCrimes) * 100;
+                    double animatedValue = entry.value.toDouble() * _chartAnimation.value;
+                    return PieChartSectionData(
+                      color: levelColors[entry.key] ?? Colors.grey,
+                      value: animatedValue,
+                      title: _chartAnimation.value > 0.8 ? '${percentage.toStringAsFixed(1)}%' : '',
+                      radius: 45 + (8 * _chartAnimation.value),
+                      titleStyle: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Horizontal layout for legend cards
+        Row(
+          children: allLevels.map((level) {
+            final color = levelColors[level] ?? Colors.grey;
+            final value = levelData[level] ?? 0;
+            return Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: color.withOpacity(0.2),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: color,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      level.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                    Text(
+                      value == 0 ? 'None' : '$value',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    ),
+  );
+}
+
+// COMPACT CRIMES BY CATEGORY (Desktop)
+Widget _buildCompactCrimeCategoriesChart() {
+  Map<String, int> categoryData = _crimeStats['categories'] ?? {};
+
+  if (categoryData.isEmpty) {
+    return _buildEmptyCard('No crime category data available');
+  }
+
+  // Color mapping based on your filter section
+  Map<String, Color> categoryColors = {
+    'Property': Colors.blue,
+    'Violent': Colors.red,
+    'Drug': Colors.purple,
+    'Public Order': Colors.orange,
+    'Financial': Colors.green,
+    'Traffic': Colors.blueGrey,
+    'Alert': Colors.deepPurple,
+    // Fallback colors for any other categories
+    'default1': const Color(0xFF0891B2),
+    'default2': const Color.fromARGB(255, 185, 163, 36),
+  };
+
+  // Get max value for scaling
+  int maxValue = categoryData.values.isEmpty ? 1 : categoryData.values.reduce((a, b) => a > b ? a : b);
+  
+  return Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Crimes by Category',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937),
+          ),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 320,
+          child: AnimatedBuilder(
+            animation: _chartAnimation,
+            builder: (context, child) {
+              return SingleChildScrollView(
+                child: Column(
+                  children: categoryData.entries.map((entry) {
+                    // Get color based on category name, with fallback
+                    Color barColor = categoryColors[entry.key] ?? Colors.grey;
+                    double progress = (entry.value / maxValue) * _chartAnimation.value;
+                    
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 14.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  entry.key,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF374151),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                entry.value.toString(),
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w500,
+                                  color: barColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Container(
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF3F4F6),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                return Stack(
+                                  children: [
+                                    AnimatedContainer(
+                                      duration: const Duration(milliseconds: 300),
+                                      width: constraints.maxWidth * progress,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(4),
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            barColor.withOpacity(0.8),
+                                            barColor,
+                                          ],
+                                          begin: Alignment.centerLeft,
+                                          end: Alignment.centerRight,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: barColor.withOpacity(0.3),
+                                            blurRadius: 2,
+                                            offset: const Offset(0, 1),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+
+
+
+
+// MOBILE CHARTS AND GRAPHS BELOW 
+  // USERS BY GENDER
+
+
+
+ Widget _buildGenderChartCards() {
+  // Define all possible genders you want to display
+  List<String> allGenders = ['Male', 'Female', 'Others', 'LGBTQ+'];
+
+  // Initialize genderData with actual data or an empty map
+  Map<String, int> genderData = _userStats['gender'] ?? {};
+
+  // Check if genderData is empty
+  if (genderData.isEmpty) {
+    return _buildEmptyCard('No gender data available');
+  }
 
   // Ensure all genders are present in genderData with a default value of 0
   for (var gender in allGenders) {
@@ -4268,32 +6547,59 @@ Widget _buildOverviewCards() {
               animation: _chartAnimation,
               builder: (context, child) {
                 return BarChart(
-                  BarChartData(
-                    alignment: BarChartAlignment.spaceAround,
-                    maxY: roleData.values.isEmpty ? 10 : roleData.values.reduce((a, b) => a > b ? a : b).toDouble() * 1.2,
-                    barGroups: roleData.entries.map((entry) {
-                      int index = roleData.keys.toList().indexOf(entry.key);
-                      double animatedHeight = entry.value.toDouble() * _chartAnimation.value;
-                      
-                      return BarChartGroupData(
-                        x: index,
-                        barRods: [
-                          BarChartRodData(
-                            toY: animatedHeight,
-                            color: entry.key == 'admin' ? const Color(0xFF6366F1) : const Color(0xFF10B981),
-                            width: 32,
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-                            gradient: LinearGradient(
-                              colors: entry.key == 'admin' 
-                                  ? [const Color(0xFF6366F1), const Color(0xFF8B5CF6)]
-                                  : [const Color(0xFF10B981), const Color(0xFF059669)],
-                              begin: Alignment.bottomCenter,
-                              end: Alignment.topCenter,
-                            ),
+                       BarChartData(
+                          alignment: BarChartAlignment.spaceAround,
+                          maxY: roleData.values.isEmpty
+                              ? 10
+                              : roleData.values.reduce((a, b) => a > b ? a : b).toDouble() * 1.2,
+                        barTouchData: BarTouchData(
+                          enabled: true,
+                          touchTooltipData: BarTouchTooltipData(
+                            getTooltipColor: (group) => Colors.white, // bright background
+                            tooltipPadding: const EdgeInsets.all(8),
+                            tooltipMargin: 8,
+                            getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                              return BarTooltipItem(
+                                rod.toY.toInt().toString(),
+                                const TextStyle(
+                                  color: Colors.black, // readable text
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              );
+                            },
                           ),
-                        ],
-                      );
-                    }).toList(),
+                        ),
+
+                        barGroups: roleData.entries.map((entry) {
+                          int index = roleData.keys.toList().indexOf(entry.key);
+                          double animatedHeight =
+                              entry.value.toDouble() * _chartAnimation.value;
+                      
+                    return BarChartGroupData(
+                      x: index,
+                      barRods: [
+                        BarChartRodData(
+                          toY: animatedHeight,
+                          color: entry.key == 'admin' 
+                              ? const Color(0xFF6366F1) 
+                              : entry.key == 'officer' 
+                                  ? const Color.fromARGB(255, 60, 162, 245) 
+                                  : const Color(0xFF10B981),
+                          width: 32,
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+                          gradient: LinearGradient(
+                            colors: entry.key == 'admin' 
+                                ? [const Color(0xFF6366F1), const Color(0xFF8B5CF6)]
+                                : entry.key == 'officer'
+                                    ? [const Color.fromARGB(255, 60, 162, 245) , Color.fromARGB(255, 49, 124, 211)]
+                                    : [const Color(0xFF10B981), const Color(0xFF059669)],
+                            begin: Alignment.bottomCenter,
+                            end: Alignment.topCenter,
+                          ),
+                        ),
+                      ],
+                    );
+                  }).toList(),
                     titlesData: FlTitlesData(
                       leftTitles: const AxisTitles(
                         sideTitles: SideTitles(showTitles: true, reservedSize: 40),
@@ -4346,37 +6652,6 @@ Widget _buildOverviewCards() {
   }
 
 
-  Widget _buildCrimeChartsSection({bool isWide = false}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Crime Statistics',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF1F2937),
-          ),
-        ),
-        const SizedBox(height: 20),
-        isWide
-            ? Row(
-                children: [
-                  Expanded(child: _buildCrimeLevelsChart()),
-                  const SizedBox(width: 20),
-                  Expanded(child: _buildCrimeCategoriesChart()),
-                ],
-              )
-            : Column(
-                children: [
-                  _buildCrimeLevelsChart(),
-                  const SizedBox(height: 20),
-                  _buildCrimeCategoriesChart(),
-                ],
-              ),
-      ],
-    );
-  }
 
   Widget _buildStatusChartsSection({bool isWide = false}) {
     return Column(
@@ -4700,6 +6975,8 @@ Widget _buildCrimeCategoriesChart() {
   );
 }
 
+
+
 Widget _buildReportStatusChart() {
   final totalReports = _reportStats['total'] ?? 0;
   Map<String, int> statusData = _reportStats['status'] ?? {};
@@ -4723,6 +7000,7 @@ Widget _buildReportStatusChart() {
       ],
     ),
     child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
           'Reports by Status',
@@ -4732,105 +7010,239 @@ Widget _buildReportStatusChart() {
             color: Color(0xFF1F2937),
           ),
         ),
-        const SizedBox(height: 20),
-        SizedBox(
-          height: 200,
-          child: AnimatedBuilder(
-            animation: _chartAnimation,
-            builder: (context, child) {
-              return PieChart(
-                PieChartData(
-                  sections: statusData.entries.map((entry) {
-                    double percentage = (entry.value / totalReports) * 100;
-                    double animatedValue =
-                        entry.value.toDouble() * _chartAnimation.value;
-
-                    return PieChartSectionData(
-                      color: _getStatusColor(entry.key),
-                      value: animatedValue,
-                      title: _chartAnimation.value > 0.8
-                          ? '${percentage.toStringAsFixed(1)}%'
-                          : '',
-                      radius: 60 + (10 * _chartAnimation.value),
-                      titleStyle: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    );
-                  }).toList(),
-                ),
-              );
-            },
+        const SizedBox(height: 8),
+        Text(
+          'Total: $totalReports reports',
+          style: const TextStyle(
+            fontSize: 14,
+            color: Color(0xFF6B7280),
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 24),
+        
+        // Use LayoutBuilder to detect screen width
+        LayoutBuilder(
+          builder: (context, constraints) {
+            bool isDesktop = constraints.maxWidth > 800;
+            
+            if (isDesktop) {
+              // Desktop: Bar Chart (matching your compact style)
+              return SizedBox(
+                height: 250,
+                child: AnimatedBuilder(
+                  animation: _chartAnimation,
+                  builder: (context, child) {
+                    return BarChart(
+                      BarChartData(
+                        alignment: BarChartAlignment.spaceAround,
+                        maxY: statusData.values.isEmpty
+                            ? 10
+                            : statusData.values.reduce((a, b) => a > b ? a : b).toDouble() * 1.2,
+                        barTouchData: BarTouchData(
+                          enabled: true,
+                          touchTooltipData: BarTouchTooltipData(
+                            getTooltipColor: (group) => Colors.white,
+                            tooltipPadding: const EdgeInsets.all(8),
+                            tooltipMargin: 8,
+                            getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                              return BarTooltipItem(
+                                rod.toY.toInt().toString(),
+                                const TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        barGroups: statusData.entries.map((entry) {
+                          int index = statusData.keys.toList().indexOf(entry.key);
+                          double animatedHeight =
+                              entry.value.toDouble() * _chartAnimation.value;
+                          
+                          Color statusColor = _getStatusColor(entry.key);
+                          
+                          return BarChartGroupData(
+                            x: index,
+                            barRods: [
+                              BarChartRodData(
+                                toY: animatedHeight,
+                                color: statusColor,
+                                width: 24,
+                                borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                                gradient: LinearGradient(
+                                  colors: [statusColor, statusColor.withOpacity(0.8)],
+                                  begin: Alignment.bottomCenter,
+                                  end: Alignment.topCenter,
+                                ),
+                              ),
+                            ],
+                          );
+                        }).toList(),
+                        titlesData: FlTitlesData(
+                          leftTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 30,
+                              getTitlesWidget: (value, meta) {
+                                return Text(
+                                  value.toInt().toString(), // Convert to integer and then to string
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF6B7280),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          bottomTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              getTitlesWidget: (value, meta) {
+                                List<String> keys = statusData.keys.toList();
+                                if (value.toInt() >= 0 && value.toInt() < keys.length) {
+                                  return Padding(
+                                    padding: const EdgeInsets.only(top: 6.0),
+                                    child: Text(
+                                      keys[value.toInt()].toUpperCase(),
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF6B7280),
+                                      ),
+                                    ),
+                                  );
+                                }
+                                return const Text('');
+                              },
+                            ),
+                          ),
+                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                        ),
+                        gridData: FlGridData(
+                          show: true,
+                          drawVerticalLine: false,
+                          horizontalInterval: 1,
+                          getDrawingHorizontalLine: (value) {
+                            return const FlLine(
+                              color: Color(0xFFE5E7EB),
+                              strokeWidth: 1,
+                            );
+                          },
+                        ),
+                        borderData: FlBorderData(show: false),
+                      ),
+                    );
+                  },
+                ),
+              );
+            } else {
+              // Mobile: Keep original pie chart
+              return Column(
+                children: [
+                  SizedBox(
+                    height: 200,
+                    child: AnimatedBuilder(
+                      animation: _chartAnimation,
+                      builder: (context, child) {
+                        return PieChart(
+                          PieChartData(
+                            sections: statusData.entries.map((entry) {
+                              double percentage = (entry.value / totalReports) * 100;
+                              double animatedValue =
+                                  entry.value.toDouble() * _chartAnimation.value;
 
-        // NEW Row of mini cards
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: statusData.entries.map((entry) {
-            final color = _getStatusColor(entry.key);
-            return Expanded(
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: color.withOpacity(0.2),
+                              return PieChartSectionData(
+                                color: _getStatusColor(entry.key),
+                                value: animatedValue,
+                                title: _chartAnimation.value > 0.8
+                                    ? '${percentage.toStringAsFixed(1)}%'
+                                    : '',
+                                radius: 60 + (10 * _chartAnimation.value),
+                                titleStyle: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        );
+                      },
+                    ),
                   ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            entry.key.toUpperCase(),
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF374151),
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(
-                            '${entry.value}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: color,
+                  const SizedBox(height: 20),
+
+                  // Mini cards for mobile
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: statusData.entries.map((entry) {
+                      final color = _getStatusColor(entry.key);
+                      return Expanded(
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: color.withOpacity(0.2),
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }).toList(),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 12,
+                                height: 12,
+                                decoration: BoxDecoration(
+                                  color: color,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      entry.key.toUpperCase(),
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF374151),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      '${entry.value}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: color,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              );
+            }
+          },
         ),
       ],
     ),
   );
 }
-
 
 Widget _buildActivityStatusChart() {
   final totalActivities = _activityStats['total'] ?? 0;
@@ -4874,83 +7286,183 @@ Widget _buildActivityStatusChart() {
           ),
         ),
         const SizedBox(height: 24),
-        ...activityData.entries.map((entry) {
-          double percentage = (entry.value / totalActivities) * 100;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          _getActivityIcon(entry.key),
-                          color: _getActivityColor(entry.key),
-                          size: 20,
+        // Use LayoutBuilder to detect screen width
+        LayoutBuilder(
+          builder: (context, constraints) {
+            bool isDesktop = constraints.maxWidth > 800;
+
+            if (isDesktop) {
+              // Desktop View: Updated column layout with fixed height
+              return SizedBox(
+                height: 250, // Fixed height to match the status chart
+                child: Column(
+                  children: activityData.entries.map((entry) {
+                    double percentage = (entry.value / totalActivities) * 100;
+                    return Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      _getActivityIcon(entry.key),
+                                      color: _getActivityColor(entry.key),
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      entry.key.toUpperCase(),
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF374151),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Text(
+                                  '${entry.value} (${percentage.toStringAsFixed(1)}%)',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: _getActivityColor(entry.key),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Expanded(
+                              child: AnimatedBuilder(
+                                animation: _chartAnimation,
+                                builder: (context, child) {
+                                  return Container(
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF3F4F6),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        return Stack(
+                                          children: [
+                                            AnimatedContainer(
+                                              duration: const Duration(milliseconds: 300),
+                                              width: constraints.maxWidth * (percentage / 100) * _chartAnimation.value,
+                                              height: 8,
+                                              decoration: BoxDecoration(
+                                                borderRadius: BorderRadius.circular(4),
+                                                gradient: LinearGradient(
+                                                  colors: [
+                                                    _getActivityColor(entry.key).withOpacity(0.8),
+                                                    _getActivityColor(entry.key),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          entry.key.toUpperCase(),
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF374151),
-                          ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              );
+            } else {
+              // Mobile View: Original layout
+              return Column(
+                children: activityData.entries.map((entry) {
+                  double percentage = (entry.value / totalActivities) * 100;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  _getActivityIcon(entry.key),
+                                  color: _getActivityColor(entry.key),
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  entry.key.toUpperCase(),
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF374151),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              '${entry.value} (${percentage.toStringAsFixed(1)}%)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: _getActivityColor(entry.key),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        AnimatedBuilder(
+                          animation: _chartAnimation,
+                          builder: (context, child) {
+                            return Container(
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF3F4F6),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  return Stack(
+                                    children: [
+                                      AnimatedContainer(
+                                        duration: const Duration(milliseconds: 300),
+                                        width: constraints.maxWidth * (percentage / 100) * _chartAnimation.value,
+                                        height: 8,
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(4),
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              _getActivityColor(entry.key).withOpacity(0.8),
+                                              _getActivityColor(entry.key),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            );
+                          },
                         ),
                       ],
                     ),
-                    Text(
-                      '${entry.value} (${percentage.toStringAsFixed(1)}%)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: _getActivityColor(entry.key),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                AnimatedBuilder(
-                  animation: _chartAnimation,
-                  builder: (context, child) {
-                    return Container(
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF3F4F6),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          return Stack(
-                            children: [
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 300),
-                                width: constraints.maxWidth * (percentage / 100) * _chartAnimation.value,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(4),
-                                  gradient: LinearGradient(
-                                    colors: [
-                                      _getActivityColor(entry.key).withOpacity(0.8),
-                                      _getActivityColor(entry.key),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-          );
-        }),
+                  );
+                }).toList(),
+              );
+            }
+          },
+        ),
       ],
     ),
   );
@@ -4958,6 +7470,8 @@ Widget _buildActivityStatusChart() {
 
 
 
+
+// LINE CHART FOR HOTSPOT
 
  Widget _buildHotspotTrendSection() {
     return Column(
@@ -5406,6 +7920,74 @@ Widget _buildStatItem(String label, String value, Color color) {
     );
   }
 
+
+// Helper methods (add these if you don't have them):
+String _getInitials(String name) {
+  if (name.isEmpty) return 'U';
+  final words = name.trim().split(' ');
+  if (words.length == 1) return words[0][0].toUpperCase();
+  return '${words[0][0]}${words[1][0]}'.toUpperCase();
+}
+
+String _getTimeAgo(DateTime dateTime) {
+  final now = DateTime.now();
+  final difference = now.difference(dateTime);
+  
+  if (difference.inDays > 7) {
+    return '${(difference.inDays / 7).floor()}w ago';
+  } else if (difference.inDays > 0) {
+    return '${difference.inDays}d ago';
+  } else if (difference.inHours > 0) {
+    return '${difference.inHours}h ago';
+  } else if (difference.inMinutes > 0) {
+    return '${difference.inMinutes}m ago';
+  } else {
+    return 'Just now';
+  }
+}
+
+// Add helper methods
+Color _getGenderColor(String? gender) {
+  switch (gender?.toLowerCase()) {
+    case 'male':
+      return const Color(0xFF3B82F6);
+    case 'female':
+      return const Color(0xFFEC4899);
+    case 'lgbtq+':
+      return const Color(0xFF8B5CF6);
+    default:
+      return const Color(0xFF6B7280);
+  }
+}
+
+Color _getRoleColor(String? role) {
+  switch (role) {
+    case 'admin':
+      return const Color(0xFFDC2626); // Red
+    case 'officer':
+      return Colors.indigo; // Indigo
+    case 'user':
+    default:
+      return const Color(0xFF059669); // Green
+  }
+}
+
+Color _getCrimeLevelColor(String? level) {
+  switch (level?.toLowerCase()) {
+    case 'critical':
+      return const Color(0xFFDC2626);
+    case 'high':
+      return const Color(0xFFEA580C);
+    case 'medium':
+      return const Color(0xFFD97706);
+    case 'low':
+      return const Color(0xFF65A30D);
+    default:
+      return const Color(0xFF6B7280);
+  }
+}
+
+
   Color _getStatusColor(String status) {
     switch (status) {
       case 'approved':
@@ -5429,6 +8011,8 @@ Widget _buildStatItem(String label, String value, Color color) {
         return const Color(0xFF6B7280);
     }
   }
+  
+  _getMaxWidth() {}
 }
 
 IconData? _getActivityIcon(String key) {
@@ -5470,7 +8054,7 @@ Color _getSafeSpotTypeColor(String type) {
 Color _getVerificationColor(String status) {
   switch (status.toLowerCase()) {
     case 'verified':
-      return const Color(0xFF10B981); // Green
+      return const Color(0xFF14B8A6); // Teal
     case 'unverified':
       return const Color(0xFF6B7280); // Gray
     default:
@@ -5488,3 +8072,4 @@ IconData _getVerificationIcon(String status) {
       return Icons.help_outline;
   }
 }
+

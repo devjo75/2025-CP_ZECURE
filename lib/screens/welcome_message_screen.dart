@@ -1,16 +1,18 @@
-// ignore_for_file: deprecated_member_use
-
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:zecure/desktop/hotlines_desktop.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
+import 'package:zecure/screens/admin_dashboard.dart';
 
-enum UserType { guest, user, admin }
+enum UserType { guest, user, admin, officer }
 
 class WelcomeMessageModal extends StatefulWidget {
   final UserType userType;
   final String? userName;
   final VoidCallback onClose;
-  final VoidCallback? onCreateAccount; // For guest users
+  final VoidCallback? onCreateAccount;
+  final bool isSidebarVisible; // Add sidebar visibility
+  final double sidebarWidth; // Add sidebar width
 
   const WelcomeMessageModal({
     super.key,
@@ -18,6 +20,8 @@ class WelcomeMessageModal extends StatefulWidget {
     this.userName,
     required this.onClose,
     this.onCreateAccount,
+    this.isSidebarVisible = true, // Default value
+    this.sidebarWidth = 280, // Default value, adjust to match your app
   });
 
   @override
@@ -152,6 +156,11 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
         headerIcon = Icons.admin_panel_settings_rounded;
         title = "Welcome back, Admin\n${widget.userName ?? ''}!";
         break;
+      case UserType.officer:
+        headerColor = Colors.indigo.shade600;
+        headerIcon = Icons.local_police_rounded;
+        title = "Welcome, Officer\n${widget.userName ?? ''}!";
+        break;  
     }
 
     return Container(
@@ -240,9 +249,13 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
         return _buildGuestContent(isWeb);
       case UserType.user:
         return _buildUserContent(isWeb);
+    case UserType.officer:
+      return _buildOfficerContent(isWeb);    
       case UserType.admin:
         return _buildAdminContent(isWeb);
+        
     }
+
   }
 
   Widget _buildGuestContent(bool isWeb) {
@@ -314,58 +327,66 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
 
 // Emergency Hotlines Section
 Container(
-  padding: const EdgeInsets.all(16),
-  decoration: BoxDecoration(
-    color: Colors.blueGrey.shade50,
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: Colors.blueGrey.shade200),
-  ),
-  child: Row(
-    children: [
-      Icon(Icons.phone_in_talk_rounded, color: Colors.blueGrey.shade600, size: 24),
-      const SizedBox(width: 12),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Emergency Hotlines Available',
-              style: GoogleFonts.poppins(
-                fontSize: isWeb ? 13 : 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.blueGrey.shade800,
-              ),
-            ),
-            Text(
-              'Access emergency contacts anytime',
-              style: GoogleFonts.poppins(
-                fontSize: isWeb ? 12 : 11,
-                color: Colors.blueGrey.shade600,
-              ),
-            ),
-          ],
-        ),
-      ),
-      TextButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const HotlinesScreen()),
-          );
-        },
-        child: Text(
-          'View',
-          style: GoogleFonts.poppins(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: Colors.blueGrey.shade600,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.blueGrey.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blueGrey.shade200),
           ),
-        ),
-      ),
-    ],
+          child: Row(
+            children: [
+              Icon(Icons.phone_in_talk_rounded, color: Colors.blueGrey.shade600, size: 24),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Emergency Hotlines Available',
+                      style: GoogleFonts.poppins(
+                        fontSize: isWeb ? 13 : 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.blueGrey.shade800,
+                      ),
+                    ),
+                    Text(
+                      'Access emergency contacts anytime',
+                      style: GoogleFonts.poppins(
+                        fontSize: isWeb ? 12 : 11,
+                        color: Colors.blueGrey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+TextButton(
+  onPressed: () {
+    if (isWeb) {
+      FocusScope.of(context).unfocus(); // Remove focus before opening modal
+      showHotlinesModal(
+        context,
+        isSidebarVisible: widget.isSidebarVisible,
+        sidebarWidth: widget.sidebarWidth,
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const HotlinesScreen()),
+      );
+    }
+  },
+  child: Text(
+    'View',
+    style: GoogleFonts.poppins(
+      fontSize: 12,
+      fontWeight: FontWeight.bold,
+      color: Colors.blueGrey.shade600,
+    ),
   ),
 ),
-
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -408,9 +429,7 @@ Container(
         
         const SizedBox(height: 16),
 
-        
-        
-        Container(
+                Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: Colors.green.shade50,
@@ -437,47 +456,57 @@ Container(
 
         const SizedBox(height: 16),
 
-// Emergency Hotlines Section
-Container(
-  padding: const EdgeInsets.all(16),
-  decoration: BoxDecoration(
-    color: Colors.blueGrey.shade50,
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: Colors.blueGrey.shade200),
-  ),
-  child: Row(
-    children: [
-      Icon(Icons.phone_in_talk_rounded, color: Colors.blueGrey.shade600, size: 24),
-      const SizedBox(width: 12),
-      Expanded(
-        child: Text(
-          'Quick access to emergency hotlines is always available for your safety.',
-          style: GoogleFonts.poppins(
-            fontSize: isWeb ? 13 : 12,
-            color: Colors.blueGrey.shade700,
-            height: 1.4,
+        
+        
+      Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.blueGrey.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blueGrey.shade200),
           ),
-        ),
-      ),
-      TextButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const HotlinesScreen()),
-          );
-        },
-        child: Text(
-          'View',
-          style: GoogleFonts.poppins(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: Colors.blueGrey.shade600,
-          ),
-        ),
-      ),
-    ],
+          child: Row(
+            children: [
+              Icon(Icons.phone_in_talk_rounded, color: Colors.blueGrey.shade600, size: 24),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Quick access to emergency hotlines is always available for your safety.',
+                  style: GoogleFonts.poppins(
+                    fontSize: isWeb ? 13 : 12,
+                    color: Colors.blueGrey.shade700,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+TextButton(
+  onPressed: () {
+    if (isWeb) {
+      FocusScope.of(context).unfocus(); // Remove focus before opening modal
+      showHotlinesModal(
+        context,
+        isSidebarVisible: widget.isSidebarVisible,
+        sidebarWidth: widget.sidebarWidth,
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const HotlinesScreen()),
+      );
+    }
+  },
+  child: Text(
+    'View',
+    style: GoogleFonts.poppins(
+      fontSize: 12,
+      fontWeight: FontWeight.bold,
+      color: Colors.blueGrey.shade600,
+    ),
   ),
 ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -545,6 +574,72 @@ Container(
       ],
     );
   }
+
+
+Widget _buildOfficerContent(bool isWeb) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Officer Dashboard Access',
+        style: GoogleFonts.poppins(
+          fontSize: isWeb ? 18 : 16,
+          fontWeight: FontWeight.w600,
+          color: Colors.grey.shade800,
+        ),
+      ),
+      
+      const SizedBox(height: 12),
+      
+      Text(
+        'You have officer privileges for managing safety reports and community data:',
+        style: GoogleFonts.poppins(
+          fontSize: isWeb ? 14 : 13,
+          color: Colors.grey.shade600,
+          height: 1.5,
+        ),
+      ),
+      
+      const SizedBox(height: 16),
+      
+      _buildFeatureList(isWeb, [
+        {'icon': Icons.verified_rounded, 'text': 'Review and approve incident reports', 'available': true},
+        {'icon': Icons.map_rounded, 'text': 'Monitor assigned area safety patterns', 'available': true},
+        {'icon': Icons.assignment_rounded, 'text': 'Manage community safety reports', 'available': true},
+        {'icon': Icons.location_on_rounded, 'text': 'Update safe spot verification status', 'available': true},
+        {'icon': Icons.phone_in_talk_rounded, 'text': 'Access emergency response tools', 'available': true},
+      ]),
+      
+      const SizedBox(height: 16),
+      
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.indigo.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.indigo.shade200),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.shield_rounded, color: Colors.indigo.shade600, size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Your role is crucial in maintaining community safety. Thank you for your service to Zamboanga City.',
+                style: GoogleFonts.poppins(
+                  fontSize: isWeb ? 13 : 12,
+                  color: Colors.indigo.shade700,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
 
   Widget _buildFeatureList(bool isWeb, List<Map<String, dynamic>> features) {
     return Column(
@@ -643,6 +738,48 @@ Container(
             
             const SizedBox(height: 12),
           ],
+
+          if (widget.userType == UserType.admin) ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  _animationController.reverse().then((_) {
+                    if (mounted) {
+                      Navigator.of(context).pop(); // Close modal
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const AdminDashboardScreen()),
+                      );
+                    }
+                  });
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color.fromARGB(255, 61, 91, 131), // Matches admin header color
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.dashboard_rounded, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Go to Dashboard',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           
           // Continue Button
           SizedBox(
@@ -680,6 +817,8 @@ void showWelcomeModal(
   required UserType userType,
   String? userName,
   VoidCallback? onCreateAccount,
+  bool isSidebarVisible = true, // Add sidebar visibility
+  double sidebarWidth = 280, // Add sidebar width
 }) {
   showDialog(
     context: context,
@@ -690,6 +829,8 @@ void showWelcomeModal(
         userName: userName,
         onClose: () => Navigator.of(context).pop(),
         onCreateAccount: onCreateAccount,
+        isSidebarVisible: isSidebarVisible,
+        sidebarWidth: sidebarWidth,
       );
     },
   );

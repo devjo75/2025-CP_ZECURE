@@ -22,18 +22,42 @@ class HotspotFilterService with ChangeNotifier {
   bool _showTraffic = true;
   bool _showAlerts = true;
 
+  // Mode toggle
+  bool _isShowingCrimes = true;
+  
+  // Safe Spot Type filters
+  bool _showPoliceStations = true;
+  bool _showGovernmentBuildings = true;
+  bool _showHospitals = true;
+  bool _showSchools = true;
+  bool _showShoppingMalls = true;
+  bool _showWellLitAreas = true;
+  bool _showSecurityCameras = true;
+  bool _showFireStations = true;
+  bool _showReligiousBuildings = true;
+  bool _showCommunityCenters = true;
+  
+  // Safe Spot Status filters
+  bool _showSafeSpotsPending = true;
+  bool _showSafeSpotsApproved = true;
+  bool _showSafeSpotsRejected = true;
+  
+  // Safe Spot Verification filters
+  bool _showVerifiedSafeSpots = true;
+  bool _showUnverifiedSafeSpots = true;
+
   // Track current user to reset filters when user changes
   String? _currentUserId;
 
-  // Getters
+  // Existing getters
   bool get showCritical => _showCritical;
   bool get showHigh => _showHigh;
   bool get showMedium => _showMedium;
   bool get showLow => _showLow;
   bool get showPending => _showPending;
   bool get showRejected => _showRejected;
-  bool get showActive => _showActive;      // New getter
-  bool get showInactive => _showInactive;  // New getter
+  bool get showActive => _showActive;
+  bool get showInactive => _showInactive;
   bool get showProperty => _showProperty;
   bool get showViolent => _showViolent;
   bool get showDrug => _showDrug;
@@ -41,13 +65,33 @@ class HotspotFilterService with ChangeNotifier {
   bool get showFinancial => _showFinancial;
   bool get showTraffic => _showTraffic;
   bool get showAlerts => _showAlerts;
+  
+  // New getters for safe spots
+  bool get isShowingCrimes => _isShowingCrimes;
+  bool get showPoliceStations => _showPoliceStations;
+  bool get showGovernmentBuildings => _showGovernmentBuildings;
+  bool get showHospitals => _showHospitals;
+  bool get showSchools => _showSchools;
+  bool get showShoppingMalls => _showShoppingMalls;
+  bool get showWellLitAreas => _showWellLitAreas;
+  bool get showSecurityCameras => _showSecurityCameras;
+  bool get showFireStations => _showFireStations;
+  bool get showReligiousBuildings => _showReligiousBuildings;
+  bool get showCommunityCenters => _showCommunityCenters;
+  
+  bool get showSafeSpotsPending => _showSafeSpotsPending;
+  bool get showSafeSpotsApproved => _showSafeSpotsApproved;
+  bool get showSafeSpotsRejected => _showSafeSpotsRejected;
+  
+  bool get showVerifiedSafeSpots => _showVerifiedSafeSpots;
+  bool get showUnverifiedSafeSpots => _showUnverifiedSafeSpots;
 
   // Method to reset filters when user changes or logs out
   void resetFiltersForUser(String? newUserId) {
     if (_currentUserId != newUserId) {
       _currentUserId = newUserId;
       
-      // Reset all filters to default (true)
+      // Reset all crime filters to default (true)
       _showCritical = true;
       _showHigh = true;
       _showMedium = true;
@@ -64,11 +108,37 @@ class HotspotFilterService with ChangeNotifier {
       _showTraffic = true;
       _showAlerts = true;
       
+      // Reset all safe spot filters to default
+      _isShowingCrimes = true;
+      _showPoliceStations = true;
+      _showGovernmentBuildings = true;
+      _showHospitals = true;
+      _showSchools = true;
+      _showShoppingMalls = true;
+      _showWellLitAreas = true;
+      _showSecurityCameras = true;
+      _showFireStations = true;
+      _showReligiousBuildings = true;
+      _showCommunityCenters = true;
+      
+      _showSafeSpotsPending = true;
+      _showSafeSpotsApproved = true;
+      _showSafeSpotsRejected = true;
+      
+      _showVerifiedSafeSpots = true;
+      _showUnverifiedSafeSpots = true;
+      
       notifyListeners();
     }
   }
 
-  // Severity toggle methods
+  // Mode toggle method
+  void setFilterMode(bool showCrimes) {
+    _isShowingCrimes = showCrimes;
+    notifyListeners();
+  }
+
+  // Existing severity toggle methods
   void toggleCritical() {
     _showCritical = !_showCritical;
     notifyListeners();
@@ -89,7 +159,7 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
-  // Status toggle methods
+  // Existing status toggle methods
   void togglePending() {
     _showPending = !_showPending;
     notifyListeners();
@@ -100,7 +170,6 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
-  // New active/inactive toggle methods
   void toggleActive() {
     _showActive = !_showActive;
     notifyListeners();
@@ -111,7 +180,7 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
-  // Category toggle methods
+  // Existing category toggle methods
   void toggleProperty() {
     _showProperty = !_showProperty;
     notifyListeners();
@@ -147,6 +216,85 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
+  // Safe Spot Type toggle methods
+  void togglePoliceStations() {
+    _showPoliceStations = !_showPoliceStations;
+    notifyListeners();
+  }
+  
+  void toggleGovernmentBuildings() {
+    _showGovernmentBuildings = !_showGovernmentBuildings;
+    notifyListeners();
+  }
+  
+  void toggleHospitals() {
+    _showHospitals = !_showHospitals;
+    notifyListeners();
+  }
+  
+  void toggleSchools() {
+    _showSchools = !_showSchools;
+    notifyListeners();
+  }
+  
+  void toggleShoppingMalls() {
+    _showShoppingMalls = !_showShoppingMalls;
+    notifyListeners();
+  }
+  
+  void toggleWellLitAreas() {
+    _showWellLitAreas = !_showWellLitAreas;
+    notifyListeners();
+  }
+  
+  void toggleSecurityCameras() {
+    _showSecurityCameras = !_showSecurityCameras;
+    notifyListeners();
+  }
+  
+  void toggleFireStations() {
+    _showFireStations = !_showFireStations;
+    notifyListeners();
+  }
+  
+  void toggleReligiousBuildings() {
+    _showReligiousBuildings = !_showReligiousBuildings;
+    notifyListeners();
+  }
+  
+  void toggleCommunityCenters() {
+    _showCommunityCenters = !_showCommunityCenters;
+    notifyListeners();
+  }
+  
+  // Safe Spot Status toggle methods
+  void toggleSafeSpotsPending() {
+    _showSafeSpotsPending = !_showSafeSpotsPending;
+    notifyListeners();
+  }
+  
+  void toggleSafeSpotsApproved() {
+    _showSafeSpotsApproved = !_showSafeSpotsApproved;
+    notifyListeners();
+  }
+  
+  void toggleSafeSpotsRejected() {
+    _showSafeSpotsRejected = !_showSafeSpotsRejected;
+    notifyListeners();
+  }
+  
+  // Safe Spot Verification toggle methods
+  void toggleVerifiedSafeSpots() {
+    _showVerifiedSafeSpots = !_showVerifiedSafeSpots;
+    notifyListeners();
+  }
+  
+  void toggleUnverifiedSafeSpots() {
+    _showUnverifiedSafeSpots = !_showUnverifiedSafeSpots;
+    notifyListeners();
+  }
+
+  // Existing hotspot filtering logic
   bool shouldShowHotspot(Map<String, dynamic> hotspot) {
     final status = hotspot['status'] ?? 'approved';
     final crimeType = hotspot['crime_type'];
@@ -210,5 +358,61 @@ class HotspotFilterService with ChangeNotifier {
       default:
         return true;
     }
+  }
+
+  // New safe spot filtering logic
+  bool shouldShowSafeSpot(Map<String, dynamic> safeSpot) {
+    // Status filtering
+    final status = safeSpot['status'] ?? 'pending';
+    if (status == 'pending' && !_showSafeSpotsPending) return false;
+    if (status == 'approved' && !_showSafeSpotsApproved) return false;
+    if (status == 'rejected' && !_showSafeSpotsRejected) return false;
+    
+    // Verification filtering
+    final verified = safeSpot['verified'] ?? false;
+    if (verified && !_showVerifiedSafeSpots) return false;
+    if (!verified && !_showUnverifiedSafeSpots) return false;
+    
+    // Type filtering
+    final safeSpotType = safeSpot['safe_spot_types'];
+    if (safeSpotType != null) {
+      final typeName = safeSpotType['name']?.toString().toLowerCase() ?? '';
+      
+      if (typeName.contains('police') && !_showPoliceStations) return false;
+      if (typeName.contains('government') && !_showGovernmentBuildings) return false;
+      if (typeName.contains('hospital') && !_showHospitals) return false;
+      if (typeName.contains('school') && !_showSchools) return false;
+      if (typeName.contains('mall') && !_showShoppingMalls) return false;
+      if (typeName.contains('lit') && !_showWellLitAreas) return false;
+      if (typeName.contains('security') && !_showSecurityCameras) return false;
+      if (typeName.contains('fire') && !_showFireStations) return false;
+      if ((typeName.contains('church') || typeName.contains('religious')) && !_showReligiousBuildings) return false;
+      if (typeName.contains('community') && !_showCommunityCenters) return false;
+    }
+    
+    return true;
+  }
+  
+  // Reset all safe spot filters
+  void resetSafeSpotFilters() {
+    _showPoliceStations = true;
+    _showGovernmentBuildings = true;
+    _showHospitals = true;
+    _showSchools = true;
+    _showShoppingMalls = true;
+    _showWellLitAreas = true;
+    _showSecurityCameras = true;
+    _showFireStations = true;
+    _showReligiousBuildings = true;
+    _showCommunityCenters = true;
+    
+    _showSafeSpotsPending = true;
+    _showSafeSpotsApproved = true;
+    _showSafeSpotsRejected = true;
+    
+    _showVerifiedSafeSpots = true;
+    _showUnverifiedSafeSpots = true;
+    
+    notifyListeners();
   }
 }

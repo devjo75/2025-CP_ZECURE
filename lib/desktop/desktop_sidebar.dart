@@ -14,7 +14,7 @@ class ResponsiveNavigation extends StatelessWidget {
     required this.currentIndex,
     required this.onTap,
     required this.unreadNotificationCount,
-    this.isSidebarVisible = true,
+    this.isSidebarVisible = false, // Changed default to false (mini sidebar)
     this.onToggle,
     required this.isUserLoggedIn,
   });
@@ -52,7 +52,7 @@ class DesktopSidebar extends StatelessWidget {
     required this.currentIndex,
     required this.onTap,
     required this.unreadNotificationCount,
-    this.isVisible = true,
+    this.isVisible = false, // Changed default to false (mini sidebar)
     this.onToggle,
   });
 
@@ -61,15 +61,19 @@ class DesktopSidebar extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
-      width: isVisible ? 280 : 0,
+      width: isVisible ? 280 : 64, // Full sidebar: 280, Mini sidebar: 64
       height: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Colors.white,
-        // ← Removed the entire border property
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 12,
+            offset: const Offset(2, 0),
+          ),
+        ],
       ),
-              
-      
-      child: isVisible ? _buildSidebarContent() : null,
+      child: isVisible ? _buildSidebarContent() : _buildMiniSidebarContent(context),
     );
   }
 
@@ -99,8 +103,8 @@ class DesktopSidebar extends StatelessWidget {
                 const SizedBox(height: 4),
                 _buildModernNavItem(
                   index: 1,
-                  icon: Icons.safety_check_rounded,
-                  title: 'Quick Access',
+                  icon: Icons.directions,
+                  title: 'Navigation',
                   subtitle: 'Safety features',
                   isActive: currentIndex == 1,
                   onTap: () => onTap(1),
@@ -138,7 +142,163 @@ class DesktopSidebar extends StatelessWidget {
     );
   }
 
-  
+  Widget _buildMiniSidebarContent(BuildContext context) {
+    return Column(
+      children: [
+        // Top padding
+        SizedBox(height: MediaQuery.of(context).padding.top + 20),
+        
+        // Mini logo at top
+        _buildMiniLogo(),
+        
+        const SizedBox(height: 24),
+        
+        // Mini navigation items
+        _buildMiniNavItem(
+          index: 0,
+          icon: Icons.map_rounded,
+          title: 'Map',
+          isActive: currentIndex == 0,
+          onTap: () => onTap(0),
+        ),
+        const SizedBox(height: 8),
+        _buildMiniNavItem(
+          index: 1,
+          icon: Icons.directions,
+          title: 'Navigation',
+          isActive: currentIndex == 1,
+          onTap: () => onTap(1),
+        ),
+        const SizedBox(height: 8),
+        _buildMiniNavItem(
+          index: 2,
+          icon: Icons.notifications_rounded,
+          title: 'Notifications',
+          isActive: currentIndex == 2,
+          onTap: () => onTap(2),
+          badge: unreadNotificationCount > 0 ? unreadNotificationCount : null,
+        ),
+        const SizedBox(height: 8),
+        _buildMiniNavItem(
+          index: 3,
+          icon: Icons.person_rounded,
+          title: 'Profile',
+          isActive: currentIndex == 3,
+          onTap: () => onTap(3),
+        ),
+        
+        // Spacer to fill remaining space
+        const Spacer(),
+        
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget _buildMiniLogo() {
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+            spreadRadius: 0,
+          ),
+        ],
+        border: Border.all(
+          color: const Color(0xFFE5E7EB),
+          width: 1,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.asset(
+          'assets/images/zecure.png',
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            return const Icon(
+              Icons.security_rounded,
+              color: Color(0xFF4F8EF7),
+              size: 28,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniNavItem({
+    required int index,
+    required IconData icon,
+    required String title,
+    required bool isActive,
+    required VoidCallback onTap,
+    int? badge,
+  }) {
+    return Tooltip(
+      message: title,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: isActive 
+                  ? const Color(0xFF4F8EF7).withOpacity(0.1)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  icon,
+                  color: isActive 
+                      ? const Color(0xFF4F8EF7) 
+                      : const Color(0xFF6B7280),
+                  size: 24,
+                ),
+                if (badge != null)
+                  Positioned(
+                    right: -8,
+                    top: -8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 20,
+                        minHeight: 20,
+                      ),
+                      child: Text(
+                        badge > 99 ? '99+' : '$badge',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildGradientHeader() {
     return Container(
       width: double.infinity,
@@ -444,7 +604,7 @@ class ResponsiveSidebarToggle extends StatelessWidget {
 
     return Positioned(
       top: MediaQuery.of(context).padding.top + 16,
-      left: isSidebarVisible ? 296 : 16,
+      left: isSidebarVisible ? 296 : 80, // Adjusted position for mini sidebar
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),
         child: Container(
@@ -457,6 +617,13 @@ class ResponsiveSidebarToggle extends StatelessWidget {
               color: const Color(0xFFE5E7EB),
               width: 1,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 12,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: IconButton(
             iconSize: 20,

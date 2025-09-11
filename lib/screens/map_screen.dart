@@ -16,6 +16,8 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:zecure/desktop/hotlines_desktop.dart';
+import 'package:zecure/desktop/quick_access_desktop.dart';
 import 'package:zecure/main.dart';
 import 'package:zecure/screens/auth/register_screen.dart';
 import 'package:zecure/screens/quick_access_screen.dart';
@@ -125,7 +127,7 @@ Timer? _deferredLoadTimer;
   
 
   // Side bar for Desktop
-  bool _isSidebarVisible = true;
+ bool _isSidebarVisible = false;
 
   // Photo upload state
 
@@ -169,10 +171,14 @@ Timer? _deferredLoadTimer;
   bool _showClearButton = false;
 
   // User state
-  Map<String, dynamic>? _userProfile;
-  bool _isAdmin = false;
-  MainTab _currentTab = MainTab.map;
-  late ProfileScreen _profileScreen;
+Map<String, dynamic>? _userProfile;
+bool _isAdmin = false;
+bool _isOfficer = false;
+// Helper getter for admin or officer permissions
+bool get _hasAdminPermissions => _isAdmin || _isOfficer;
+MainTab _currentTab = MainTab.map;
+late ProfileScreen _profileScreen;
+
 
   // HOTSPOT
   List<Map<String, dynamic>> _hotspots = [];
@@ -198,18 +204,48 @@ Map<String, Timer> _updateTimers = {}; // Per-ID debounce timers
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
   if (!_markersLoaded) return []; // Don't show markers until loaded
-  
+
   if (_currentZoom < 10.0) {
     // Very zoomed out: show only critical hotspots
-    return _hotspots.where((h) => h['crime_type']?['level'] == 'critical').take(20).toList();
+    return _hotspots
+        .where((h) =>
+            h['crime_type']?['level'] == 'critical' &&
+            h['status'] == 'approved' &&
+            h['active_status'] == 'active')
+        .take(20)
+        .toList();
   } else if (_currentZoom < 13.0) {
-    // Medium zoom: show high priority hotspots
-    return _hotspots.where((h) => 
-      ['critical', 'high'].contains(h['crime_type']?['level'])
-    ).take(_maxMarkersToShow).toList();
+    // Medium zoom: show critical and high priority hotspots
+    return _hotspots
+        .where((h) =>
+            ['critical', 'high'].contains(h['crime_type']?['level']) &&
+            h['status'] == 'approved' &&
+            h['active_status'] == 'active')
+        .take(_maxMarkersToShow)
+        .toList();
   } else {
-    // Close zoom: show all hotspots but with limit
-    return _hotspots.take(_maxMarkersToShow * 2).toList();
+    // Close zoom: show all hotspots, including rejected and inactive, with limit
+    return _hotspots
+        .where((h) {
+          final status = h['status'] ?? 'approved';
+          final activeStatus = h['active_status'] ?? 'active';
+          final currentUserId = _userProfile?['id'];
+          final createdBy = h['created_by'];
+          final reportedBy = h['reported_by'];
+          final isOwnHotspot = currentUserId != null &&
+              (currentUserId == createdBy || currentUserId == reportedBy);
+
+          // Include all hotspots (approved, pending, rejected, active, inactive)
+          // Admins see all, users see approved/active, own hotspots, or pending
+return _hasAdminPermissions ||
+    status == 'approved' ||
+    status == 'pending' ||
+    (status == 'rejected' && isOwnHotspot) ||
+    activeStatus == 'active' ||
+    (activeStatus == 'inactive' && isOwnHotspot);
+        })
+        .take(_maxMarkersToShow * 2)
+        .toList();
   }
 }
 
@@ -222,18 +258,18 @@ List<Map<String, dynamic>> get _visibleSafeSpots {
     return _safeSpots.where((s) => s['verified'] == true).take(30).toList();
   } else {
     // Show all relevant safe spots when zoomed in
-    return _safeSpots.where((safeSpot) {
-      final status = safeSpot['status'] ?? 'pending';
-      final currentUserId = _userProfile?['id'];
-      final createdBy = safeSpot['created_by'];
-      final isOwnSpot = currentUserId != null && currentUserId == createdBy;
-      
-      if (status == 'approved') return true;
-      if (status == 'pending' && currentUserId != null) return true;
-      if (isOwnSpot && status == 'rejected') return true;
-      if (_isAdmin) return true;
-      return false;
-    }).toList();
+return _safeSpots.where((safeSpot) {
+  final status = safeSpot['status'] ?? 'pending';
+  final currentUserId = _userProfile?['id'];
+  final createdBy = safeSpot['created_by'];
+  final isOwnSpot = currentUserId != null && currentUserId == createdBy;
+  
+  if (status == 'approved') return true;
+  if (status == 'pending' && currentUserId != null) return true;
+  if (isOwnSpot && status == 'rejected') return true;
+  if (_hasAdminPermissions) return true;
+  return false;
+}).toList();
   }
 }
 
@@ -352,6 +388,7 @@ void _initializeEssentials() {
         setState(() {
           _userProfile = null;
           _isAdmin = false;
+          _isOfficer = false;
           _hotspots = [];
           _notifications = [];
           _unreadNotificationCount = 0;
@@ -580,7 +617,7 @@ Future<void> _loadSafeSpots() async {
     
     final safeSpots = await SafeSpotService.getSafeSpots(
       userId: _userProfile?['id'],
-      isAdmin: _isAdmin,
+      isAdmin: _hasAdminPermissions, // Use combined permissions
     );
     
     print('Loaded ${safeSpots.length} safe spots from database');
@@ -733,48 +770,30 @@ void _handleSafeSpotInsert(PostgresChangePayload payload) async {
 
 void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
   if (!mounted) return;
-  
+
   final spotId = payload.newRecord['id'] as String;
   final updateKey = '${spotId}_${payload.newRecord['updated_at']}';
-  
-  // Prevent duplicate processing of the same update
+
   if (_processedUpdateIds.contains(updateKey)) {
     print('🔄 Skipping duplicate update for safe spot: $spotId');
     return;
   }
-  
-  // Cancel any existing timer for this spot ID
+
   _updateTimers[spotId]?.cancel();
-  
-  // Debounce rapid updates for the same spot
   _updateTimers[spotId] = Timer(Duration(milliseconds: 500), () async {
     if (!mounted) return;
-    
-    // Mark this update as processed
+
     _processedUpdateIds.add(updateKey);
-    
-    // Clean up old processed IDs to prevent memory bloat (keep last 100)
     if (_processedUpdateIds.length > 100) {
       final oldIds = _processedUpdateIds.take(_processedUpdateIds.length - 50).toList();
       _processedUpdateIds.removeAll(oldIds);
     }
-    
+
     print('=== PROCESSING SAFE SPOT UPDATE ===');
     print('Spot ID: $spotId');
     print('Update key: $updateKey');
-    
-    try {
-      // Get the previous safe spot data BEFORE making the API call
-      final previousSafeSpot = _safeSpots.firstWhere(
-        (s) => s['id'] == spotId,
-        orElse: () => {},
-      );
-      
-      final previousStatus = previousSafeSpot.isNotEmpty ? previousSafeSpot['status'] ?? 'pending' : null;
-      print('Previous status: $previousStatus');
-      print('New status from payload: ${payload.newRecord['status']}');
 
-      // Fetch the updated safe spot data
+    try {
       final response = await Supabase.instance.client
           .from('safe_spots')
           .select('''
@@ -790,6 +809,21 @@ void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
               first_name,
               last_name,
               role
+            ),
+            approved_profile:approved_by (
+              id,
+              first_name,
+              last_name
+            ),
+            rejected_profile:rejected_by (
+              id,
+              first_name,
+              last_name
+            ),
+            updated_profile:last_updated_by (
+              id,
+              first_name,
+              last_name
             )
           ''')
           .eq('id', spotId)
@@ -797,49 +831,33 @@ void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
 
       if (!mounted) return;
 
-      print('Fetched response status: ${response['status']}');
-
-      // Check if the spot should be visible to the current user
       final shouldShow = _shouldUserSeeSafeSpot(response);
-      
       setState(() {
-        // Find existing spot index
         final existingIndex = _safeSpots.indexWhere((s) => s['id'] == spotId);
-        
         if (shouldShow) {
           if (existingIndex != -1) {
-            // Update existing spot
             _safeSpots[existingIndex] = response;
             print('✅ Updated existing safe spot at index $existingIndex');
           } else {
-            // Add new spot if it wasn't visible before
             _safeSpots.add(response);
             print('✅ Added previously hidden safe spot');
           }
-        } else {
-          // Remove spot if it should no longer be visible
-          if (existingIndex != -1) {
-            _safeSpots.removeAt(existingIndex);
-            print('🗑️ Removed safe spot that should no longer be visible');
-          }
+        } else if (existingIndex != -1) {
+          _safeSpots.removeAt(existingIndex);
+          print('🗑️ Removed safe spot that should no longer be visible');
         }
-        
         print('Final safe spots count: ${_safeSpots.length}');
       });
 
-      // Show appropriate message (only once per actual status change)
-      _showUpdateMessage(previousSafeSpot, response, previousStatus);
-
+      _showUpdateMessage(_safeSpots.firstWhere((s) => s['id'] == spotId, orElse: () => {}), response, payload.newRecord['status']);
     } catch (e) {
       print('❌ Error in _handleSafeSpotUpdate: $e');
       if (mounted) {
         _showSnackBar('Error updating safe spot: ${e.toString()}');
       }
     }
-    
-    // Clean up the timer reference
+
     _updateTimers.remove(spotId);
-    
     print('=== END PROCESSING SAFE SPOT UPDATE ===\n');
   });
 }
@@ -895,10 +913,12 @@ bool _shouldUserSeeSafeSpot(Map<String, dynamic> safeSpot) {
   print('Created by: $createdBy');
   print('Current user: $currentUserId');
   print('Is admin: $_isAdmin');
+  print('Is officer: $_isOfficer');
+  print('Has admin permissions: $_hasAdminPermissions');
   
-  // Admins can see everything
-  if (_isAdmin) {
-    print('Admin can see: true');
+  // Admins and Officers can see everything
+  if (_hasAdminPermissions) {
+    print('Admin/Officer can see: true');
     return true;
   }
   
@@ -1015,38 +1035,49 @@ void _showWelcomeModal() async {
     try {
       final response = await Supabase.instance.client
           .from('users')
-          .select('first_name, role, created_at') // 👈 fetch first_name instead
+          .select('first_name, role, created_at')
           .eq('id', user.id)
           .single();
       
-      final isAdmin = response['role'] == 'admin';
-      final firstName = response['first_name']; // 👈 use first_name
+      final role = response['role'];
+      final isAdmin = role == 'admin';
+      final isOfficer = role == 'officer';
+      final firstName = response['first_name'];
       final createdAt = DateTime.parse(response['created_at']);
-      final isNewUser = DateTime.now().difference(createdAt).inMinutes < 5; // Created within last 5 minutes
+      final isNewUser = DateTime.now().difference(createdAt).inMinutes < 5;
       
       if (isNewUser) {
-        // Show first-time welcome modal for new users
         showFirstTimeWelcomeModal(
           context,
-          userName: firstName, // 👈 pass first name
+          userName: firstName,
         );
       } else {
-        // Show regular welcome modal for returning users
+        UserType userType;
+        if (isAdmin) {
+          userType = UserType.admin;
+        } else if (isOfficer) {
+          userType = UserType.officer;
+        } else {
+          userType = UserType.user;
+        }
+        
         showWelcomeModal(
           context,
-          userType: isAdmin ? UserType.admin : UserType.user,
-          userName: firstName, // 👈 pass first name
+          userType: userType,
+          userName: firstName,
+          isSidebarVisible: _isSidebarVisible,
+          sidebarWidth: 285,
         );
       }
     } catch (e) {
-      // Fallback to regular user welcome
       showWelcomeModal(
         context,
         userType: UserType.user,
+        isSidebarVisible: _isSidebarVisible,
+        sidebarWidth: 285,
       );
     }
   } else {
-    // Show guest welcome modal
     showWelcomeModal(
       context,
       userType: UserType.guest,
@@ -1056,6 +1087,8 @@ void _showWelcomeModal() async {
           MaterialPageRoute(builder: (context) => const RegisterScreen()),
         );
       },
+      isSidebarVisible: _isSidebarVisible,
+      sidebarWidth: 285,
     );
   }
 }
@@ -1461,11 +1494,17 @@ Future<void> _loadUserProfile() async {
           .eq('email', user.email as Object)
           .single();
       
-      if (mounted) {
+ if (mounted) {
         setState(() {
           _userProfile = response;
           _isAdmin = response['role'] == 'admin';
-          _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
+          _isOfficer = response['role'] == 'officer';
+          _profileScreen = ProfileScreen(
+  _authService, 
+  _userProfile, 
+  _isAdmin,           // Admin-only privileges
+  _hasAdminPermissions // Admin + Officer privileges
+);
           _profileScreen.initControllers();
         });
         
@@ -1609,12 +1648,12 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
       setState(() {
         final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
         
-        // Check if non-admin user should see this hotspot
-        final shouldShowForNonAdmin = _shouldNonAdminSeeHotspot(response);
+        // Check if non-admin/officer user should see this hotspot
+        final shouldShowForNonAdminOfficer = _shouldNonAdminOfficerSeeHotspot(response);
         
         if (index != -1) {
           // Hotspot exists in current list
-          if (_isAdmin || shouldShowForNonAdmin) {
+          if (_hasAdminPermissions || shouldShowForNonAdminOfficer) {
             // Update the existing hotspot with proper crime_type structure
             final crimeType = response['crime_type'] ?? {};
             _hotspots[index] = {
@@ -1628,12 +1667,12 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
               }
             };
           } else {
-            // Non-admin user should no longer see this hotspot (e.g., it was rejected)
+            // Non-admin/officer user should no longer see this hotspot (e.g., it was rejected)
             _hotspots.removeAt(index);
           }
         } else {
           // Hotspot doesn't exist in current list
-          if (_isAdmin || shouldShowForNonAdmin) {
+          if (_hasAdminPermissions || shouldShowForNonAdminOfficer) {
             // Add it if user should see it
             final crimeType = response['crime_type'] ?? {};
             _hotspots.add({
@@ -1919,7 +1958,7 @@ Widget _buildEditPhotoSection({
 
 
 
-bool _shouldNonAdminSeeHotspot(Map<String, dynamic> hotspot) {
+bool shouldShowForNonAdminOfficer(Map<String, dynamic> hotspot) {
   final currentUserId = _userProfile?['id'];
   final status = hotspot['status'] ?? 'approved';
   final activeStatus = hotspot['active_status'] ?? 'active';
@@ -1970,14 +2009,14 @@ Future<void> _loadHotspots() async {
           crime_type: type_id (id, name, level, category, description)
         ''');
 
-    // Apply filters based on admin status
+    // Apply filters based on admin/officer status
     PostgrestFilterBuilder filteredQuery;
-    if (!_isAdmin) {
-      print('Filtering hotspots for non-admin user');
+    if (!_hasAdminPermissions) {
+      print('Filtering hotspots for non-admin/officer user');
       final currentUserId = _userProfile?['id'];
       
       if (currentUserId != null) {
-        // For non-admins, show:
+        // For non-admins/officers, show:
         // 1. All approved active hotspots
         // 2. User's own reports (regardless of status and active_status)
         filteredQuery = query.or(
@@ -1992,7 +2031,7 @@ Future<void> _loadHotspots() async {
             .eq('status', 'approved');
       }
     } else {
-      print('Admin user - loading all hotspots');
+      print('Admin/Officer user - loading all hotspots');
       filteredQuery = query;
     }
 
@@ -2020,7 +2059,7 @@ Future<void> _loadHotspots() async {
         }).toList();
         
         print('Loaded ${_hotspots.length} hotspots');
-        if (_isAdmin) {
+        if (_hasAdminPermissions) {
           final inactiveCount = _hotspots.where((h) => h['active_status'] == 'inactive').length;
           print('Inactive hotspots count: $inactiveCount');
         }
@@ -2379,215 +2418,479 @@ void _showHotspotFilterDialog() {
           ),
           child: Consumer<HotspotFilterService>(
             builder: (context, filterService, child) {
-              return SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16.0, 24.0, 16.0, 16.0),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Filter Crimes',
-                        style: TextStyle(
-                          fontSize: 20, 
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      
-                      // Severity filters
-                      const Padding(
-                        padding: EdgeInsets.only(left: 8.0),
-                        child: Text(
-                          'Severity',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey,
+              return StatefulBuilder(
+                builder: (context, setModalState) {
+                  bool isShowingCrimes = filterService.isShowingCrimes;
+                  
+                  return SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16.0, 24.0, 16.0, 16.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Header with toggle
+                          Row(
+                            children: [
+                              Text(
+                                isShowingCrimes ? 'Filter Crimes' : 'Safe Spots',
+                                style: const TextStyle(
+                                  fontSize: 20, 
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const Spacer(),
+                              // Toggle button
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade200,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    GestureDetector(
+                                      onTap: () {
+                                        setModalState(() {
+                                          filterService.setFilterMode(true); // Show crimes
+                                        });
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          color: isShowingCrimes ? Colors.red.shade600 : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.warning_rounded,
+                                              size: 16,
+                                              color: isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'Crimes',
+                                              style: TextStyle(
+                                                color: isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                                fontWeight: isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    GestureDetector(
+                                      onTap: () {
+                                        setModalState(() {
+                                          filterService.setFilterMode(false); // Show safe spots
+                                        });
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          color: !isShowingCrimes ? Colors.green.shade600 : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.shield_rounded,
+                                              size: 16,
+                                              color: !isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'Safe Spots',
+                                              style: TextStyle(
+                                                color: !isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                                fontWeight: !isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      _buildFilterToggle(
-                        context,
-                        'Critical',
-                        FontAwesomeIcons.exclamationTriangle,  // Better icon for critical
-                        const Color.fromARGB(255, 219, 0, 0),
-                        filterService.showCritical,
-                        (value) => filterService.toggleCritical(),
-                      ),
-                      _buildFilterToggle(
-                        context,
-                        'High',
-                        Icons.priority_high,  // Better icon for high priority
-                        const Color.fromARGB(255, 223, 106, 11),
-                        filterService.showHigh,
-                        (value) => filterService.toggleHigh(),
-                      ),
-                      _buildFilterToggle(
-                        context,
-                        'Medium',
-                        Icons.remove,  // Better icon for medium
-                        const Color.fromARGB(167, 116, 66, 9),
-                        filterService.showMedium,
-                        (value) => filterService.toggleMedium(),
-                      ),
-                      _buildFilterToggle(
-                        context,
-                        'Low',
-                        Icons.low_priority,  // Better icon for low priority
-                        const Color.fromARGB(255, 216, 187, 23),
-                        filterService.showLow,
-                        (value) => filterService.toggleLow(),
-                      ),
-                      const SizedBox(height: 16),
-                      
-                      // Category filters
-                    const Padding(
-  padding: EdgeInsets.only(left: 8.0),
-  child: Text(
-    'Categories',
-    style: TextStyle(
-      fontSize: 16,
-      fontWeight: FontWeight.w600,
-      color: Colors.grey,
-    ),
-  ),
-),
-const SizedBox(height: 8),
-_buildFilterToggle(
-  context,
-  'Violent',
-  FontAwesomeIcons.triangleExclamation,
-  Colors.blueGrey,  // Consistent color for all categories
-  filterService.showViolent,
-  (value) => filterService.toggleViolent(),
-),
-_buildFilterToggle(
-  context,
-  'Property',
-  FontAwesomeIcons.bagShopping,
-  Colors.blueGrey,  // Consistent color for all categories
-  filterService.showProperty,
-  (value) => filterService.toggleProperty(),
-),
-_buildFilterToggle(
-
-  context,
-  'Drug',
-  FontAwesomeIcons.cannabis,
-  Colors.blueGrey,  // Consistent color for all categories
-  filterService.showDrug,
-  (value) => filterService.toggleDrug(),
-),
-_buildFilterToggle(
-  context,
-  'Public Order',
-  Icons.balance,
-  Colors.blueGrey,  // Consistent color for all categories
-  filterService.showPublicOrder,
-  (value) => filterService.togglePublicOrder(),
-),
-_buildFilterToggle(
-  context,
-  'Financial',
-  Icons.attach_money,
-  Colors.blueGrey,  // Consistent color for all categories
-  filterService.showFinancial,
-  (value) => filterService.toggleFinancial(),
-),
-_buildFilterToggle(
-  context,
-  'Traffic',
-  Icons.traffic,
-  Colors.blueGrey,  // Consistent color for all categories
-  filterService.showTraffic,
-  (value) => filterService.toggleTraffic(),
-),
-_buildFilterToggle(
-  context,
-  'Alerts',
-  Icons.campaign,
-  Colors.blueGrey,  // Consistent color for all categories
-  filterService.showAlerts,
-  (value) => filterService.toggleAlerts(),
-),
-                      
-                      const SizedBox(height: 16),
-                      
-                      // Status filters (only for logged-in users)
-                      if (_userProfile != null) ...[
-                        const Padding(
-                          padding: EdgeInsets.only(left: 8.0),
-                          child: Text(
-                            'Status',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.grey,
+                          const SizedBox(height: 16),
+                          
+                          // Dynamic content based on toggle
+                          if (isShowingCrimes) ...[
+                            // CRIMES FILTERS
+                            // Severity filters
+                            const Padding(
+                              padding: EdgeInsets.only(left: 8.0),
+                              child: Text(
+                                'Severity',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        _buildFilterToggle(
-                          context,
-                          'Pending',
-                          Icons.hourglass_empty,  // Better pending icon
-                          Colors.deepPurple,
-                          filterService.showPending,
-                          (value) => filterService.togglePending(),
-                        ),
-                        _buildFilterToggle(
-                          context,
-                          'Rejected',
-                          Icons.cancel_outlined,  // Better rejected icon
-                          Colors.grey,
-                          filterService.showRejected,
-                          (value) => filterService.toggleRejected(),
-                        ),
-                        
-                        // Active/Inactive filters (only for admin and regular users)
-                        if (_userProfile?['role'] == 'admin' || _userProfile?['role'] == 'user') ...[
-                          _buildFilterToggle(
-                            context,
-                            'Active',
-                            Icons.check_circle_outline,  // Active icon
-                            Colors.green,
-                            filterService.showActive,
-                            (value) => filterService.toggleActive(),
-                          ),
-                          _buildFilterToggle(
-                            context,
-                            'Inactive',
-                            Icons.pause_circle_outline,  // Inactive icon
-                            Colors.grey,
-                            filterService.showInactive,
-                            (value) => filterService.toggleInactive(),
+                            const SizedBox(height: 8),
+                            _buildFilterToggle(
+                              context,
+                              'Critical',
+                              FontAwesomeIcons.exclamationTriangle,
+                              const Color.fromARGB(255, 219, 0, 0),
+                              filterService.showCritical,
+                              (value) => filterService.toggleCritical(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'High',
+                              Icons.priority_high,
+                              const Color.fromARGB(255, 223, 106, 11),
+                              filterService.showHigh,
+                              (value) => filterService.toggleHigh(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Medium',
+                              Icons.remove,
+                              const Color.fromARGB(167, 116, 66, 9),
+                              filterService.showMedium,
+                              (value) => filterService.toggleMedium(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Low',
+                              Icons.low_priority,
+                              const Color.fromARGB(255, 216, 187, 23),
+                              filterService.showLow,
+                              (value) => filterService.toggleLow(),
+                            ),
+                            const SizedBox(height: 16),
+                            
+                            // Category filters
+                            const Padding(
+                              padding: EdgeInsets.only(left: 8.0),
+                              child: Text(
+                                'Categories',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            _buildFilterToggle(
+                              context,
+                              'Violent',
+                              FontAwesomeIcons.triangleExclamation,
+                           const Color.fromARGB(255, 139, 96, 96),
+                              filterService.showViolent,
+                              (value) => filterService.toggleViolent(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Property',
+                              FontAwesomeIcons.bagShopping,
+                                const Color.fromARGB(255, 139, 96, 96),
+                              filterService.showProperty,
+                              (value) => filterService.toggleProperty(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Drug',
+                              FontAwesomeIcons.cannabis,
+                          const Color.fromARGB(255, 139, 96, 96),
+                              filterService.showDrug,
+                              (value) => filterService.toggleDrug(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Public Order',
+                              Icons.balance,
+                               const Color.fromARGB(255, 139, 96, 96),
+                              filterService.showPublicOrder,
+                              (value) => filterService.togglePublicOrder(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Financial',
+                              Icons.attach_money,
+                            const Color.fromARGB(255, 139, 96, 96),
+                              filterService.showFinancial,
+                              (value) => filterService.toggleFinancial(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Traffic',
+                              Icons.traffic,
+                               const Color.fromARGB(255, 139, 96, 96),
+                              filterService.showTraffic,
+                              (value) => filterService.toggleTraffic(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Alerts',
+                              Icons.campaign,
+                              const Color.fromARGB(255, 139, 96, 96),
+                              filterService.showAlerts,
+                              (value) => filterService.toggleAlerts(),
+                            ),
+                            
+                            const SizedBox(height: 16),
+                            
+                            // Status filters (only for logged-in users)
+                            if (_userProfile != null) ...[
+                              const Padding(
+                                padding: EdgeInsets.only(left: 8.0),
+                                child: Text(
+                                  'Status',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _buildFilterToggle(
+                                context,
+                                'Pending',
+                                Icons.hourglass_empty,
+                                Colors.deepPurple,
+                                filterService.showPending,
+                                (value) => filterService.togglePending(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Rejected',
+                                Icons.cancel_outlined,
+                                Colors.red,
+                                filterService.showRejected,
+                                (value) => filterService.toggleRejected(),
+                              ),
+                              
+                         // Active/Inactive filters (for admin, officer, and regular users)
+                                if (_userProfile?['role'] == 'admin' || _userProfile?['role'] == 'officer' || _userProfile?['role'] == 'user') ...[
+                                  _buildFilterToggle(
+                                    context,
+                                    'Active',
+                                    Icons.check_circle_outline,
+                                    Colors.green,
+                                    filterService.showActive,
+                                    (value) => filterService.toggleActive(),
+                                  ),
+                                  _buildFilterToggle(
+                                    context,
+                                    'Inactive',
+                                    Icons.pause_circle_outline,
+                                    Colors.grey,
+                                    filterService.showInactive,
+                                    (value) => filterService.toggleInactive(),
+                                  ),
+                                ],
+                              
+                              const SizedBox(height: 16),
+                            ],
+                          ] else ...[
+                            // SAFE SPOTS FILTERS
+                            // Safe Spot Types
+                            const Padding(
+                              padding: EdgeInsets.only(left: 8.0),
+                              child: Text(
+                                'Safe Spot Types',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            _buildFilterToggle(
+                              context,
+                              'Police Station',
+                              Icons.local_police,
+                               const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showPoliceStations,
+                              (value) => filterService.togglePoliceStations(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Government Building',
+                              Icons.account_balance,
+                            const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showGovernmentBuildings,
+                              (value) => filterService.toggleGovernmentBuildings(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Hospital',
+                              Icons.local_hospital,
+                            const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showHospitals,
+                              (value) => filterService.toggleHospitals(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'School',
+                              Icons.school,
+                              const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showSchools,
+                              (value) => filterService.toggleSchools(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Shopping Mall',
+                              Icons.store,
+                            const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showShoppingMalls,
+                              (value) => filterService.toggleShoppingMalls(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Well-lit Area',
+                              Icons.lightbulb,
+                             const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showWellLitAreas,
+                              (value) => filterService.toggleWellLitAreas(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Security Camera',
+                              Icons.security,
+                          const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showSecurityCameras,
+                              (value) => filterService.toggleSecurityCameras(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Fire Station',
+                              Icons.local_fire_department,
+                       const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showFireStations,
+                              (value) => filterService.toggleFireStations(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Religious Building',
+                              Icons.church,
+                           const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showReligiousBuildings,
+                              (value) => filterService.toggleReligiousBuildings(),
+                            ),
+                            _buildFilterToggle(
+                              context,
+                              'Community Center',
+                              Icons.group,
+                             const Color.fromARGB(255, 96, 139, 109),
+                              filterService.showCommunityCenters,
+                              (value) => filterService.toggleCommunityCenters(),
+                            ),
+                            
+                            const SizedBox(height: 16),
+                            
+                            // Safe Spot Status filters (only for logged-in users)
+                            if (_userProfile != null) ...[
+                              const Padding(
+                                padding: EdgeInsets.only(left: 8.0),
+                                child: Text(
+                                  'Status',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _buildFilterToggle(
+                                context,
+                                'Pending',
+                                Icons.hourglass_empty,
+                                Colors.deepPurple,
+                                filterService.showSafeSpotsPending,
+                                (value) => filterService.toggleSafeSpotsPending(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Approved',
+                                Icons.check_circle_outline,
+                                Colors.green,
+                                filterService.showSafeSpotsApproved,
+                                (value) => filterService.toggleSafeSpotsApproved(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Rejected',
+                                Icons.cancel_outlined,
+                                Colors.red,
+                                filterService.showSafeSpotsRejected,
+                                (value) => filterService.toggleSafeSpotsRejected(),
+                              ),
+                              
+                              const SizedBox(height: 16),
+                              
+                              // Verification filters
+                              const Padding(
+                                padding: EdgeInsets.only(left: 8.0),
+                                child: Text(
+                                  'Verification',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _buildFilterToggle(
+                                context,
+                                'Verified',
+                                Icons.verified,
+                                Colors.blue.shade600,
+                                filterService.showVerifiedSafeSpots,
+                                (value) => filterService.toggleVerifiedSafeSpots(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Unverified',
+                                Icons.help_outline,
+                                Colors.grey.shade600,
+                                filterService.showUnverifiedSafeSpots,
+                                (value) => filterService.toggleUnverifiedSafeSpots(),
+                              ),
+                              
+                              const SizedBox(height: 16),
+                            ],
+                          ],
+                          
+                          // Close button
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: Theme.of(context).primaryColor,
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Close'),
+                            ),
                           ),
                         ],
-                        
-                        const SizedBox(height: 16),
-                      ],
-                      
-                      // Close button
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Theme.of(context).primaryColor,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Close'),
-                        ),
                       ),
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               );
             },
           ),
@@ -2654,7 +2957,7 @@ void _showLocationOptions(LatLng position) async {
       builder: (context) {
         return LocationOptionsDialogDesktop(
           locationName: locationName,
-          isAdmin: _isAdmin,
+          isAdmin: _hasAdminPermissions, // Use combined permissions
           userProfile: _userProfile,
           distance: _distance,
           duration: _duration,
@@ -2663,7 +2966,7 @@ void _showLocationOptions(LatLng position) async {
           onShareLocation: () => _shareLocation(position),
           onReportHotspot: () => _showReportHotspotForm(position),
           onAddHotspot: () => _showAddHotspotForm(position),
-          onAddSafeSpot: () => _navigateToSafeSpotForm(position), // Updated callback
+          onAddSafeSpot: () => _navigateToSafeSpotForm(position),
         );
       },
     );
@@ -2712,7 +3015,7 @@ void _showLocationOptions(LatLng position) async {
                 },
               ),
 
-              if (!_isAdmin && _userProfile != null)
+              if (!_hasAdminPermissions && _userProfile != null)
                 ListTile(
                   leading: const Icon(Icons.report, color: Colors.orange),
                   title: const Text('Report Crime'),
@@ -2722,7 +3025,7 @@ void _showLocationOptions(LatLng position) async {
                     _showReportHotspotForm(position);
                   },
                 ),
-              if (_isAdmin)
+              if (_hasAdminPermissions)
                 ListTile(
                   leading: const Icon(Icons.add_location_alt),
                   title: const Text('Add Crime Incident'),
@@ -3682,7 +3985,7 @@ Widget _buildFloatingDurationWidget() {
                               child: TextFormField(
                                 controller: dateController,
                                 decoration: const InputDecoration(
-                                  labelText: 'Date',
+                                  labelText: 'Date of Incident',
                                   border: OutlineInputBorder(),
                                 ),
                                 readOnly: true,
@@ -3705,7 +4008,7 @@ Widget _buildFloatingDurationWidget() {
                               child: TextFormField(
                                 controller: timeController,
                                 decoration: const InputDecoration(
-                                  labelText: 'Time',
+                                  labelText: 'Time of Incident',
                                   border: OutlineInputBorder(),
                                 ),
                                 readOnly: true,
@@ -3833,7 +4136,7 @@ Widget _buildFloatingDurationWidget() {
                         TextFormField(
                           controller: dateController,
                           decoration: const InputDecoration(
-                            labelText: 'Date',
+                            labelText: 'Date of Incident',
                             border: OutlineInputBorder(),
                           ),
                           readOnly: true,
@@ -3854,7 +4157,7 @@ Widget _buildFloatingDurationWidget() {
                         TextFormField(
                           controller: timeController,
                           decoration: const InputDecoration(
-                            labelText: 'Time',
+                            labelText: 'Time of Incident',
                             border: OutlineInputBorder(),
                           ),
                           readOnly: true,
@@ -4156,7 +4459,7 @@ Future<void> _showMobileReportForm(
                   TextFormField(
                     controller: dateController,
                     decoration: const InputDecoration(
-                      labelText: 'Date',
+                      labelText: 'Date of Incident',
                       border: OutlineInputBorder(),
                     ),
                     readOnly: true,
@@ -4179,7 +4482,7 @@ Future<void> _showMobileReportForm(
                   TextFormField(
                     controller: timeController,
                     decoration: const InputDecoration(
-                      labelText: 'Time',
+                      labelText: 'Time of Incident',
                       border: OutlineInputBorder(),
                     ),
                     readOnly: true,
@@ -4379,21 +4682,24 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                             child: TextFormField(
                               controller: dateController,
                               decoration: const InputDecoration(
-                                labelText: 'Date',
+                                labelText: 'Date of Incident',
                                 border: OutlineInputBorder(),
                               ),
                               readOnly: true,
-                              onTap: () async {
-                                DateTime? pickedDate = await showDatePicker(
-                                  context: context,
-                                  initialDate: DateTime.parse(hotspot['time']),
-                                  firstDate: DateTime(2000),
-                                  lastDate: DateTime(2101),
-                                );
-                                if (pickedDate != null) {
-                                  dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
-                                }
-                              },
+onTap: () async {
+  final reportedDate = DateTime.parse(hotspot['created_at']).toLocal();
+  final maxDate = DateTime(reportedDate.year, reportedDate.month, reportedDate.day);
+  
+  DateTime? pickedDate = await showDatePicker(
+    context: context,
+    initialDate: DateTime.parse(hotspot['time']).toLocal(),
+    firstDate: DateTime(2000),
+    lastDate: maxDate, // Restrict to reported date
+  );
+  if (pickedDate != null) {
+    dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
+  }
+},
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -4401,21 +4707,48 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                             child: TextFormField(
                               controller: timeController,
                               decoration: const InputDecoration(
-                                labelText: 'Time',
+                                labelText: 'Time of Incident',
                                 border: OutlineInputBorder(),
                               ),
                               readOnly: true,
-                              onTap: () async {
-                                TimeOfDay? pickedTime = await showTimePicker(
-                                  context: context,
-                                  initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
-                                );
-                                if (pickedTime != null) {
-                                  final now = DateTime.now();
-                                  final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
-                                  timeController.text = DateFormat('HH:mm').format(formatted);
-                                }
-                              },
+                            onTap: () async {
+  TimeOfDay? pickedTime = await showTimePicker(
+    context: context,
+    initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time']).toLocal()),
+  );
+  if (pickedTime != null) {
+    final selectedDate = DateTime.parse(dateController.text);
+    final reportedDateTime = DateTime.parse(hotspot['created_at']).toLocal();
+    final pickedDateTime = DateTime(
+      selectedDate.year,
+      selectedDate.month,
+      selectedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+    
+    // Check if the picked time is after the reported time on the same date
+    if (selectedDate.year == reportedDateTime.year &&
+        selectedDate.month == reportedDateTime.month &&
+        selectedDate.day == reportedDateTime.day &&
+        pickedDateTime.isAfter(reportedDateTime)) {
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Incident time cannot be later than when it was reported (${DateFormat('h:mm a').format(reportedDateTime)})'
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+    
+    timeController.text = DateFormat('h:mm a').format(pickedDateTime);
+  }
+},
                             ),
                           ),
                         ],
@@ -4423,7 +4756,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                       const SizedBox(height: 16),
                       
                       // Active status for admins
-                      if (_isAdmin)
+                      if (_hasAdminPermissions)
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
@@ -4622,7 +4955,7 @@ showModalBottomSheet(
                         child: TextFormField(
                           controller: dateController,
                           decoration: const InputDecoration(
-                            labelText: 'Date',
+                            labelText: 'Date of Incident',
                             border: OutlineInputBorder(),
                           ),
                           readOnly: true,
@@ -4644,7 +4977,7 @@ showModalBottomSheet(
                         child: TextFormField(
                           controller: timeController,
                           decoration: const InputDecoration(
-                            labelText: 'Time',
+                            labelText: 'Time of Incident',
                             border: OutlineInputBorder(),
                           ),
                           readOnly: true,
@@ -4663,10 +4996,35 @@ showModalBottomSheet(
                       ),
                     ],
                   ),
+
+                  const SizedBox(height: 8),
+Container(
+  padding: const EdgeInsets.all(8),
+  decoration: BoxDecoration(
+    color: Colors.blue.shade50,
+    borderRadius: BorderRadius.circular(6),
+    border: Border.all(color: Colors.blue.shade200),
+  ),
+  child: Row(
+    children: [
+      Icon(Icons.info_outline, size: 16, color: Colors.blue.shade600),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          'Incident time cannot be later than when it was reported (${DateFormat('MMM d, yyyy h:mm a').format(DateTime.parse(hotspot['created_at']).toLocal())})',
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.blue.shade700,
+          ),
+        ),
+      ),
+    ],
+  ),
+),
                   const SizedBox(height: 16),
                   
                   // Add active status toggle for admins only - Compact Design
-                  if (_isAdmin)
+                  if (_hasAdminPermissions)
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
@@ -4723,47 +5081,122 @@ showModalBottomSheet(
                     children: [
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: isUploadingPhoto
-                              ? null
-                              : () async {
-                                  if (formKey.currentState!.validate()) {
-                                    try {
-                                      final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
-                                      
-                                      // Update hotspot first
-                                      await _updateHotspot(
-                                        hotspot['id'],
-                                        selectedCrimeId,
-                                        descriptionController.text,
-                                        dateTime,
-                                        selectedActiveStatus,
-                                      );
+onPressed: isUploadingPhoto
+    ? null
+    : () async {
+        if (formKey.currentState!.validate()) {
+          try {
+            final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
+            final reportedDateTime = DateTime.parse(hotspot['created_at']).toLocal();
+            
+            // Validate incident time is not after reported time
+            if (dateTime.isAfter(reportedDateTime)) {
+              showDialog(
+                context: context,
+                builder: (BuildContext context) {
+                  return AlertDialog(
+                    title: Row(
+                      children: [
+                        Icon(Icons.error, color: Colors.red[600]),
+                        const SizedBox(width: 8),
+                        const Text('Invalid Time'),
+                      ],
+                    ),
+                  content: Text(
+                    'The incident time cannot be later than when it was reported.\n\n'
+                    'Reported: ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(reportedDateTime)}\n'
+                    'Selected: ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(dateTime)}\n\n'
+                    'Please select an earlier time.',
+                  ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  );
+                },
+              );
+              return;
+            }
+            
+            // Show loading indicator
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (BuildContext context) {
+                return const AlertDialog(
+                  content: Row(
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(width: 16),
+                      Text('Updating...'),
+                    ],
+                  ),
+                );
+              },
+            );
+            
+            // Continue with update...
+            await _updateHotspot(
+              hotspot['id'],
+              selectedCrimeId,
+              descriptionController.text,
+              dateTime,
+              selectedActiveStatus,
+            );
 
-                                      // Handle photo updates
-                                      await _handlePhotoUpdates(
-                                        hotspotId: hotspot['id'],
-                                        existingPhoto: existingPhoto,
-                                        newPhoto: newSelectedPhoto,
-                                        deleteExisting: deleteExistingPhoto,
-                                      );
+            // Handle photo updates
+            await _handlePhotoUpdates(
+              hotspotId: hotspot['id'],
+              existingPhoto: existingPhoto,
+              newPhoto: newSelectedPhoto,
+              deleteExisting: deleteExistingPhoto,
+            );
 
-                                      await _loadHotspots();
-                                      if (mounted) {
-                                        Navigator.pop(context);
-                                        _showSnackBar('Crime report updated successfully');
-                                      }
-                                    } catch (e) {
-                                      if (mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: Text('Failed to update crime report: ${e.toString()}'),
-                                            duration: const Duration(seconds: 5),
-                                          ),
-                                        );
-                                      }
-                                    }
-                                  }
-                                },
+            await _loadHotspots();
+            
+            if (mounted) {
+              // Close loading dialog
+              Navigator.of(context).pop();
+              // Close edit dialog
+              Navigator.pop(context);
+              _showSnackBar('Crime report updated successfully');
+            }
+            
+          } catch (e) {
+            if (mounted) {
+              // Close loading dialog if it's open
+              Navigator.of(context).pop();
+              
+              // Show error dialog
+              showDialog(
+                context: context,
+                builder: (BuildContext context) {
+                  return AlertDialog(
+                    title: Row(
+                      children: [
+                        Icon(Icons.error, color: Colors.red[600]),
+                        const SizedBox(width: 8),
+                        const Text('Update Failed'),
+                      ],
+                    ),
+                    content: Text(
+                      'Failed to update crime report:\n\n${e.toString()}'
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            }
+          }
+        }
+      },
                           style: ElevatedButton.styleFrom(
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(6),
@@ -5077,25 +5510,31 @@ void _showProfileDialog() {
     _showProfileDialog();
   }
 
-  Future<void> refreshProfile() async {
-    final user = _authService.currentUser;
-    if (user != null) {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select()
-          .eq('email', user.email as Object)
-          .single();
+Future<void> refreshProfile() async {
+  final user = _authService.currentUser;
+  if (user != null) {
+    final response = await Supabase.instance.client
+        .from('users')
+        .select()
+        .eq('email', user.email as Object)
+        .single();
 
-      if (mounted) {
-        setState(() {
-          _userProfile = response;
-          _isAdmin = response['role'] == 'admin';
-          _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
-          _profileScreen.initControllers();
-        });
-      }
+    if (mounted) {
+      setState(() {
+        _userProfile = response;
+        _isAdmin = response['role'] == 'admin';
+        _isOfficer = response['role'] == 'officer';
+ _profileScreen = ProfileScreen(
+  _authService, 
+  _userProfile, 
+  _isAdmin,           // Admin-only privileges
+  _hasAdminPermissions // Admin + Officer privileges
+);
+        _profileScreen.initControllers();
+      });
     }
   }
+}
 
   void handleSuccess() {
     refreshProfile().then((_) {
@@ -5134,36 +5573,62 @@ void _showProfileDialog() {
   });
 }
 
-//FOR QUICK ACCESS
-void _showOnMap(Map<String, dynamic> safeSpot) {
-  final coords = safeSpot['location']['coordinates'];
-  final safeSpotLocation = LatLng(coords[1], coords[0]);
-  
-  setState(() {
-    _currentTab = MainTab.map; // Switch to map tab
-    _selectedSafeSpot = safeSpot; // Select the safe spot
-    _selectedHotspot = null; // Clear hotspot selection
-  });
-  
-  // Move map to safe spot location
-  _mapController.move(safeSpotLocation, 16.0);
-  
-  // Show safe spot details after a brief delay
-  Future.delayed(const Duration(milliseconds: 500), () {
-    if (mounted) {
+// FOR QUICK ACCESS
+void _showOnMap(Map<String, dynamic> item) {
+  try {
+    final coords = item['location']['coordinates'];
+    if (coords == null || coords.length < 2) {
+      _showSnackBar('Invalid location data');
+      return;
+    }
+    
+    final itemLocation = LatLng(coords[1], coords[0]);
+    
+    // Switch to map tab
+    setState(() {
+      _currentTab = MainTab.map;
+      
+      // Set appropriate selections based on item type
+      if (item['crime_type'] != null) {
+        // It's a hotspot
+        _selectedHotspot = item;
+        _selectedSafeSpot = null;
+      } else if (item['safe_spot_types'] != null) {
+        // It's a safe spot
+        _selectedSafeSpot = item;
+        _selectedHotspot = null;
+      }
+    });
+    
+    // Center map on the location
+    _mapController.move(itemLocation, 16.0);
+    
+    // Show details after a brief delay to allow map to center
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        if (item['crime_type'] != null) {
+          // It's a hotspot
+          _showHotspotDetails(item);
+        } else if (item['safe_spot_types'] != null) {
+          // It's a safe spot
       SafeSpotDetails.showSafeSpotDetails(
         context: context,
-        safeSpot: safeSpot,
+        safeSpot: item,
         userProfile: _userProfile,
-        isAdmin: _isAdmin,
+        isAdmin: _hasAdminPermissions,
         onUpdate: () => _loadSafeSpots(),
         onGetSafeRoute: _getSafeRoute,
       );
-    }
-  });
+        }
+      }
+    });
+  } catch (e) {
+    print('Error showing item on map: $e');
+    _showSnackBar('Unable to show location on map');
+  }
 }
 
-// New method for pure navigation without details dialog
+// Keep your existing _navigateToSafeSpot method (for safe spots navigation without details)
 void _navigateToSafeSpot(Map<String, dynamic> safeSpot) {
   final coords = safeSpot['location']['coordinates'];
   final safeSpotLocation = LatLng(coords[1], coords[0]);
@@ -5181,6 +5646,23 @@ void _navigateToSafeSpot(Map<String, dynamic> safeSpot) {
   _getDirections(safeSpotLocation);
 }
 
+// Update your existing _navigateToHotspot method (for hotspots navigation without details)
+void _navigateToHotspot(Map<String, dynamic> hotspot) {
+  final coords = hotspot['location']['coordinates'];
+  final hotspotLocation = LatLng(coords[1], coords[0]);
+  
+  setState(() {
+    _currentTab = MainTab.map; // Switch to map tab
+    _selectedHotspot = hotspot; // Select the hotspot
+    _selectedSafeSpot = null; // Clear safe spot selection
+  });
+  
+  // Move map to hotspot location
+  _mapController.move(hotspotLocation, 16.0);
+  
+  // Start navigation directly without showing details dialog
+  _getDirections(hotspotLocation);
+}
 
 
 
@@ -5217,7 +5699,6 @@ Widget _buildResponsiveDesktopLayout() {
     children: [
       Row(
         children: [
-          // Your existing ResponsiveNavigation
           ResponsiveNavigation(
             currentIndex: _currentTab.index,
             onTap: (index) {
@@ -5237,30 +5718,29 @@ Widget _buildResponsiveDesktopLayout() {
               });
             },
           ),
-          
-          // Main content area
           Expanded(
             child: _buildCurrentScreen(true),
           ),
         ],
       ),
-      
-      // Backdrop overlay when notifications are open
-      if (_currentTab == MainTab.notifications)
-        Positioned.fill(
+      // Modified backdrop overlay - excludes sidebar area
+      if (_currentTab == MainTab.notifications || _currentTab == MainTab.quickAccess)
+        Positioned(
+          left: _isSidebarVisible ? 285 : 64, // Start after sidebar
+          top: 0,
+          right: 0,
+          bottom: 0,
           child: GestureDetector(
             onTap: () {
               setState(() {
-                _currentTab = MainTab.map; // Close notification panel
+                _currentTab = MainTab.map;
               });
             },
             child: Container(
-              color: Colors.black.withOpacity(0.1), // Semi-transparent backdrop
+              color: Colors.black.withOpacity(0.1),
             ),
           ),
         ),
-      
-      // Your existing ResponsiveSidebarToggle
       ResponsiveSidebarToggle(
         isSidebarVisible: _isSidebarVisible,
         isUserLoggedIn: _userProfile != null,
@@ -5271,9 +5751,29 @@ Widget _buildResponsiveDesktopLayout() {
           });
         },
       ),
-      
-      // Floating notification panel (this will be on top of the backdrop)
-      _buildFloatingNotificationPanel(),
+      if (_currentTab == MainTab.notifications)
+        _buildFloatingNotificationPanel(),
+if (_currentTab == MainTab.quickAccess)
+  QuickAccessDesktopScreen(
+    safeSpots: _safeSpots,
+    hotspots: _hotspots,
+    currentPosition: _currentPosition,
+    userProfile: _userProfile,
+    isAdmin: _hasAdminPermissions,
+    onGetDirections: _getDirections,
+    onGetSafeRoute: _getSafeRoute,
+    onShareLocation: _shareLocation,
+    onShowOnMap: _showOnMap,
+    onNavigateToSafeSpot: _navigateToSafeSpot,
+    onNavigateToHotspot: _navigateToHotspot,
+    onRefresh: _loadSafeSpots,
+    isSidebarVisible: _isSidebarVisible,
+    onClose: () {
+      setState(() {
+        _currentTab = MainTab.map;
+      });
+    },
+  ),
     ],
   );
 }
@@ -5332,7 +5832,7 @@ Widget _buildBottomNavBar() {
               label: 'Map',
             ),
             
-            // Quick Access Tab (NEW)
+// Direction Tab (UPDATED)
 BottomNavigationBarItem(
   icon: AnimatedContainer(
     duration: const Duration(milliseconds: 200),
@@ -5343,15 +5843,16 @@ BottomNavigationBarItem(
           : Colors.transparent,
       borderRadius: BorderRadius.circular(12),
     ),
-    child: Icon(
-      _currentTab == MainTab.quickAccess
-          ? Icons.flash_on // Filled lightning bolt for active state
-          : Icons.flash_off, // Outlined lightning bolt for inactive state
-      size: 24,
-    ),
-  ),
-  label: 'Quick Access',
+child: Icon(
+  _currentTab == MainTab.quickAccess
+      ? Icons.navigation // Active state
+      : Icons.navigation_outlined, // Inactive state
+  size: 24,
 ),
+  ),
+  label: 'Navigation',
+),
+
             
             // Notifications Tab
             BottomNavigationBarItem(
@@ -6933,10 +7434,9 @@ Widget _buildMap() {
 // FIXED: Hotspots layer with stable markers and labels
 Consumer<HotspotFilterService>(
   builder: (context, filterService, child) {
-    // Use progressive loading
     final visibleHotspots = _visibleHotspots.where((hotspot) {
       final currentUserId = _userProfile?['id'];
-      final isAdmin = _isAdmin;
+      final hasAdminPermissions = _hasAdminPermissions;
       final status = hotspot['status'] ?? 'approved';
       final activeStatus = hotspot['active_status'] ?? 'active';
       final createdBy = hotspot['created_by'];
@@ -6948,7 +7448,7 @@ Consumer<HotspotFilterService>(
         return false;
       }
       
-      if (isAdmin) return true;
+      if (hasAdminPermissions) return true;
       
       if (status == 'approved' && activeStatus == 'active') return true;
       
@@ -7076,104 +7576,114 @@ Consumer<HotspotFilterService>(
          
 // Safe Spots Marker Layer 
 if (_showSafeSpots)
-  MarkerLayer(
-    key: ValueKey('safe_spots_optimized_${_visibleSafeSpots.length}_${_currentZoom.round()}_${_selectedSafeSpot?['id']}'),
-    markers: _visibleSafeSpots.asMap().entries.map((entry) {
-      final index = entry.key;
-      final safeSpot = entry.value;
-      final coords = safeSpot['location']['coordinates'];
-      final point = LatLng(coords[1], coords[0]);
-      final status = safeSpot['status'] ?? 'pending';
-      final verified = safeSpot['verified'] ?? false;
-      final verifiedByAdmin = safeSpot['verified_by_admin'] ?? false;
-      final safeSpotType = safeSpot['safe_spot_types'];
-      final safeSpotName = safeSpot['name'] ?? 'Safe Spot';
-      final currentUserId = _userProfile?['id'];
-      final createdBy = safeSpot['created_by'];
-      final isOwnSpot = currentUserId != null && currentUserId == createdBy;
-      final safeSpotId = safeSpot['id'].toString();
-      final isSelected = _selectedSafeSpot != null && _selectedSafeSpot!['id'] == safeSpot['id'];
-      
-      // Use simple markers when zoomed out
-      final useSimpleMarker = _currentZoom < 13.0;
-      
-      Color markerColor;
-      IconData markerIcon = _getIconFromString(safeSpotType['icon']);
-      double opacity = 1.0;
-      
-      switch (status) {
-        case 'pending':
-          markerColor = Colors.deepPurple;
-          opacity = 0.8;
-          break;
-        case 'approved':
-          markerColor = verified ? Colors.green.shade700 : Colors.green.shade500;
-          break;
-        case 'rejected':
-          markerColor = Colors.grey;
-          opacity = isOwnSpot ? 0.7 : 0.4;
-          break;
-        default:
-          markerColor = Colors.blue;
-      }
-      
-      return Marker(
-        key: ValueKey('safe_spot_optimized_$safeSpotId\_$status\_$verified\_$index\_$isSelected\_$useSimpleMarker'),
-        point: point,
-        width: useSimpleMarker ? 32 : (isSelected ? 140 : 120),
-        height: useSimpleMarker ? 32 : (isSelected ? 60 : 40),
-        alignment: Alignment.center,
-        child: RepaintBoundary(
-          child: useSimpleMarker
-            ? GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _selectedSafeSpot = safeSpot;
-                    _selectedHotspot = null;
-                  });
-                  SafeSpotDetails.showSafeSpotDetails(
-                    context: context,
-                    safeSpot: safeSpot,
-                    userProfile: _userProfile,
-                    isAdmin: _isAdmin,
-                    onUpdate: () => _loadSafeSpots(),
-                    onGetSafeRoute: _getSafeRoute,
-                  );
-                },
-                child: Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: markerColor.withOpacity(opacity),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 2,
-                        offset: const Offset(0, 1),
+  Consumer<HotspotFilterService>(
+    builder: (context, filterService, child) {
+      // Filter safe spots based on filter service settings
+      final filteredSafeSpots = _visibleSafeSpots.where((safeSpot) {
+        return filterService.shouldShowSafeSpot(safeSpot);
+      }).toList();
+
+      return MarkerLayer(
+        key: ValueKey('safe_spots_filtered_${filteredSafeSpots.length}_${_currentZoom.round()}_${_selectedSafeSpot?['id']}'),
+        markers: filteredSafeSpots.asMap().entries.map((entry) {
+          final index = entry.key;
+          final safeSpot = entry.value;
+          final coords = safeSpot['location']['coordinates'];
+          final point = LatLng(coords[1], coords[0]);
+          final status = safeSpot['status'] ?? 'pending';
+          final verified = safeSpot['verified'] ?? false;
+          final verifiedByAdmin = safeSpot['verified_by_admin'] ?? false;
+          final safeSpotType = safeSpot['safe_spot_types'];
+          final safeSpotName = safeSpot['name'] ?? 'Safe Spot';
+          final currentUserId = _userProfile?['id'];
+          final createdBy = safeSpot['created_by'];
+          final isOwnSpot = currentUserId != null && currentUserId == createdBy;
+          final safeSpotId = safeSpot['id'].toString();
+          final isSelected = _selectedSafeSpot != null && _selectedSafeSpot!['id'] == safeSpot['id'];
+          
+          // Use simple markers when zoomed out
+          final useSimpleMarker = _currentZoom < 13.0;
+          
+          Color markerColor;
+          IconData markerIcon = _getIconFromString(safeSpotType['icon']);
+          double opacity = 1.0;
+          
+          switch (status) {
+            case 'pending':
+              markerColor = Colors.deepPurple;
+              opacity = 0.8;
+              break;
+            case 'approved':
+              markerColor = verified ? Colors.green.shade700 : Colors.green.shade500;
+              break;
+            case 'rejected':
+              markerColor = Colors.grey;
+              opacity = isOwnSpot ? 0.7 : 0.4;
+              break;
+            default:
+              markerColor = Colors.blue;
+          }
+          
+return Marker(
+  key: ValueKey('safe_spot_filtered_$safeSpotId\_$status\_$verified\_$index\_$isSelected\_$useSimpleMarker'),
+  point: point,
+  width: useSimpleMarker ? 32 : (isSelected ? 140 : 120),
+  height: useSimpleMarker ? 32 : (isSelected ? 60 : 40),
+  alignment: Alignment.center,
+  child: RepaintBoundary(
+    child: useSimpleMarker
+      ? GestureDetector(
+          onTap: () {
+            setState(() {
+              _selectedSafeSpot = safeSpot;
+              _selectedHotspot = null;
+            });
+            SafeSpotDetails.showSafeSpotDetails(
+              context: context,
+              safeSpot: safeSpot,
+              userProfile: _userProfile,
+              isAdmin: _hasAdminPermissions,
+              onUpdate: () => _loadSafeSpots(),
+              onGetSafeRoute: _getSafeRoute,
+            );
+          },
+
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: markerColor.withOpacity(opacity),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 2,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
                       ),
-                    ],
+                      child: Icon(markerIcon, color: Colors.white, size: 14),
+                    ),
+                  )
+                : _buildStableSafeSpotMarker(
+                    safeSpot: safeSpot,
+                    markerColor: markerColor,
+                    markerIcon: markerIcon,
+                    opacity: opacity,
+                    status: status,
+                    verified: verified,
+                    verifiedByAdmin: verifiedByAdmin,
+                    safeSpotName: safeSpotName,
+                    isOwnSpot: isOwnSpot,
+                    isSelected: isSelected,
+                    showLabel: _currentZoom >= 14.0,
                   ),
-                  child: Icon(markerIcon, color: Colors.white, size: 14),
-                ),
-              )
-            : _buildStableSafeSpotMarker(
-                safeSpot: safeSpot,
-                markerColor: markerColor,
-                markerIcon: markerIcon,
-                opacity: opacity,
-                status: status,
-                verified: verified,
-                verifiedByAdmin: verifiedByAdmin,
-                safeSpotName: safeSpotName,
-                isOwnSpot: isOwnSpot,
-                isSelected: isSelected,
-                showLabel: _currentZoom >= 14.0,
-              ),
-        ),
+            ),
+          );
+        }).toList(),
       );
-    }).toList(),
+    },
   ),
             ],
           ),
@@ -7215,150 +7725,21 @@ Widget _buildStableHotspotMarker({
   required String crimeTypeName,
   required bool showLabel,
 }) {
-  return Stack(
-    clipBehavior: Clip.none,
-    alignment: Alignment.center, // CHANGED: Use center alignment like safe spots
-    children: [
-      // Main marker (stays in same position regardless of selection)
-      Stack(
-        alignment: Alignment.center,
-        children: [
-          if (isSelected)
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: Colors.blue.withOpacity(0.6),
-                  width: 3,
-                ),
-              ),
-            ),
-          Opacity(
-            opacity: opacity,
-            child: PulsingHotspotMarker(
-              markerColor: markerColor,
-              markerIcon: markerIcon,
-              isActive: isActive && status != 'rejected',
-              pulseScale: isSelected ? 1.1 : 0.9,
-              onTap: () {
-                setState(() {
-                  _selectedHotspot = hotspot;
-                  _selectedSafeSpot = null;
-                });
-                _showHotspotDetails(hotspot);
-              },
-            ),
-          ),
-          if (status == 'pending' || status == 'rejected')
-            Positioned(
-              top: 6,
-              right: 6,
-              child: Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: status == 'pending' ? Colors.orange : Colors.grey,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-      
-      // Crime type label - ONLY the label position adjusts when selected
-      if (showLabel)
-        Positioned(
-          left: isSelected ? 93 : 73, // ADJUSTED: Position relative to center, adjusts for selection ring
-          child: AnimatedOpacity(
-            duration: const Duration(milliseconds: 300),
-            opacity: showLabel ? 1.0 : 0.0,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: (status == 'rejected' || status == 'pending' || !isActive || opacity < 1.0) 
-                  ? markerColor.withOpacity(0.9 * opacity) 
-                  : markerColor.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: [
-                  BoxShadow(
-                    color: (status == 'rejected' || status == 'pending' || !isActive || opacity < 1.0) 
-                      ? Colors.black.withOpacity(0.15 * opacity) 
-                      : Colors.black.withOpacity(0.15),
-                    blurRadius: 3,
-                    offset: const Offset(1, 1),
-                  ),
-                ],
-              ),
-              child: Text(
-                crimeTypeName,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        ),
-    ],
-  );
-}
-
-// UPDATED: Safe spot marker with selection indicator
-// UPDATED: Safe spot marker with selection indicator
-Widget _buildStableSafeSpotMarker({
-  required Map<String, dynamic> safeSpot,
-  required Color markerColor,
-  required IconData markerIcon,
-  required double opacity,
-  required String status,
-  required bool verified,
-  required bool verifiedByAdmin, // Add new parameter
-  required String safeSpotName,
-  required bool isOwnSpot,
-  required bool isSelected,
-  required bool showLabel,
-}) {
-  return Stack(
-    clipBehavior: Clip.none,
+  return Transform.rotate(
+    angle: -_currentMapRotation * pi / 180, // Counteract map rotation (degrees to radians)
     alignment: Alignment.center,
-    children: [
-      GestureDetector(
-        onTap: () {
-          setState(() {
-            _selectedSafeSpot = safeSpot;
-            _selectedHotspot = null;
-          });
-          
-          SafeSpotDetails.showSafeSpotDetails(
-            context: context,
-            safeSpot: safeSpot,
-            userProfile: _userProfile,
-            isAdmin: _isAdmin,
-            onUpdate: () {
-              print('Manual refresh triggered from details');
-              _loadSafeSpots();
-            },
-            onGetSafeRoute: _getSafeRoute,
-          );
-        },
-        child: Stack(
+    child: Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        // Main marker (stays in same position regardless of selection)
+        Stack(
           alignment: Alignment.center,
           children: [
             if (isSelected)
               Container(
-                width: 50,
-                height: 50,
+                width: 60,
+                height: 60,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
@@ -7367,89 +7748,225 @@ Widget _buildStableSafeSpotMarker({
                   ),
                 ),
               ),
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: markerColor.withOpacity(opacity),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
+            Opacity(
+              opacity: opacity,
+              child: PulsingHotspotMarker(
+                markerColor: markerColor,
+                markerIcon: markerIcon,
+                isActive: isActive && status != 'rejected',
+                pulseScale: isSelected ? 1.1 : 0.9,
+                onTap: () {
+                  setState(() {
+                    _selectedHotspot = hotspot;
+                    _selectedSafeSpot = null;
+                  });
+                  _showHotspotDetails(hotspot);
+                },
               ),
-              child: Icon(markerIcon, color: Colors.white, size: 16),
             ),
-            if (status != 'approved')
+            if (status == 'pending' || status == 'rejected')
               Positioned(
-                top: 1,
-                right: 1,
+                top: 6,
+                right: 6,
                 child: Container(
-                  width: 10,
-                  height: 10,
+                  width: 12,
+                  height: 12,
                   decoration: BoxDecoration(
-                    color: status == 'pending' ? Colors.orange : Colors.red,
+                    color: status == 'pending' ? Colors.orange : Colors.grey,
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1),
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.2),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
                   ),
-                ),
-              ),
-            if (status == 'approved' && verified)
-              Positioned(
-                top: 1,
-                right: 1,
-                child: Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: verifiedByAdmin ? Colors.purple : Colors.blue, // Purple for admin, blue for community
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1),
-                  ),
-                  child: const Icon(Icons.verified, color: Colors.white, size: 6),
                 ),
               ),
           ],
         ),
-      ),
-      
-      if (showLabel)
-        Positioned(
-          left: isSelected ? 97 : 80,
-          child: AnimatedOpacity(
-            duration: const Duration(milliseconds: 300),
-            opacity: showLabel ? 1.0 : 0.0,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: markerColor.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 3,
-                    offset: const Offset(1, 1),
-                  ),
-                ],
-              ),
-              child: Text(
-                safeSpotName,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
+        
+        // Crime type label - ONLY the label position adjusts when selected
+        if (showLabel)
+          Positioned(
+            left: isSelected ? 93 : 73,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 300),
+              opacity: showLabel ? 1.0 : 0.0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (status == 'rejected' || status == 'pending' || !isActive || opacity < 1.0) 
+                    ? markerColor.withOpacity(0.9 * opacity) 
+                    : markerColor.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: (status == 'rejected' || status == 'pending' || !isActive || opacity < 1.0) 
+                        ? Colors.black.withOpacity(0.15 * opacity) 
+                        : Colors.black.withOpacity(0.15),
+                      blurRadius: 3,
+                      offset: const Offset(1, 1),
+                    ),
+                  ],
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                child: Text(
+                  crimeTypeName,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
           ),
+      ],
+    ),
+  );
+}
+
+// UPDATED: Safe spot marker with selection indicator
+Widget _buildStableSafeSpotMarker({
+  required Map<String, dynamic> safeSpot,
+  required Color markerColor,
+  required IconData markerIcon,
+  required double opacity,
+  required String status,
+  required bool verified,
+  required bool verifiedByAdmin,
+  required String safeSpotName,
+  required bool isOwnSpot,
+  required bool isSelected,
+  required bool showLabel,
+}) {
+  return Transform.rotate(
+    angle: -_currentMapRotation * pi / 180, // Counteract map rotation (degrees to radians)
+    alignment: Alignment.center,
+    child: Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _selectedSafeSpot = safeSpot;
+              _selectedHotspot = null;
+            });
+            
+SafeSpotDetails.showSafeSpotDetails(
+  context: context,
+  safeSpot: safeSpot,
+  userProfile: _userProfile,
+  isAdmin: _hasAdminPermissions,
+  onUpdate: () {
+    print('Manual refresh triggered from details');
+    _loadSafeSpots();
+  },
+  onGetSafeRoute: _getSafeRoute,
+);
+          },
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (isSelected)
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.blue.withOpacity(0.6),
+                      width: 3,
+                    ),
+                  ),
+                ),
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: markerColor.withOpacity(opacity),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Icon(markerIcon, color: Colors.white, size: 16),
+              ),
+              if (status != 'approved')
+                Positioned(
+                  top: 1,
+                  right: 1,
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: status == 'pending' ? Colors.orange : Colors.red,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1),
+                    ),
+                  ),
+                ),
+              if (status == 'approved' && verified)
+                Positioned(
+                  top: 1,
+                  right: 1,
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: verifiedByAdmin ? Colors.purple : Colors.blue,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1),
+                    ),
+                    child: const Icon(Icons.verified, color: Colors.white, size: 6),
+                  ),
+                ),
+            ],
+          ),
         ),
-    ],
+        
+        if (showLabel)
+          Positioned(
+            left: isSelected ? 97 : 80,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 300),
+              opacity: showLabel ? 1.0 : 0.0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: markerColor.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 3,
+                      offset: const Offset(1, 1),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  safeSpotName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
   );
 }
 
@@ -7483,80 +8000,88 @@ IconData _getIconFromString(String iconName) {
 
 // CURRENT LOCATION - MINIMIZED (unchanged)
 Widget _buildEnhancedCurrentLocationMarker() {
-  return Stack(
+  return Transform.rotate(
+    angle: -_currentMapRotation * pi / 180, // Counteract map rotation (degrees to radians)
     alignment: Alignment.center,
-    children: [
-      // Pulsing outer ring (minimized)
-      Container(
-        width: 55, // Reduced from 65
-        height: 55, // Reduced from 65
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.blue.withOpacity(0.15),
-        ),
-      ),
-
-      // Second ring for depth (minimized)
-      Container(
-        width: 38, // Reduced from 48
-        height: 38, // Reduced from 48
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.blue.withOpacity(0.25),
-          border: Border.all(
-            color: Colors.white,
-            width: 2,
+    child: Stack(
+      alignment: Alignment.center,
+      children: [
+        // Pulsing outer ring (minimized)
+        Container(
+          width: 55, // Reduced from 65
+          height: 55, // Reduced from 65
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.blue.withOpacity(0.15),
           ),
         ),
-      ),
 
-      // Main circle background (minimized)
-      Container(
-        width: 22, // Reduced from 28
-        height: 22, // Reduced from 28
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
-          border: Border.all(
-            color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
-            width: 2,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
+        // Second ring for depth (minimized)
+        Container(
+          width: 38, // Reduced from 48
+          height: 38, // Reduced from 48
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.blue.withOpacity(0.25),
+            border: Border.all(
+              color: Colors.white,
+              width: 2,
             ),
-          ],
+          ),
         ),
-      ),
 
-      // Human silhouette icon (minimized)
-      Icon(
-        Icons.person,
-        size: 14, // Reduced from 18
-        color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
-      ),
-    ],
+        // Main circle background (minimized)
+        Container(
+          width: 22, // Reduced from 28
+          height: 22, // Reduced from 28
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
+            border: Border.all(
+              color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+        ),
+
+        // Human silhouette icon (minimized)
+        Icon(
+          Icons.person,
+          size: 14, // Reduced from 18
+          color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
+        ),
+      ],
+    ),
   );
 }
 
-// DESTINATION PIN MARKER - MINIMIZED (unchanged)
+// UPDATED: Destination marker that also rotates with map (optional)
 Widget _buildEnhancedDestinationMarker() {
-  return const Stack(
+  return Transform.rotate(
+    angle: -_currentMapRotation * pi / 180, // Counteract map rotation (degrees to radians)
     alignment: Alignment.center,
-    children: [
-      Icon(
-        Icons.location_pin,
-        color: Colors.white, // Outline
-        size: 32, // Reduced from 40
-      ),
-      Icon(
-        Icons.location_pin,
-        color: Colors.red, // Bright red for visibility
-        size: 28, // Reduced from 35
-      ),
-    ],
+    child: const Stack(
+      alignment: Alignment.center,
+      children: [
+        Icon(
+          Icons.location_pin,
+          color: Colors.white, // Outline
+          size: 32, // Reduced from 40
+        ),
+        Icon(
+          Icons.location_pin,
+          color: Colors.red, // Bright red for visibility
+          size: 28, // Reduced from 35
+        ),
+      ],
+    ),
   );
 }
 
@@ -7570,12 +8095,27 @@ Widget _buildEnhancedDestinationMarker() {
 
 // HOTSPOT DETAILS
 void _showHotspotDetails(Map<String, dynamic> hotspot) async {
-  final lat = hotspot['location']['coordinates'][1];
-  final lng = hotspot['location']['coordinates'][0];
-  final coordinates = "(${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)})";
+  // Add null safety at the beginning
+  if (hotspot['location'] == null) {
+    _showSnackBar('Unable to load hotspot details');
+    return;
+  }
+
+  final coordinatesArray = hotspot['location']['coordinates']; // This is a List
+  if (coordinatesArray == null || coordinatesArray.length < 2) {
+    _showSnackBar('Invalid hotspot location data');
+    return;
+  }
+
+  // Extract lat/lng from the array
+  final lng = coordinatesArray[0]; // longitude is at index 0
+  final lat = coordinatesArray[1];  // latitude is at index 1
+  
+  // Create the coordinates string for display
+  final coordinatesString = "(${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)})";
 
   String address = "Loading address...";
-  String fullLocation = coordinates;
+  String fullLocation = coordinatesString;
 
   // Fetch hotspot photo
   Map<String, dynamic>? hotspotPhoto;
@@ -7593,22 +8133,56 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
       address = data['display_name'] ?? "Unknown location";
-      fullLocation = "$address\n$coordinates";
+      fullLocation = "$address\n$coordinatesString";
     }
   } catch (e) {
     address = "Could not load address";
-    fullLocation = "$address\n$coordinates";
+    fullLocation = "$address\n$coordinatesString";
   }
 
-  final DateTime time = DateTime.parse(hotspot['time']).toLocal();
+  final DateTime time = DateTime.parse(hotspot['time'] ?? DateTime.now().toIso8601String()).toLocal();
   final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
   final status = hotspot['status'] ?? 'approved';
   final activeStatus = hotspot['active_status'] ?? 'active';
-final isOwner = (_userProfile?['id'] != null) && 
-    (hotspot['created_by'] == _userProfile!['id'] ||
-     hotspot['reported_by'] == _userProfile!['id']);
-  final crimeType = hotspot['crime_type'];
+  final isOwner = (_userProfile?['id'] != null) && 
+      (hotspot['created_by'] == _userProfile!['id'] ||
+       hotspot['reported_by'] == _userProfile!['id']);
+
+  // Add null checks for crimeType
+  final crimeType = hotspot['crime_type'] ?? {};
   final category = crimeType['category'] ?? 'Unknown Category';
+
+// Fetch officer details
+Map<String, String> officerDetails = {};
+try {
+  final response = await Supabase.instance.client
+      .from('hotspot')
+      .select('''
+        approved_by,
+        rejected_by,
+        last_updated_by,
+        approved_profile:approved_by (first_name, last_name),
+        rejected_profile:rejected_by (first_name, last_name),
+        updated_profile:last_updated_by (first_name, last_name)
+      ''')
+      .eq('id', hotspot['id'])
+      .single();
+
+  if (response['approved_by'] != null) {
+    officerDetails['approved_by'] = 
+        '${response['approved_profile']?['first_name'] ?? ''} ${response['approved_profile']?['last_name'] ?? ''}'.trim();
+  }
+  if (response['rejected_by'] != null) {
+    officerDetails['rejected_by'] = 
+        '${response['rejected_profile']?['first_name'] ?? ''} ${response['rejected_profile']?['last_name'] ?? ''}'.trim();
+  }
+  if (response['last_updated_by'] != null) {
+    officerDetails['last_updated_by'] = 
+        '${response['updated_profile']?['first_name'] ?? ''} ${response['updated_profile']?['last_name'] ?? ''}'.trim();
+  }
+} catch (e) {
+  print('Error fetching officer details: $e');
+}
 
 
 // DESKTOP VIEW FOR HOTSPOT DETAILS
@@ -7854,7 +8428,7 @@ Padding(
             ),
             const SizedBox(height: 4),
             Text(
-              coordinates,
+              coordinatesString,
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
 
@@ -7911,7 +8485,7 @@ onPressed: () {
                                           child: Row(
                                             children: [
                                               const Text(
-                                                'Time:',
+                                                'Date and Time:',
                                                 style: TextStyle(fontWeight: FontWeight.w500),
                                               ),
                                               const SizedBox(width: 8),
@@ -7970,7 +8544,7 @@ onPressed: () {
                                 ),
                               ),
                             // Show approval note for approved reports by users
-                            if (status == 'approved' && !_isAdmin && isOwner)
+                            if (status == 'approved' && !_hasAdminPermissions && isOwner)
                               Container(
                                 margin: const EdgeInsets.only(top: 16, bottom: 16),
                                 padding: const EdgeInsets.all(12),
@@ -7997,6 +8571,98 @@ onPressed: () {
                                 ),
                               ),
                             // Action buttons
+// Officer details section
+if (_hasAdminPermissions || _isOfficer) ...[
+  Container(
+    margin: const EdgeInsets.symmetric(vertical: 12),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+          ? Colors.green.shade50
+          : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+              ? Colors.red.shade50
+              : Colors.blue.shade50,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(
+        color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+            ? Colors.green.shade200
+            : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+                ? Colors.red.shade200
+                : Colors.blue.shade200,
+      ),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.person,
+              color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+                  ? Colors.green.shade600
+                  : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+                      ? Colors.red.shade600
+                      : Colors.blue.shade600,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Last Actions:',
+              style: TextStyle(
+                color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+                    ? Colors.green.shade700
+                    : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+                        ? Colors.red.shade700
+                        : Colors.blue.shade700,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (officerDetails['approved_by']?.isNotEmpty ?? false)
+          Text(
+            'Approved by: ${officerDetails['approved_by']}',
+            style: TextStyle(
+              color: Colors.green.shade700,
+              fontSize: 14,
+            ),
+          ),
+        const SizedBox(height: 4),
+        if (officerDetails['rejected_by']?.isNotEmpty ?? false)
+          Text(
+            'Rejected by: ${officerDetails['rejected_by']}',
+            style: TextStyle(
+              color: Colors.red.shade700,
+              fontSize: 14,
+            ),
+          ),
+        const SizedBox(height: 4),
+        if (officerDetails['last_updated_by']?.isNotEmpty ?? false)
+          Text(
+            'Last updated by: ${officerDetails['last_updated_by']}',
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontSize: 14,
+            ),
+          ),
+        if (officerDetails.isEmpty ||
+            (officerDetails['approved_by']?.isEmpty ?? true) &&
+            (officerDetails['rejected_by']?.isEmpty ?? true) &&
+            (officerDetails['last_updated_by']?.isEmpty ?? true))
+          Text(
+            'No actions recorded',
+            style: TextStyle(
+              color: Colors.blue.shade700,
+              fontSize: 14,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+      ],
+    ),
+  ),
+],
                             const SizedBox(height: 20),
                             _buildDesktopActionButtons(hotspot, status, isOwner),
                             const SizedBox(height: 16),
@@ -8203,7 +8869,7 @@ showModalBottomSheet(
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                coordinates,
+                                coordinatesString,
                                 style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                               ),
                   
@@ -8262,7 +8928,7 @@ showModalBottomSheet(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Text(
-                                'Time:',
+                                'Date and Time:',
                                 style: TextStyle(fontWeight: FontWeight.w500),
                               ),
                               const SizedBox(height: 4),
@@ -8320,7 +8986,7 @@ showModalBottomSheet(
                     ),
                   
                   // Show approval note for approved reports by users (visible only to the report owner, not admin)
-                  if (status == 'approved' && !_isAdmin && isOwner)
+                  if (status == 'approved' && !_hasAdminPermissions && isOwner)
                     Container(
                       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                       padding: const EdgeInsets.all(12),
@@ -8347,8 +9013,100 @@ showModalBottomSheet(
                       ),
                     ),
 
+// Officer details section
+if (_hasAdminPermissions || _isOfficer) ...[
+  Container(
+    margin: const EdgeInsets.symmetric(vertical: 12),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+          ? Colors.green.shade50
+          : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+              ? Colors.red.shade50
+              : Colors.blue.shade50,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(
+        color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+            ? Colors.green.shade200
+            : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+                ? Colors.red.shade200
+                : Colors.blue.shade200,
+      ),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.person,
+              color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+                  ? Colors.green.shade600
+                  : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+                      ? Colors.red.shade600
+                      : Colors.blue.shade600,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Last Actions:',
+              style: TextStyle(
+                color: (officerDetails['approved_by']?.isNotEmpty ?? false)
+                    ? Colors.green.shade700
+                    : (officerDetails['rejected_by']?.isNotEmpty ?? false)
+                        ? Colors.red.shade700
+                        : Colors.blue.shade700,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (officerDetails['approved_by']?.isNotEmpty ?? false)
+          Text(
+            'Approved by: ${officerDetails['approved_by']}',
+            style: TextStyle(
+              color: Colors.green.shade700,
+              fontSize: 14,
+            ),
+          ),
+        const SizedBox(height: 4),
+        if (officerDetails['rejected_by']?.isNotEmpty ?? false)
+          Text(
+            'Rejected by: ${officerDetails['rejected_by']}',
+            style: TextStyle(
+              color: Colors.red.shade700,
+              fontSize: 14,
+            ),
+          ),
+        const SizedBox(height: 4),
+        if (officerDetails['last_updated_by']?.isNotEmpty ?? false)
+          Text(
+            'Last updated by: ${officerDetails['last_updated_by']}',
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontSize: 14,
+            ),
+          ),
+        if (officerDetails.isEmpty ||
+            (officerDetails['approved_by']?.isEmpty ?? true) &&
+            (officerDetails['rejected_by']?.isEmpty ?? true) &&
+            (officerDetails['last_updated_by']?.isEmpty ?? true))
+          Text(
+            'No actions recorded',
+            style: TextStyle(
+              color: Colors.blue.shade700,
+              fontSize: 14,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+      ],
+    ),
+  ),
+],
                   // Mobile action buttons
-                  if (_isAdmin && status == 'pending')
+                  if (_hasAdminPermissions && status == 'pending')
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16.0),
                       child: Row(
@@ -8398,7 +9156,7 @@ showModalBottomSheet(
                         ],
                       ),
                     ),
-                  if (!_isAdmin && status == 'pending' && isOwner)
+                  if (!_hasAdminPermissions && status == 'pending' && isOwner)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6.0),
                       child: Row(
@@ -8457,7 +9215,7 @@ showModalBottomSheet(
                                 child: const Text('Delete'),
                               ),
                             ),
-                          if (_isAdmin)
+                          if (_hasAdminPermissions)
                             Expanded(
                               child: ElevatedButton(
                                 onPressed: () => _deleteHotspot(hotspot['id']),
@@ -8474,7 +9232,7 @@ showModalBottomSheet(
                         ],
                       ),
                     ),
-                  if (_isAdmin && status == 'approved')
+                  if (_hasAdminPermissions && status == 'approved')
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6.0),
                       child: Row(
@@ -8678,7 +9436,7 @@ Widget _buildStatusWidget(String activeStatus, String status) {
 Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, bool isOwner) {
   final buttons = <Widget>[];
 
-  if (_isAdmin && status == 'pending') {
+ if (_hasAdminPermissions && status == 'pending') {
     buttons.addAll([
       Expanded(
         child: ElevatedButton.icon(
@@ -8737,7 +9495,7 @@ Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, b
         ),
       ),
     ]);
-  } else if (!_isAdmin && status == 'pending' && isOwner) {
+ } else if (!_hasAdminPermissions && status == 'pending' && isOwner) {
     buttons.addAll([
       Expanded(
         child: ElevatedButton.icon(
@@ -8781,7 +9539,7 @@ Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, b
       ),
     ]);
   } else if (status == 'rejected') {
-    if (isOwner || _isAdmin) {
+    if (isOwner || _hasAdminPermissions) {
       buttons.add(
         Center(
           child: SizedBox(
@@ -8806,7 +9564,7 @@ Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, b
         ),
       );
     }
-  } else if (_isAdmin && status == 'approved') {
+} else if (_hasAdminPermissions && status == 'approved') {
     buttons.addAll([
       Expanded(
         child: ElevatedButton.icon(
@@ -8861,8 +9619,10 @@ Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, b
 
 
 
-
 void _showDirectionsConfirmation(LatLng coordinates, BuildContext context, VoidCallback onConfirm) {
+  final screenWidth = MediaQuery.of(context).size.width;
+  final isDesktop = screenWidth > 800; // Adjust breakpoint as needed
+  
   showDialog(
     context: context,
     builder: (context) => Dialog(
@@ -8871,7 +9631,9 @@ void _showDirectionsConfirmation(LatLng coordinates, BuildContext context, VoidC
       insetPadding: const EdgeInsets.all(24), // Ensures margin from screen edges
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.9, // Max 90% of screen width
+          maxWidth: isDesktop 
+              ? 500 // Fixed width for desktop
+              : MediaQuery.of(context).size.width * 0.9, // 90% of screen width for mobile
           maxHeight: MediaQuery.of(context).size.height * 0.8, // Max 80% of screen height
         ),
         child: IntrinsicHeight(
@@ -8929,6 +9691,34 @@ void _showDirectionsConfirmation(LatLng coordinates, BuildContext context, VoidC
                         ),
                       ),
                       const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.security,
+                              color: Colors.orange.shade700,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Consider traveling in groups, informing others of your destination, and avoiding the area during nighttime.',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.orange.shade800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
                       Text(
                         'Do you want to proceed?',
                         style: TextStyle(
@@ -8981,7 +9771,7 @@ void _showDirectionsConfirmation(LatLng coordinates, BuildContext context, VoidC
                         elevation: 2,
                       ),
                       child: const Text(
-                        'Proceed',
+                        'Proceed Anyway',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
@@ -9060,6 +9850,8 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
           'rejection_reason': reason,
           'updated_at': DateTime.now().toIso8601String(),
           if (approve) 'created_by': _userProfile?['id'],
+          if (approve) 'approved_by': _userProfile?['id'], // Add approved_by
+          if (!approve) 'rejected_by': _userProfile?['id'], // Add rejected_by
         })
         .eq('id', id)
         .select('id')
@@ -9114,6 +9906,7 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
       'time': dateTime.toIso8601String(),
       if (activeStatus != null) 'active_status': activeStatus,
       'updated_at': DateTime.now().toIso8601String(),
+      'last_updated_by': _userProfile?['id'], // Add last_updated_by
     };
 
     final response = await Supabase.instance.client
@@ -9136,7 +9929,6 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
     rethrow;
   }
 }
-
 
 
 // DELETE HOTSPOT
@@ -9204,8 +9996,8 @@ bool get isLargeScreen {
 
 // SEARCH BAR 
 Widget _buildSearchBar({bool isWeb = false}) {
-  final bool isDesktop = isLargeScreen;
-  
+  final bool isDesktop = isWeb; // Assuming isLargeScreen is passed as isWeb
+
   return Container(
     width: isDesktop ? 600 : double.infinity,
     height: 48,
@@ -9294,29 +10086,38 @@ Widget _buildSearchBar({bool isWeb = false}) {
             suffixIcon: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Emergency contacts button - ALWAYS visible
-                IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.phone_in_talk_rounded,
-                      color: Colors.grey.shade600,
-                      size: 18,
-                    ),
-                  ),
-                  padding: EdgeInsets.zero,
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const HotlinesScreen()),
-                    );
-                  },
-                  tooltip: 'Emergency Hotlines',
-                ),
+                // Emergency contacts button - shows modal on desktop
+           
+                        IconButton(
+                          icon: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              Icons.phone_in_talk_rounded,
+                              color: Colors.grey.shade600,
+                              size: 18,
+                            ),
+                          ),
+                          padding: EdgeInsets.zero,
+                          onPressed: () {
+                            if (isDesktop) {
+                              showHotlinesModal(
+                          context, 
+                          isSidebarVisible: _isSidebarVisible,
+                          sidebarWidth: 285, // Adjust this to match your actual sidebar width
+                        ); // Use the modal for desktop
+                            } else {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (context) => const HotlinesScreen()),
+                              );
+                            }
+                          },
+                          tooltip: 'Emergency Hotlines',
+                        ),
 
                 // Clear button - only visible when text is present
                 if (_searchController.text.isNotEmpty)
@@ -9538,24 +10339,18 @@ Widget _buildCurrentScreen(bool isDesktop) {
     case MainTab.map:
       return Stack(
         children: [
-          // Full screen map
           _buildMap(),
-          
-          // Loading indicator
           if (_isLoading && _currentPosition == null)
             const Center(child: CircularProgressIndicator()),
-          
-          // Top bar with search + login/logout
           Positioned(
             top: MediaQuery.of(context).padding.top + 16,
             left: 0,
             right: 0,
             child: Container(
-              // MOBILE: Add horizontal margin for mobile
-              margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16), 
+              margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16),
               child: Center(
                 child: Container(
-                  width: isDesktop ? 600 : null, // Desktop: fixed width, Mobile: full available width
+                  width: isDesktop ? 600 : null,
                   child: Row(
                     children: [
                       Expanded(child: _buildSearchBar(isWeb: isDesktop)),
@@ -9581,7 +10376,7 @@ Widget _buildCurrentScreen(bool isDesktop) {
                             _userProfile == null ? Icons.login : Icons.logout,
                             color: Colors.grey.shade700,
                           ),
-                          onPressed: _userProfile == null 
+                          onPressed: _userProfile == null
                               ? () {
                                   Navigator.pushReplacement(
                                     context,
@@ -9597,55 +10392,30 @@ Widget _buildCurrentScreen(bool isDesktop) {
               ),
             ),
           ),
-          
-          // Proximity alert with matching width
           Positioned(
             top: MediaQuery.of(context).padding.top + 80,
             left: 0,
             right: 0,
             child: Container(
-              // SAME margin as search bar for mobile
               margin: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 16),
               child: Center(
                 child: Container(
-                  width: isDesktop ? 600 : null, // SAME width constraint as search bar
+                  width: isDesktop ? 600 : null,
                   child: _buildAnimatedProximityAlert(),
                 ),
               ),
             ),
           ),
-
-          // Floating duration widget at bottom
           _buildFloatingDurationWidget(),
         ],
       );
-    
     case MainTab.quickAccess:
-      return QuickAccessScreen(
-        safeSpots: _safeSpots,
-        currentPosition: _currentPosition,
-        userProfile: _userProfile,
-        isAdmin: _isAdmin,
-        onGetDirections: _getDirections,
-        onGetSafeRoute: _getSafeRoute,
-        onShareLocation: _shareLocation,
-        onShowOnMap: _showOnMap,
-        onNavigateToSafeSpot: _navigateToSafeSpot,
-        onRefresh: _loadSafeSpots,
-      );
-    
-    case MainTab.notifications:
-      return isDesktop 
+      return isDesktop
           ? Stack(
               children: [
-                // Show map as background for desktop
                 _buildMap(),
-                
-                // Loading indicator
                 if (_isLoading && _currentPosition == null)
                   const Center(child: CircularProgressIndicator()),
-                
-                // Top bar with search + login/logout (same as map tab)
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 16,
                   left: 0,
@@ -9679,7 +10449,7 @@ Widget _buildCurrentScreen(bool isDesktop) {
                                   _userProfile == null ? Icons.login : Icons.logout,
                                   color: Colors.grey.shade700,
                                 ),
-                                onPressed: _userProfile == null 
+                                onPressed: _userProfile == null
                                     ? () {
                                         Navigator.pushReplacement(
                                           context,
@@ -9695,17 +10465,86 @@ Widget _buildCurrentScreen(bool isDesktop) {
                     ),
                   ),
                 ),
-                
-                // Floating notification panel will be added by your main layout
+                // REMOVED QuickAccessDesktopScreen from here - it's already rendered in _buildResponsiveDesktopLayout
               ],
             )
-          : _buildNotificationsScreen(); // Mobile: keep the full screen version
-    
+: QuickAccessScreen(
+    safeSpots: _safeSpots,
+    hotspots: _hotspots,
+    currentPosition: _currentPosition,
+    userProfile: _userProfile,
+    isAdmin: _hasAdminPermissions,
+    onGetDirections: _getDirections,
+    onGetSafeRoute: _getSafeRoute,
+    onShareLocation: _shareLocation,
+    onShowOnMap: _showOnMap,
+    onNavigateToSafeSpot: _navigateToSafeSpot,
+    onNavigateToHotspot: _navigateToHotspot,
+    onRefresh: _loadSafeSpots,
+  );
+    case MainTab.notifications:
+      return isDesktop
+          ? Stack(
+              children: [
+                _buildMap(),
+                if (_isLoading && _currentPosition == null)
+                  const Center(child: CircularProgressIndicator()),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 16,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    child: Center(
+                      child: Container(
+                        width: 600,
+                        child: Row(
+                          children: [
+                            Expanded(child: _buildSearchBar(isWeb: isDesktop)),
+                            const SizedBox(width: 12),
+                            Container(
+                              width: 45,
+                              height: 45,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.08),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: IconButton(
+                                iconSize: 22,
+                                padding: EdgeInsets.zero,
+                                icon: Icon(
+                                  _userProfile == null ? Icons.login : Icons.logout,
+                                  color: Colors.grey.shade700,
+                                ),
+                                onPressed: _userProfile == null
+                                    ? () {
+                                        Navigator.pushReplacement(
+                                          context,
+                                          MaterialPageRoute(builder: (context) => const LoginScreen()),
+                                        );
+                                      }
+                                    : _showLogoutConfirmation,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+               ),
+              ],
+            )
+          : _buildNotificationsScreen();
     case MainTab.profile:
       return _buildProfileScreen();
   }
 }
-
 
 
 
@@ -9724,14 +10563,13 @@ Widget _buildProfileScreen() {
       Theme.of(context).platform == TargetPlatform.windows ||
       kIsWeb;
 
-      void toggleEditMode() {
-        setState(() {
-          _profileScreen.setShouldScrollToTop(true);
-          _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
-        });
-      }
+  void toggleEditMode() {
+    setState(() {
+      _profileScreen.setShouldScrollToTop(true);
+      _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
+    });
+  }
 
-        // Updated to properly close and switch to map tab
   void closeProfileAndGoToMap() {
     setState(() {
       _currentTab = MainTab.map; // Switch to map tab
@@ -9739,34 +10577,40 @@ Widget _buildProfileScreen() {
     });
   }
 
-        Future<void> refreshProfile() async {
-          final user = _authService.currentUser;
-          if (user != null) {
-            final response = await Supabase.instance.client
-                .from('users')
-                .select()
-                .eq('email', user.email as Object)
-                .single();
+Future<void> refreshProfile() async {
+  final user = _authService.currentUser;
+  if (user != null) {
+    final response = await Supabase.instance.client
+        .from('users')
+        .select()
+        .eq('email', user.email as Object)
+        .single();
 
-            if (mounted) {
-              setState(() {
-                _userProfile = response;
-                _isAdmin = response['role'] == 'admin';
-                _profileScreen = ProfileScreen(_authService, _userProfile, _isAdmin);
-                _profileScreen.initControllers();
-              });
-            }
-          }
-        }
+    if (mounted) {
+      setState(() {
+        _userProfile = response;
+        _isAdmin = response['role'] == 'admin';
+        _isOfficer = response['role'] == 'officer';
+       _profileScreen = ProfileScreen(
+  _authService, 
+  _userProfile, 
+  _isAdmin,           // Admin-only privileges
+  _hasAdminPermissions // Admin + Officer privileges
+);
+        _profileScreen.initControllers();
+      });
+    }
+  }
+}
 
-      void handleSuccess() {
-        refreshProfile().then((_) {
-          setState(() {
-            _profileScreen.setShouldScrollToTop(true);
-            _profileScreen.isEditingProfile = false;
-          });
-        });
-      }
+  void handleSuccess() {
+    refreshProfile().then((_) {
+      setState(() {
+        _profileScreen.setShouldScrollToTop(true);
+        _profileScreen.isEditingProfile = false;
+      });
+    });
+  }
 
   if (isDesktopOrWeb) {
     return Stack(
@@ -9827,20 +10671,31 @@ Widget _buildProfileScreen() {
           ),
         ),
         
-        // Profile modal overlay
-        Container(
-          color: Colors.black.withOpacity(0.3), // Semi-transparent overlay
-          child: _profileScreen.isEditingProfile
-              ? _profileScreen.buildDesktopEditProfileForm(
-                  context,
-                  toggleEditMode,
-                  onSuccess: handleSuccess,
-                )
-              : _profileScreen.buildDesktopProfileView(
-                  context,
-                  toggleEditMode,
-                  onClosePressed: closeProfileAndGoToMap, // Add this parameter
+        // Profile modal overlay with GestureDetector
+        GestureDetector(
+          onTap: closeProfileAndGoToMap, // Close when clicking outside
+          child: Container(
+            color: Colors.black.withOpacity(0.3), // Semi-transparent overlay
+            child: Center(
+              child: GestureDetector(
+                onTap: () {}, // Prevent clicks on the profile content from propagating
+                child: Container(
+                  width: 600, // Match the width of other centered elements
+                  child: _profileScreen.isEditingProfile
+                      ? _profileScreen.buildDesktopEditProfileForm(
+                          context,
+                          toggleEditMode,
+                          onSuccess: handleSuccess,
+                        )
+                      : _profileScreen.buildDesktopProfileView(
+                          context,
+                          toggleEditMode,
+                          onClosePressed: closeProfileAndGoToMap,
+                        ),
                 ),
+              ),
+            ),
+          ),
         ),
       ],
     );
@@ -9944,12 +10799,14 @@ void _showSafeSpotDetails(Map<String, dynamic> safeSpot) {
       context: context,
       safeSpot: safeSpot,
       userProfile: _userProfile,
-      isAdmin: _isAdmin,
+      isAdmin: _hasAdminPermissions,
       onUpdate: () => _loadSafeSpots(),
       onGetSafeRoute: _getSafeRoute,
     );
   }
 }
+
+  _shouldNonAdminOfficerSeeHotspot(PostgrestMap response) {}
 }
 
 extension on MapController {

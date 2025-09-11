@@ -355,14 +355,14 @@ class SearchAndFilterService {
   }
 
   // Utility methods
-  static List<String> getUniqueRoles(List<Map<String, dynamic>> users) {
-    Set<String> roles = {'All Roles'};
-    for (var user in users) {
-      String role = user['role']?.toString() ?? 'user';
-      roles.add(role.toLowerCase() == 'admin' ? 'Admin' : 'User');
-    }
-    return roles.toList();
+static List<String> getUniqueRoles(List<Map<String, dynamic>> users) {
+  Set<String> roles = {'All Roles'};
+  for (var user in users) {
+    String role = user['role']?.toString() ?? 'user';
+    roles.add(_capitalizeFirst(role));
   }
+  return roles.toList();
+}
 
   static List<String> getUniqueGenders(List<Map<String, dynamic>> users) {
     Set<String> genders = {'All Genders'};
@@ -512,4 +512,6 @@ class SearchAndFilterService {
     }
     return levelStats;
   }
+
+  
 }

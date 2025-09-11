@@ -8,7 +8,6 @@ import 'package:latlong2/latlong.dart';
 import 'safe_spot_edit_form.dart';
 import 'safe_spot_service.dart';
 
-
 class SafeSpotDetails {
   static void showSafeSpotDetails({
     required BuildContext context,
@@ -44,7 +43,7 @@ class SafeSpotDetails {
     final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(createdTime);
     final status = safeSpot['status'] ?? 'pending';
     final verified = safeSpot['verified'] ?? false;
-    final verifiedByAdmin = safeSpot['verified_by_admin'] ?? false; // Add new field
+    final verifiedByAdmin = safeSpot['verified_by_admin'] ?? false;
     const displayMinimum = 4;
     
     final isOwner = (userProfile?['id'] != null) && 
@@ -63,7 +62,32 @@ class SafeSpotDetails {
         // Handle error silently
       }
     }
-    
+
+// Inside SafeSpotDetails.showSafeSpotDetails
+final officerDetails = <String, String>{};
+try {
+  final status = safeSpot['status'] ?? 'pending';
+  final createdAt = DateTime.parse(safeSpot['created_at']);
+  final updatedAt = safeSpot['updated_at'] != null ? DateTime.parse(safeSpot['updated_at']) : createdAt;
+  final hasUpdateAfterApproval = status == 'approved' && safeSpot['updated_profile'] != null && updatedAt.isAfter(createdAt);
+
+  // Populate officer details based on status
+  if (status == 'approved' && safeSpot['approved_profile'] != null) {
+    officerDetails['approved_by'] = '${safeSpot['approved_profile']['first_name'] ?? ''} ${safeSpot['approved_profile']['last_name'] ?? ''}'.trim();
+  } else if (status == 'rejected' && safeSpot['rejected_profile'] != null) {
+    officerDetails['rejected_by'] = '${safeSpot['rejected_profile']['first_name'] ?? ''} ${safeSpot['rejected_profile']['last_name'] ?? ''}'.trim();
+  }
+
+  // Show last_updated_by only if there’s an update profile after approval
+  if (hasUpdateAfterApproval) {
+    officerDetails['last_updated_by'] = '${safeSpot['updated_profile']['first_name'] ?? ''} ${safeSpot['updated_profile']['last_name'] ?? ''}'.trim();
+  }
+} catch (e) {
+  print('Error processing officer details: $e');
+  officerDetails['approved_by'] = '';
+  officerDetails['rejected_by'] = '';
+  officerDetails['last_updated_by'] = '';
+}
 
     // Check if it's desktop/web
     final isDesktop = kIsWeb || 
@@ -96,13 +120,14 @@ class SafeSpotDetails {
               formattedTime: formattedTime,
               status: status,
               verified: verified,
-              verifiedByAdmin: verifiedByAdmin, // Pass new field
+              verifiedByAdmin: verifiedByAdmin,
               isOwner: isOwner,
               safeSpotType: safeSpotType,
               hasUpvoted: hasUpvoted,
               displayMinimum: displayMinimum,
               isDesktop: true,
               onGetSafeRoute: onGetSafeRoute,
+              officerDetails: officerDetails,
             ),
           ),
         ),
@@ -123,22 +148,21 @@ class SafeSpotDetails {
           formattedTime: formattedTime,
           status: status,
           verified: verified,
-          verifiedByAdmin: verifiedByAdmin, // Pass new field
+          verifiedByAdmin: verifiedByAdmin,
           isOwner: isOwner,
           safeSpotType: safeSpotType,
           hasUpvoted: hasUpvoted,
           displayMinimum: displayMinimum,
           isDesktop: false,
           onGetSafeRoute: onGetSafeRoute,
+          officerDetails: officerDetails,
         ),
       );
     }
   }
 
-  
-
   // Show reject dialog
-  static void _showRejectDialog(BuildContext context, String safeSpotId, VoidCallback onUpdate) {
+  static void _showRejectDialog(BuildContext context, String safeSpotId, VoidCallback onUpdate, String adminId) {
     final reasonController = TextEditingController();
 
     showDialog(
@@ -174,6 +198,7 @@ class SafeSpotDetails {
                   rejectionReason: reasonController.text.trim().isEmpty 
                       ? null 
                       : reasonController.text.trim(),
+                  adminId: adminId,
                 );
                 onUpdate();
                 Navigator.pop(context); // Close dialog
@@ -259,7 +284,6 @@ class SafeSpotDetails {
   }
 }
 
-
 class SafeSpotDetailsContent extends StatefulWidget {
   final Map<String, dynamic> safeSpot;
   final Map<String, dynamic>? userProfile;
@@ -277,7 +301,7 @@ class SafeSpotDetailsContent extends StatefulWidget {
   final int displayMinimum;
   final bool isDesktop;
   final Function(LatLng) onGetSafeRoute;
-  
+  final Map<String, String> officerDetails;
 
   const SafeSpotDetailsContent({
     Key? key,
@@ -297,6 +321,7 @@ class SafeSpotDetailsContent extends StatefulWidget {
     required this.displayMinimum,
     required this.isDesktop,
     required this.onGetSafeRoute,
+    required this.officerDetails,
   }) : super(key: key);
 
   @override
@@ -312,666 +337,752 @@ class _SafeSpotDetailsContentState extends State<SafeSpotDetailsContent> {
     hasUpvoted = widget.hasUpvoted;
   }
 
-@override
-Widget build(BuildContext context) {
-  return GestureDetector(
-    onTap: () {}, // Prevents dismissal when tapping content
-    child: Container(
-      constraints: widget.isDesktop 
-          ? null
-          : BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.95,
-              minHeight: MediaQuery.of(context).size.height * 0.2,
-            ),
-      decoration: widget.isDesktop 
-          ? null
-          : const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-            ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Drag handle at the top (only for mobile)
-          if (!widget.isDesktop)
-            Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.symmetric(vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.grey[400],
-                borderRadius: BorderRadius.circular(2),
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {}, // Prevents dismissal when tapping content
+      child: Container(
+        constraints: widget.isDesktop 
+            ? null
+            : BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.95,
+                minHeight: MediaQuery.of(context).size.height * 0.2,
               ),
-            ),
-          
-          // Content wrapper
-          Flexible(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Header with icon and name (minimized)
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade100,
-                          borderRadius: BorderRadius.circular(10),
+        decoration: widget.isDesktop 
+            ? null
+            : const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle at the top (only for mobile)
+            if (!widget.isDesktop)
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey[400],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            
+            // Content wrapper
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Header with icon and name
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade100,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            SafeSpotDetails._getIconFromString(widget.safeSpotType['icon']),
+                            color: Colors.green.shade700,
+                            size: 20,
+                          ),
                         ),
-                        child: Icon(
-                          SafeSpotDetails._getIconFromString(widget.safeSpotType['icon']),
-                          color: Colors.green.shade700,
-                          size: 20,
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.safeSpot['name'],
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Row(
+                                children: [
+                                  Text(
+                                    widget.safeSpotType['name'],
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  _buildStatusWidget(widget.status, widget.verified, widget.verifiedByAdmin),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 24),
+
+                    // Description
+                    if (widget.safeSpot['description'] != null && widget.safeSpot['description'].toString().trim().isNotEmpty)
+                      _buildInfoTile(
+                        'Description',
+                        widget.safeSpot['description'],
+                        Icons.description,
+                      ),
+
+                    // Location
+                    _buildInfoTile(
+                      'Location',
+                      widget.address,
+                      Icons.location_on,
+                      trailing: IconButton(
+                        icon: const Icon(Icons.copy, size: 18),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: widget.fullLocation));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Location copied to clipboard')),
+                          );
+                        },
+                      ),
+                      subtitle: "(${widget.safeSpot['location']['coordinates'][1].toStringAsFixed(6)}, ${widget.safeSpot['location']['coordinates'][0].toStringAsFixed(6)})",
+                    ),
+
+                    // Get Safe Route button below lat/long  
+                    Padding(
+                      padding: const EdgeInsets.only(left: 34, top: 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () {
+                            print('Get Safe Route button clicked');
+                            final coords = widget.safeSpot['location']['coordinates'];
+                            final safeSpotLocation = LatLng(coords[1], coords[0]);
+                            print('Safe spot location: $safeSpotLocation');
+                            
+                            Navigator.pop(context);
+                            print('Calling onGetSafeRoute callback');
+                            widget.onGetSafeRoute(safeSpotLocation);
+                          },
+                          icon: const Icon(Icons.safety_check, size: 15),
+                          label: const Text('Get Safe Route'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.green,
+                            padding: EdgeInsets.zero,
+                            minimumSize: const Size(0, 0),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            alignment: Alignment.centerLeft,
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
+                    ),
+
+                    // Created time
+                    _buildInfoTile(
+                      'Created',
+                      widget.formattedTime,
+                      Icons.access_time,
+                    ),
+
+                    // Officer details section (visible only to admins)
+                    if (widget.isAdmin)
+                      Container(
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+                              ? Colors.green.shade50
+                              : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+                                  ? Colors.red.shade50
+                                  : Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+                                ? Colors.green.shade200
+                                : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+                                    ? Colors.red.shade200
+                                    : Colors.blue.shade200,
+                          ),
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              widget.safeSpot['name'],
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
                             Row(
                               children: [
+                                Icon(
+                                  Icons.person,
+                                  color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+                                      ? Colors.green.shade600
+                                      : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+                                          ? Colors.red.shade600
+                                          : Colors.blue.shade600,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
                                 Text(
-                                  widget.safeSpotType['name'],
+                                  'Last Actions:',
                                   style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
+                                    color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+                                        ? Colors.green.shade700
+                                        : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+                                            ? Colors.red.shade700
+                                            : Colors.blue.shade700,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                                const SizedBox(width: 6),
-                                _buildStatusWidget(widget.status, widget.verified, widget.verifiedByAdmin),
                               ],
+                            ),
+                            const SizedBox(height: 8),
+                            if (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+                              Text(
+                                'Approved by: ${widget.officerDetails['approved_by']}',
+                                style: TextStyle(
+                                  color: Colors.green.shade700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            const SizedBox(height: 4),
+                            if (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+                              Text(
+                                'Rejected by: ${widget.officerDetails['rejected_by']}',
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            const SizedBox(height: 4),
+                            if (widget.officerDetails['last_updated_by']?.isNotEmpty ?? false)
+                              Text(
+                                'Last updated by: ${widget.officerDetails['last_updated_by']}',
+                                style: TextStyle(
+                                  color: Colors.grey.shade700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            if (widget.officerDetails.isEmpty ||
+                                (widget.officerDetails['approved_by']?.isEmpty ?? true) &&
+                                (widget.officerDetails['rejected_by']?.isEmpty ?? true) &&
+                                (widget.officerDetails['last_updated_by']?.isEmpty ?? true))
+                              Text(
+                                'No actions recorded',
+                                style: TextStyle(
+                                  color: Colors.blue.shade700,
+                                  fontSize: 14,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+
+                    // Upvote section
+                    if (widget.status == 'pending') ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Column(
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Community Votes',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blue.shade700,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${widget.safeSpot['upvote_count'] ?? 0} of ${widget.displayMinimum} needed',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.blue.shade600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                // Voting button
+                                if (widget.userProfile != null && !widget.isOwner)
+                                  ElevatedButton.icon(
+                                    onPressed: () async {
+                                      try {
+                                        setState(() {
+                                          hasUpvoted = !hasUpvoted;
+                                          widget.safeSpot['upvote_count'] = hasUpvoted 
+                                              ? (widget.safeSpot['upvote_count'] + 1)
+                                              : (widget.safeSpot['upvote_count'] - 1);
+                                        });
+
+                                        if (hasUpvoted) {
+                                          await SafeSpotService.upvoteSafeSpot(
+                                            safeSpotId: widget.safeSpot['id'],
+                                            userId: widget.userProfile!['id'],
+                                          );
+                                        } else {
+                                          await SafeSpotService.removeUpvote(
+                                            safeSpotId: widget.safeSpot['id'],
+                                            userId: widget.userProfile!['id'],
+                                          );
+                                        }
+                                        
+                                        final actualUpvoteCount = await SafeSpotService.getSafeSpotUpvoteCount(widget.safeSpot['id']);
+                                        final actualHasUpvoted = await SafeSpotService.hasUserUpvoted(
+                                          safeSpotId: widget.safeSpot['id'],
+                                          userId: widget.userProfile!['id'],
+                                        );
+                                        
+                                        setState(() {
+                                          hasUpvoted = actualHasUpvoted;
+                                          widget.safeSpot['upvote_count'] = actualUpvoteCount;
+                                        });
+                                        
+                                        widget.onUpdate();
+                                      } catch (e) {
+                                        setState(() {
+                                          hasUpvoted = !hasUpvoted;
+                                          widget.safeSpot['upvote_count'] = hasUpvoted 
+                                              ? (widget.safeSpot['upvote_count'] - 1)
+                                              : (widget.safeSpot['upvote_count'] + 1);
+                                        });
+                                        
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Voting failed: ${e.toString()}'),
+                                            backgroundColor: Colors.red,
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    icon: Icon(
+                                      hasUpvoted ? Icons.thumb_up : Icons.thumb_up_outlined,
+                                      size: 14,
+                                    ),
+                                    label: Text(
+                                      hasUpvoted ? 'Voted' : 'Vote',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: hasUpvoted ? Colors.green : Colors.blue,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            LinearProgressIndicator(
+                              value: ((widget.safeSpot['upvote_count'] ?? 0) / widget.displayMinimum).clamp(0.0, 1.0),
+                              backgroundColor: Colors.blue.shade100,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue.shade600),
                             ),
                           ],
                         ),
                       ),
                     ],
-                  ),
-                  const Divider(height: 24),
 
-                  // Description (minimized)
-                  if (widget.safeSpot['description'] != null && widget.safeSpot['description'].toString().trim().isNotEmpty)
-                    _buildInfoTile(
-                      'Description',
-                      widget.safeSpot['description'],
-                      Icons.description,
-                    ),
-
-// Location (minimized)
-_buildInfoTile(
-  'Location',
-  widget.address,
-  Icons.location_on,
-  trailing: IconButton(
-    icon: const Icon(Icons.copy, size: 18),
-    onPressed: () {
-      Clipboard.setData(ClipboardData(text: widget.fullLocation));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location copied to clipboard')),
-      );
-    },
-  ),
-  subtitle: "(${widget.safeSpot['location']['coordinates'][1].toStringAsFixed(6)}, ${widget.safeSpot['location']['coordinates'][0].toStringAsFixed(6)})",
-),
-
-// Get Safe Route button below lat/long  
-Padding(
-  padding: const EdgeInsets.only(left: 34, top: 4), // Align with text content
-  child: Align(
-    alignment: Alignment.centerLeft,
-    child: TextButton.icon(
-      onPressed: () {
-        print('Get Safe Route button clicked'); // Debug print
-        final coords = widget.safeSpot['location']['coordinates'];
-        final safeSpotLocation = LatLng(coords[1], coords[0]);
-        print('Safe spot location: $safeSpotLocation'); // Debug print
-        
-        // Close the details dialog/sheet first
-        Navigator.pop(context);
-        
-        // Call the safe route function
-        print('Calling onGetSafeRoute callback'); // Debug print
-        widget.onGetSafeRoute(safeSpotLocation);
-      },
-      icon: const Icon(Icons.safety_check, size: 15),
-      label: const Text('Get Safe Route'),
-      style: TextButton.styleFrom(
-        foregroundColor: Colors.green,
-        padding: EdgeInsets.zero,
-        minimumSize: const Size(0, 0), 
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        alignment: Alignment.centerLeft,
-      ),
-    ),
-  ),
-),
-
-
-
-                  // Created time (minimized)
-                  _buildInfoTile(
-                    'Created',
-                    widget.formattedTime,
-                    Icons.access_time,
-                  ),
-
-                  // Upvote section (minimized)
-                  if (widget.status == 'pending') ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.blue.shade200),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Community Votes',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.blue.shade700,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                  Text(
-                                   '${widget.safeSpot['upvote_count'] ?? 0} of ${widget.displayMinimum} needed',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.blue.shade600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-
-                              // Voting button (minimized)
-                              if (widget.userProfile != null && !widget.isOwner)
-                                ElevatedButton.icon(
-                                  onPressed: () async {
-                                    // Voting logic stays the same
-                                    try {
-                                      setState(() {
-                                        hasUpvoted = !hasUpvoted;
-                                        widget.safeSpot['upvote_count'] = hasUpvoted 
-                                            ? (widget.safeSpot['upvote_count'] + 1)
-                                            : (widget.safeSpot['upvote_count'] - 1);
-                                      });
-
-                                      if (hasUpvoted) {
-                                        await SafeSpotService.upvoteSafeSpot(
-                                          safeSpotId: widget.safeSpot['id'],
-                                          userId: widget.userProfile!['id'],
-                                        );
-                                      } else {
-                                        await SafeSpotService.removeUpvote(
-                                          safeSpotId: widget.safeSpot['id'],
-                                          userId: widget.userProfile!['id'],
-                                        );
-                                      }
-                                      
-                                      final actualUpvoteCount = await SafeSpotService.getSafeSpotUpvoteCount(widget.safeSpot['id']);
-                                      final actualHasUpvoted = await SafeSpotService.hasUserUpvoted(
-                                        safeSpotId: widget.safeSpot['id'],
-                                        userId: widget.userProfile!['id'],
-                                      );
-                                      
-                                      setState(() {
-                                        hasUpvoted = actualHasUpvoted;
-                                        widget.safeSpot['upvote_count'] = actualUpvoteCount;
-                                      });
-                                      
-                                      widget.onUpdate();
-                                      
-                                    } catch (e) {
-                                      setState(() {
-                                        hasUpvoted = !hasUpvoted;
-                                        widget.safeSpot['upvote_count'] = hasUpvoted 
-                                            ? (widget.safeSpot['upvote_count'] - 1)
-                                            : (widget.safeSpot['upvote_count'] + 1);
-                                      });
-                                      
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text('Voting failed: ${e.toString()}'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  },
-                                  icon: Icon(
-                                    hasUpvoted ? Icons.thumb_up : Icons.thumb_up_outlined,
-                                    size: 14,
-                                  ),
-                                  label: Text(
-                                    hasUpvoted ? 'Voted' : 'Vote',
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: hasUpvoted ? Colors.green : Colors.blue,
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    // Show rejection reason for rejected spots
+                    if (widget.status == 'rejected' && widget.safeSpot['rejection_reason'] != null)
+                      Container(
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.cancel, color: Colors.red.shade600, size: 18),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Rejection Reason:',
+                                  style: TextStyle(
+                                    color: Colors.red.shade700,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          LinearProgressIndicator(
-                            value: ((widget.safeSpot['upvote_count'] ?? 0) / widget.displayMinimum).clamp(0.0, 1.0),
-                            backgroundColor: Colors.blue.shade100,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue.shade600),
-                          ),
-                        ],
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              widget.safeSpot['rejection_reason'].toString().trim().isEmpty 
+                                  ? 'No reason provided' 
+                                  : widget.safeSpot['rejection_reason'],
+                              style: TextStyle(
+                                color: Colors.red.shade700,
+                                fontSize: 12,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
 
-                  // Show rejection reason for rejected spots (minimized)
-                  if (widget.status == 'rejected' && widget.safeSpot['rejection_reason'] != null)
-                    Container(
-                      margin: const EdgeInsets.symmetric(vertical: 12),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red.shade200),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(Icons.cancel, color: Colors.red.shade600, size: 18),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Rejection Reason:',
+                    // Show approval note for approved spots
+                    if (widget.status == 'approved' && !widget.isAdmin && widget.isOwner)
+                      Container(
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.green.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle, color: Colors.green.shade600, size: 18),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                widget.verified
+                                    ? widget.verifiedByAdmin
+                                        ? 'Your safe spot has been approved and verified by an admin!'
+                                        : 'Your safe spot has been approved and verified by the community!'
+                                    : 'Your safe spot has been approved by the community.',
                                 style: TextStyle(
-                                  color: Colors.red.shade700,
+                                  color: Colors.green.shade700,
                                   fontSize: 12,
-                                  fontWeight: FontWeight.bold,
+                                  fontStyle: FontStyle.italic,
                                 ),
                               ),
-                            ],
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    // Edit button for admin on pending spots
+                    if (widget.isAdmin && widget.status == 'pending')
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              SafeSpotEditForm.showEditForm(
+                                context: context,
+                                safeSpot: widget.safeSpot,
+                                userProfile: widget.userProfile,
+                                onUpdate: widget.onUpdate,
+                              );
+                            },
+                            icon: const Icon(Icons.edit, size: 16),
+                            label: const Text('Edit Safe Spot', style: TextStyle(fontSize: 13)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue.shade600,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
                           ),
-                          const SizedBox(height: 6),
-                          Text(
-                            widget.safeSpot['rejection_reason'].toString().trim().isEmpty 
-                                ? 'No reason provided' 
-                                : widget.safeSpot['rejection_reason'],
-                            style: TextStyle(
-                              color: Colors.red.shade700,
-                              fontSize: 12,
-                              fontStyle: FontStyle.italic,
+                        ),
+                      ),
+
+                    const SizedBox(height: 4),
+                    
+                    // Admin actions for pending spots
+                    if (widget.isAdmin && widget.status == 'pending')
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                try {
+                                  await SafeSpotService.updateSafeSpotStatus(
+                                    safeSpotId: widget.safeSpot['id'],
+                                    status: 'approved',
+                                    adminId: widget.userProfile!['id'],
+                                  );
+                                  widget.onUpdate();
+                                  Navigator.pop(context);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Safe spot approved')),
+                                  );
+                                } catch (e) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Error: ${e.toString()}')),
+                                  );
+                                }
+                              },
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.green,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              child: const Text('Approve'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => SafeSpotDetails._showRejectDialog(context, widget.safeSpot['id'], widget.onUpdate, widget.userProfile!['id']),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.orange,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              child: const Text('Reject'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              child: const Text('Delete'),
                             ),
                           ),
                         ],
                       ),
-                    ),
 
-                  // Show approval note for approved spots (minimized)
-if (widget.status == 'approved' && !widget.isAdmin && widget.isOwner)
-    Container(
-      margin: const EdgeInsets.symmetric(vertical: 12),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.green.shade50,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.green.shade200),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.check_circle, color: Colors.green.shade600, size: 18),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              widget.verified
-                  ? widget.verifiedByAdmin
-                      ? 'Your safe spot has been approved and verified by an admin!'
-                      : 'Your safe spot has been approved and verified by the community!'
-                  : 'Your safe spot has been approved by the community.',
-              style: TextStyle(
-                color: Colors.green.shade700,
-                fontSize: 12,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-
-                  // Edit button for admin on pending spots (original placement)
-                  if (widget.isAdmin && widget.status == 'pending')
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            SafeSpotEditForm.showEditForm(
-                              context: context,
-                              safeSpot: widget.safeSpot,
-                              userProfile: widget.userProfile,
-                              onUpdate: widget.onUpdate,
-                            );
-                          },
-                          icon: const Icon(Icons.edit, size: 16),
-                          label: const Text('Edit Safe Spot', style: TextStyle(fontSize: 13)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue.shade600,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                    // Owner actions for pending spots
+                    if (!widget.isAdmin && widget.status == 'pending' && widget.isOwner)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                SafeSpotEditForm.showEditForm(
+                                  context: context,
+                                  safeSpot: widget.safeSpot,
+                                  userProfile: widget.userProfile,
+                                  onUpdate: widget.onUpdate,
+                                );
+                              },
+                              icon: const Icon(Icons.edit, size: 18),
+                              label: const Text('Edit'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue.shade600,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
                             ),
                           ),
-                        ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              child: const Text('Delete'),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
 
-                  const SizedBox(height: 4),
-                  
-                  // Admin actions for pending spots (keep original layout)
-                  if (widget.isAdmin && widget.status == 'pending')
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () async {
-                              try {
-                                await SafeSpotService.updateSafeSpotStatus(
-                                  safeSpotId: widget.safeSpot['id'],
-                                  status: 'approved',
+                    // Actions for rejected spots
+                    if (widget.status == 'rejected')
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              child: const Text('Delete'),
+                            ),
+                          ),
+                        ],
+                      ),
+
+                    // Admin actions for approved spots
+                    if (widget.isAdmin && widget.status == 'approved')
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                SafeSpotEditForm.showEditForm(
+                                  context: context,
+                                  safeSpot: widget.safeSpot,
+                                  userProfile: widget.userProfile,
+                                  onUpdate: widget.onUpdate,
                                 );
-                                widget.onUpdate();
-                                Navigator.pop(context);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Safe spot approved')),
-                                );
-                              } catch (e) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Error: ${e.toString()}')),
-                                );
-                              }
-                            },
-                            style: ElevatedButton.styleFrom(
-                              foregroundColor: Colors.green,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text('Approve'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () => SafeSpotDetails._showRejectDialog(context, widget.safeSpot['id'], widget.onUpdate),
-                            style: ElevatedButton.styleFrom(
-                              foregroundColor: Colors.orange,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text('Reject'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
-                            style: ElevatedButton.styleFrom(
-                              foregroundColor: Colors.red,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text('Delete'),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                  // Owner actions for pending spots (Edit and Delete side by side)
-                  if (!widget.isAdmin && widget.status == 'pending' && widget.isOwner)
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () {
-                              SafeSpotEditForm.showEditForm(
-                                context: context,
-                                safeSpot: widget.safeSpot,
-                                userProfile: widget.userProfile,
-                                onUpdate: widget.onUpdate,
-                              );
-                            },
-                            icon: const Icon(Icons.edit, size: 18),
-                            label: const Text('Edit'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blue.shade600,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                              },
+                              icon: const Icon(Icons.edit, size: 18),
+                              label: const Text('Edit'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue.shade600,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
-                            style: ElevatedButton.styleFrom(
-                              foregroundColor: Colors.red,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
                               ),
-                            ),
-                            child: const Text('Delete'),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                  // Actions for rejected spots
-                  if (widget.status == 'rejected')
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
-                            style: ElevatedButton.styleFrom(
-                              foregroundColor: Colors.red,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text('Delete'),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                  // Admin actions for approved spots (Edit and Delete side by side)
-                  if (widget.isAdmin && widget.status == 'approved')
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () {
-                              SafeSpotEditForm.showEditForm(
-                                context: context,
-                                safeSpot: widget.safeSpot,
-                                userProfile: widget.userProfile,
-                                onUpdate: widget.onUpdate,
-                              );
-                            },
-                            icon: const Icon(Icons.edit, size: 18),
-                            label: const Text('Edit'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blue.shade600,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
+                              child: const Text('Delete'),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () => SafeSpotDetails._showDeleteDialog(context, widget.safeSpot['id'], widget.onUpdate),
-                            style: ElevatedButton.styleFrom(
-                              foregroundColor: Colors.red,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text('Delete'),
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
+                        ],
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
-}
-  // Helper method to build info tiles
-Widget _buildInfoTile(
-  String title,
-  String content,
-  IconData icon, {
-  Widget? trailing,
-  String? subtitle,
-}) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade100,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(icon, size: 16, color: Colors.grey.shade600),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 1),
-              Text(
-                content,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 1),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        if (trailing != null) trailing,
-      ],
-    ),
-  );
-}
-
-  // Helper method to build status widget
-// Helper method to build status widget
-Widget _buildStatusWidget(String status, bool verified, bool verifiedByAdmin) {
-  Color color;
-  String text;
-  IconData icon;
-
-  switch (status) {
-    case 'pending':
-      color = Colors.orange;
-      text = 'Pending';
-      icon = Icons.hourglass_empty;
-      break;
-    case 'approved':
-      if (verified) {
-        color = Colors.green;
-        text = verifiedByAdmin ? 'Admin Verified' : 'Community Verified';
-        icon = Icons.verified;
-      } else {
-        color = Colors.blue;
-        text = 'Approved';
-        icon = Icons.check;
-      }
-      break;
-    case 'rejected':
-      color = Colors.red;
-      text = 'Rejected';
-      icon = Icons.close;
-      break;
-    default:
-      color = Colors.grey;
-      text = 'Unknown';
-      icon = Icons.help;
+    );
   }
 
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-    decoration: BoxDecoration(
-      color: color.withOpacity(0.1),
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: color.withOpacity(0.3)),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 10, color: color),
-        const SizedBox(width: 3),
-        Text(
-          text,
-          style: TextStyle(
-            color: color,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
+  // Helper method to build info tiles
+  Widget _buildInfoTile(
+    String title,
+    String content,
+    IconData icon, {
+    Widget? trailing,
+    String? subtitle,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(icon, size: 16, color: Colors.grey.shade600),
           ),
-        ),
-      ],
-    ),
-  );
-}
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  content,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) trailing,
+        ],
+      ),
+    );
+  }
+
+  // Helper method to build status widget
+  Widget _buildStatusWidget(String status, bool verified, bool verifiedByAdmin) {
+    Color color;
+    String text;
+    IconData icon;
+
+    switch (status) {
+      case 'pending':
+        color = Colors.orange;
+        text = 'Pending';
+        icon = Icons.hourglass_empty;
+        break;
+      case 'approved':
+        if (verified) {
+          color = Colors.green;
+          text = verifiedByAdmin ? 'Admin Verified' : 'Community Verified';
+          icon = Icons.verified;
+        } else {
+          color = Colors.blue;
+          text = 'Approved';
+          icon = Icons.check;
+        }
+        break;
+      case 'rejected':
+        color = Colors.red;
+        text = 'Rejected';
+        icon = Icons.close;
+        break;
+      default:
+        color = Colors.grey;
+        text = 'Unknown';
+        icon = Icons.help;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 10, color: color),
+          const SizedBox(width: 3),
+          Text(
+            text,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
