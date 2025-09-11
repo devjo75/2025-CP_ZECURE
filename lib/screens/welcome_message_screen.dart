@@ -1,5 +1,8 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:zecure/screens/hotlines_screen.dart';
 
 enum UserType { guest, user, admin }
 
@@ -147,7 +150,7 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
       case UserType.admin:
         headerColor =  Color.fromARGB(255, 61, 91, 131);
         headerIcon = Icons.admin_panel_settings_rounded;
-        title = 'Welcome Admin${widget.userName != null ? ' , ${widget.userName}' : ''}!';
+        title = "Welcome back, Admin\n${widget.userName ?? ''}!";
         break;
     }
 
@@ -258,7 +261,7 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
         const SizedBox(height: 12),
         
         Text(
-          'As a guest, you can view the safety map and see current hotspots in Zamboanga City. However, some features are limited:',
+          "As a guest, you can explore the safety map to view safe spots and crime hotspots in Zamboanga City. However, some features are limited:",
           style: GoogleFonts.poppins(
             fontSize: isWeb ? 14 : 13,
             color: Colors.grey.shade600,
@@ -269,14 +272,19 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
         const SizedBox(height: 16),
         
         _buildFeatureList(isWeb, [
-          {'icon': Icons.visibility_rounded, 'text': 'View safety hotspots and crime levels', 'available': true},
-          {'icon': Icons.map_rounded, 'text': 'Browse the interactive safety map', 'available': true},
-          {'icon': Icons.report_problem_rounded, 'text': 'Report safety incidents', 'available': false},
-          {'icon': Icons.route_rounded, 'text': 'Get personalized safe routes', 'available': false},
-          {'icon': Icons.notifications_rounded, 'text': 'Receive safety alerts', 'available': false},
+      {'icon': Icons.visibility_rounded, 'text': 'Check safe spots and nearby crime areas', 'available': true},
+      {'icon': Icons.map_rounded, 'text': 'Browse the interactive safety map', 'available': true},
+      {'icon': Icons.report_problem_rounded, 'text': 'Report safety incidents', 'available': false},
+      {'icon': Icons.add_location_alt_rounded, 'text': 'Mark safe locations', 'available': false},
+      {'icon': Icons.notifications_rounded, 'text': 'Receive safety alerts', 'available': false},
+
         ]),
+
+
         
         const SizedBox(height: 16),
+
+
         
         Container(
           padding: const EdgeInsets.all(16),
@@ -302,6 +310,62 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
             ],
           ),
         ),
+         const SizedBox(height: 16),
+
+// Emergency Hotlines Section
+Container(
+  padding: const EdgeInsets.all(16),
+  decoration: BoxDecoration(
+    color: Colors.blueGrey.shade50,
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: Colors.blueGrey.shade200),
+  ),
+  child: Row(
+    children: [
+      Icon(Icons.phone_in_talk_rounded, color: Colors.blueGrey.shade600, size: 24),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Emergency Hotlines Available',
+              style: GoogleFonts.poppins(
+                fontSize: isWeb ? 13 : 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.blueGrey.shade800,
+              ),
+            ),
+            Text(
+              'Access emergency contacts anytime',
+              style: GoogleFonts.poppins(
+                fontSize: isWeb ? 12 : 11,
+                color: Colors.blueGrey.shade600,
+              ),
+            ),
+          ],
+        ),
+      ),
+      TextButton(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const HotlinesScreen()),
+          );
+        },
+        child: Text(
+          'View',
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: Colors.blueGrey.shade600,
+          ),
+        ),
+      ),
+    ],
+  ),
+),
+
       ],
     );
   }
@@ -334,13 +398,17 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
         
         _buildFeatureList(isWeb, [
           {'icon': Icons.report_rounded, 'text': 'Report safety incidents in your area', 'available': true},
-          {'icon': Icons.route_rounded, 'text': 'Get personalized safe route suggestions', 'available': true},
+          {'icon': Icons.add_location_alt_rounded, 'text': 'Mark safe locations for the community map', 'available': true},
           {'icon': Icons.notifications_active_rounded, 'text': 'Receive real-time safety alerts', 'available': true},
           {'icon': Icons.people_rounded, 'text': 'Contribute to community safety data', 'available': true},
           {'icon': Icons.history_rounded, 'text': 'View your report history and status', 'available': true},
         ]),
+
+
         
         const SizedBox(height: 16),
+
+        
         
         Container(
           padding: const EdgeInsets.all(16),
@@ -366,6 +434,50 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
             ],
           ),
         ),
+
+        const SizedBox(height: 16),
+
+// Emergency Hotlines Section
+Container(
+  padding: const EdgeInsets.all(16),
+  decoration: BoxDecoration(
+    color: Colors.blueGrey.shade50,
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: Colors.blueGrey.shade200),
+  ),
+  child: Row(
+    children: [
+      Icon(Icons.phone_in_talk_rounded, color: Colors.blueGrey.shade600, size: 24),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Text(
+          'Quick access to emergency hotlines is always available for your safety.',
+          style: GoogleFonts.poppins(
+            fontSize: isWeb ? 13 : 12,
+            color: Colors.blueGrey.shade700,
+            height: 1.4,
+          ),
+        ),
+      ),
+      TextButton(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const HotlinesScreen()),
+          );
+        },
+        child: Text(
+          'View',
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: Colors.blueGrey.shade600,
+          ),
+        ),
+      ),
+    ],
+  ),
+),
       ],
     );
   }

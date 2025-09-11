@@ -156,7 +156,7 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     final bool isWeb = MediaQuery.of(context).size.width > 600;
     // ignore: unused_local_variable

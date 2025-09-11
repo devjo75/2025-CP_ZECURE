@@ -159,72 +159,72 @@ class _LandingScreenState extends State<LandingScreen>
     ];
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final bool isWeb = MediaQuery.of(context).size.width > 600;
-    final screenWidth = MediaQuery.of(context).size.width;
+@override
+Widget build(BuildContext context) {
+  final bool isWeb = MediaQuery.of(context).size.width > 600;
+  final screenWidth = MediaQuery.of(context).size.width;
 
-return Scaffold(
-  body: Container(
-    decoration: const BoxDecoration(
-      image: DecorationImage(
-        image: AssetImage('assets/images/LIGHT.jpg'),
-        fit: BoxFit.cover,
-      ),
-    ),
-    child: Container(
-      // Blue tinted overlay to match your theme
-      decoration: BoxDecoration(
-        color: Colors.blue.shade50.withOpacity(0.2),
-      ),
-      child: SafeArea(
-          child: SingleChildScrollView(
-            child: Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: isWeb ? 40.0 : 16.0,
-                vertical: 12.0,
-              ),
-              child: Column(
-                children: [
-                  // Hero Section
-                  FadeTransition(
-                    opacity: _fadeAnimation,
-                    child: SlideTransition(
-                      position: _slideAnimation,
-                      child: _buildHeroSection(isWeb, screenWidth),
-                    ),
-                  ),
-                  
-                  SizedBox(height: isWeb ? 60 : 40),
-                  
-                  // Enhanced Features Section with Carousel
-                  ScaleTransition(
-                    scale: _featureScaleAnimation,
-                    child: FadeTransition(
+  return Scaffold(
+    // Prevent resizing when the keyboard appears
+    resizeToAvoidBottomInset: false,
+    body: Stack(
+      children: [
+        // Background image
+        Positioned.fill(
+          child: Image.asset(
+            'assets/images/LIGHT.jpg',
+            fit: BoxFit.cover, // Cover the entire screen
+            alignment: Alignment.center, // Keep image centered
+          ),
+        ),
+        // Blue tinted overlay
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50.withOpacity(0.2),
+          ),
+          child: SafeArea(
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: isWeb ? 40.0 : 16.0,
+                  vertical: 12.0,
+                ),
+                child: Column(
+                  children: [
+                    // Hero Section
+                    FadeTransition(
                       opacity: _fadeAnimation,
-                      child: _buildEnhancedFeaturesSection(isWeb, screenWidth),
+                      child: SlideTransition(
+                        position: _slideAnimation,
+                        child: _buildHeroSection(isWeb, screenWidth),
+                      ),
                     ),
-                  ),
-                  
-                  SizedBox(height: isWeb ? 60 : 40),
-                  
-                  // Call to Action
-                  FadeTransition(
-                    opacity: _fadeAnimation,
-                    child: _buildCallToAction(isWeb, screenWidth),
-                  ),
-                  
-                  const SizedBox(height: 20),
-                ],
+                    SizedBox(height: isWeb ? 60 : 40),
+                    // Enhanced Features Section with Carousel
+                    ScaleTransition(
+                      scale: _featureScaleAnimation,
+                      child: FadeTransition(
+                        opacity: _fadeAnimation,
+                        child: _buildEnhancedFeaturesSection(isWeb, screenWidth),
+                      ),
+                    ),
+                    SizedBox(height: isWeb ? 60 : 40),
+                    // Call to Action
+                    FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: _buildCallToAction(isWeb, screenWidth),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
               ),
             ),
           ),
         ),
-      ),
-      ),
-    );
-  }
-
+      ],
+    ),
+  );
+}
   Widget _buildHeroSection(bool isWeb, double screenWidth) {
     final double maxWidth = isWeb ? 700 : screenWidth * 0.95;
     
@@ -279,15 +279,16 @@ return Scaffold(
               const SizedBox(height: 8),
               
               // Subtitle
-              Text(
-                'Your Safety Companion for Zamboanga City',
-                style: GoogleFonts.poppins(
-                  fontSize: isWeb ? 18 : 15,
-                  color: Colors.blue.shade600,
-                  fontWeight: FontWeight.w500,
-                ),
-                textAlign: TextAlign.center,
-              ),
+                  Text(
+                    "Your Guide to a Safer Zamboanga",
+                    style: GoogleFonts.poppins(
+                      fontSize: isWeb ? 18 : 15,
+                      color: Colors.blue.shade600,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+
               
               SizedBox(height: isWeb ? 16 : 10),
               

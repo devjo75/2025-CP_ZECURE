@@ -45,7 +45,7 @@ class SafeSpotDetails {
     final status = safeSpot['status'] ?? 'pending';
     final verified = safeSpot['verified'] ?? false;
     final verifiedByAdmin = safeSpot['verified_by_admin'] ?? false; // Add new field
-    const displayMinimum = 3;
+    const displayMinimum = 4;
     
     final isOwner = (userProfile?['id'] != null) && 
         (safeSpot['created_by'] == userProfile!['id']);

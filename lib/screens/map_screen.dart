@@ -104,6 +104,9 @@ class _MapScreenState extends State<MapScreen> {
   };
 
 
+bool _markersLoaded = false;
+int _maxMarkersToShow = 50; // Progressive loading
+Timer? _deferredLoadTimer;
 
  
   TravelMode _selectedTravelMode = TravelMode.driving;
@@ -188,7 +191,51 @@ List<Map<String, dynamic>> _safeSpots = [];
 RealtimeChannel? _safeSpotsChannel;
 bool _showSafeSpots = true;
 
+Set<String> _processedUpdateIds = {}; // Track processed updates
+Timer? _updateDebounceTimer;
+Map<String, Timer> _updateTimers = {}; // Per-ID debounce timers
 
+// NEW: Progressive marker loading based on zoom level
+List<Map<String, dynamic>> get _visibleHotspots {
+  if (!_markersLoaded) return []; // Don't show markers until loaded
+  
+  if (_currentZoom < 10.0) {
+    // Very zoomed out: show only critical hotspots
+    return _hotspots.where((h) => h['crime_type']?['level'] == 'critical').take(20).toList();
+  } else if (_currentZoom < 13.0) {
+    // Medium zoom: show high priority hotspots
+    return _hotspots.where((h) => 
+      ['critical', 'high'].contains(h['crime_type']?['level'])
+    ).take(_maxMarkersToShow).toList();
+  } else {
+    // Close zoom: show all hotspots but with limit
+    return _hotspots.take(_maxMarkersToShow * 2).toList();
+  }
+}
+
+// NEW: Progressive safe spots loading
+List<Map<String, dynamic>> get _visibleSafeSpots {
+  if (!_markersLoaded || !_showSafeSpots) return [];
+  
+  if (_currentZoom < 12.0) {
+    // Only show verified safe spots when zoomed out
+    return _safeSpots.where((s) => s['verified'] == true).take(30).toList();
+  } else {
+    // Show all relevant safe spots when zoomed in
+    return _safeSpots.where((safeSpot) {
+      final status = safeSpot['status'] ?? 'pending';
+      final currentUserId = _userProfile?['id'];
+      final createdBy = safeSpot['created_by'];
+      final isOwnSpot = currentUserId != null && currentUserId == createdBy;
+      
+      if (status == 'approved') return true;
+      if (status == 'pending' && currentUserId != null) return true;
+      if (isOwnSpot && status == 'rejected') return true;
+      if (_isAdmin) return true;
+      return false;
+    }).toList();
+  }
+}
 
 List<Map<String, dynamic>> _getFilteredNotifications() {
   switch (_notificationFilter) {
@@ -218,7 +265,7 @@ List<Map<String, dynamic>> _getFilteredNotifications() {
         }
         return false;
       }).toList();
-    case 'Medium':  // ADD THIS CASE
+    case 'Medium':
       return _notifications.where((notification) {
         if (notification['type'] == 'report' && notification['hotspot_id'] != null) {
           final relatedHotspot = _hotspots.firstWhere(
@@ -230,7 +277,7 @@ List<Map<String, dynamic>> _getFilteredNotifications() {
         }
         return false;
       }).toList();
-    case 'Low':     // ADD THIS CASE
+    case 'Low':
       return _notifications.where((notification) {
         if (notification['type'] == 'report' && notification['hotspot_id'] != null) {
           final relatedHotspot = _hotspots.firstWhere(
@@ -242,88 +289,237 @@ List<Map<String, dynamic>> _getFilteredNotifications() {
         }
         return false;
       }).toList();
+    // NEW: Add safe spot filter
+    case 'Safe Spots':
+      return _notifications.where((notification) {
+        return ['safe_spot_report', 'safe_spot_approval', 'safe_spot_rejection'].contains(notification['type']);
+      }).toList();
     default:
       return _notifications;
   }
 }
 
+
 @override
 void initState() {
   super.initState();
   
-  // Add auth state listener
-  Supabase.instance.client.auth.onAuthStateChange.listen((event) {
-    if (event.session != null && mounted) {
-      print('User logged in, loading profile and setting up real-time');
-      _loadUserProfile().then((_) {
-        // Reset filters for the logged-in user
-        final filterService = Provider.of<HotspotFilterService>(context, listen: false);
-        filterService.resetFiltersForUser(_userProfile?['id']?.toString());
-        
-        // Setup real-time after profile is loaded
-        _setupNotificationsRealtime();
-        _loadNotifications();
-      });
-    } else if (mounted) {
-      print('User logged out, cleaning up');
-      setState(() {
-        _userProfile = null;
-        _isAdmin = false;
-        _hotspots = [];
-        _notifications = [];
-        _unreadNotificationCount = 0;
-      });
-      
-      // Reset filters for guest user (no login)
-      final filterService = Provider.of<HotspotFilterService>(context, listen: false);
-      filterService.resetFiltersForUser(null);
-      
-      // Unsubscribe from channels
-      _notificationsChannel?.unsubscribe();
-      _hotspotsChannel?.unsubscribe();
-      _safeSpotsChannel?.unsubscribe(); 
-    }
-  });
-
-  // Initial profile load
-  _loadUserProfile().then((_) {
-    // Reset filters for the current user (if any)
-    final filterService = Provider.of<HotspotFilterService>(context, listen: false);
-    filterService.resetFiltersForUser(_userProfile?['id']?.toString());
-  });
+  // Only critical startup operations
+  _initializeEssentials();
   
-  _loadHotspots();
-  _setupRealtimeSubscription();
-  _loadSafeSpots();
-  _setupSafeSpotsRealtime();
-  
-  // Only setup notifications if user is already logged in
-  if (_userProfile != null) {
-    _setupNotificationsRealtime();
-    _loadNotifications();
-  }
-
-  Timer.periodic(const Duration(hours: 1), (_) => _cleanupOrphanedNotifications());
-  Timer.periodic(const Duration(minutes: 2), (_) => _checkRealtimeConnection());
-  
-  // Start live location with error handling
-  WidgetsBinding.instance.addPostFrameCallback((_) async {
-    try {
-      await _getCurrentLocation();
-      _startLiveLocation();
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        _showSnackBar('Error starting location: ${e.toString()}');
-      }
-    }
-  });
-
+  // Defer heavy operations to avoid blocking UI
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    _showWelcomeModal();
+    _deferredInitialization();
   });
 }
 
+bool _authListenerSetup = false; // Prevent duplicate listeners
+bool _isLoadingProfile = false; // Prevent duplicate profile loads
+
+void _initializeEssentials() {
+  // Only setup auth listener once
+  if (!_authListenerSetup) {
+    _authListenerSetup = true;
+    
+    Supabase.instance.client.auth.onAuthStateChange.listen((event) {
+      if (event.session != null && mounted && !_isLoadingProfile) {
+        print('User logged in, loading profile and setting up real-time');
+        _isLoadingProfile = true;
+        
+        _loadUserProfile().then((_) {
+          _isLoadingProfile = false;
+          if (mounted) {
+            final filterService = Provider.of<HotspotFilterService>(context, listen: false);
+            filterService.resetFiltersForUser(_userProfile?['id']?.toString());
+            
+            // Only setup notifications if not already done
+            if (_notificationsChannel == null) {
+              _deferredLoadTimer = Timer(Duration(milliseconds: 1000), () {
+                if (mounted) {
+                  _setupNotificationsRealtime();
+                  _loadNotifications();
+                }
+              });
+            }
+          }
+        }).catchError((e) {
+          _isLoadingProfile = false;
+          print('Error loading profile: $e');
+        });
+      } else if (event.session == null && mounted) {
+        print('User logged out, cleaning up');
+        _isLoadingProfile = false;
+        setState(() {
+          _userProfile = null;
+          _isAdmin = false;
+          _hotspots = [];
+          _notifications = [];
+          _unreadNotificationCount = 0;
+        });
+        
+        final filterService = Provider.of<HotspotFilterService>(context, listen: false);
+        filterService.resetFiltersForUser(null);
+        
+        _cleanupChannels();
+      }
+    });
+  }
+
+  // Start location immediately (but don't block)
+  _getCurrentLocationAsync();
+}
+
+// Helper method to clean up channels safely
+void _cleanupChannels() {
+  _notificationsChannel?.unsubscribe();
+  _notificationsChannel = null;
+  _hotspotsChannel?.unsubscribe();
+  _hotspotsChannel = null;
+  _safeSpotsChannel?.unsubscribe();
+  _safeSpotsChannel = null;
+}
+
+// NEW: Async location loading that doesn't block startup
+void _getCurrentLocationAsync() async {
+  try {
+    await _getCurrentLocation();
+    if (mounted) {
+      // Don't change _isInitialLoading anymore - map renders immediately
+      
+      // Wait for the map to be rendered before any MapController operations
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _currentPosition != null) {
+          // Safe to use MapController now
+          try {
+            _mapController.move(_currentPosition!, 15.0);
+          } catch (e) {
+            // MapController might not be ready yet, that's okay
+            print('MapController not ready yet, will retry: $e');
+          }
+        }
+      });
+    }
+  } catch (e) {
+    if (mounted) {
+      _showSnackBar('Error getting location: ${e.toString()}');
+    }
+  }
+}
+
+bool _deferredInitialized = false; // Prevent multiple deferred loads
+
+// OPTIMIZED: Deferred initialization with staggered loading - PREVENT DUPLICATES
+void _deferredInitialization() async {
+  if (!mounted || _deferredInitialized) return;
+  _deferredInitialized = true;
+  
+  print('Starting deferred initialization...');
+  
+  // Show welcome modal IMMEDIATELY after basic setup - don't wait for everything
+  Timer(Duration(milliseconds: 500), () { // Much shorter delay
+    if (mounted) {
+      _showWelcomeModal();
+    }
+  });
+  
+  // Load user profile first (lightweight) - only if not already loaded
+  if (_userProfile == null && !_isLoadingProfile) {
+    await _loadUserProfile();
+    if (!mounted) return;
+    
+    // Reset filters
+    final filterService = Provider.of<HotspotFilterService>(context, listen: false);
+    filterService.resetFiltersForUser(_userProfile?['id']?.toString());
+  }
+  
+  // Stagger heavy operations to prevent frame drops
+  await Future.delayed(Duration(milliseconds: 200));
+  if (!mounted) return;
+  
+  // Load hotspots first (most important) - only if not already loaded
+  if (_hotspots.isEmpty) {
+    print('Loading hotspots...');
+    await _loadHotspots();
+    if (!mounted) return;
+  }
+  
+  await Future.delayed(Duration(milliseconds: 200));
+  if (!mounted) return;
+  
+  // Setup realtime for hotspots - only if not already setup
+  if (_hotspotsChannel == null) {
+    print('Setting up hotspots realtime...');
+    _setupRealtimeSubscription();
+  }
+  
+  await Future.delayed(Duration(milliseconds: 200));
+  if (!mounted) return;
+  
+  // Load safe spots - only if not already loaded
+  if (_safeSpots.isEmpty) {
+    print('Loading safe spots...');
+    await _loadSafeSpots();
+    if (!mounted) return;
+  }
+  
+  await Future.delayed(Duration(milliseconds: 200));
+  if (!mounted) return;
+  
+  // Setup safe spots realtime - only if not already setup
+  if (_safeSpotsChannel == null) {
+    print('Setting up safe spots realtime...');
+    _setupSafeSpotsRealtime();
+  }
+  
+  // Mark markers as loaded
+  setState(() {
+    _markersLoaded = true;
+  });
+  
+  // Setup periodic tasks with initial delays (REDUCED FREQUENCY)
+  _setupPeriodicTasksOptimized();
+  
+  // DELAY location services startup to prevent early proximity checking
+  _deferredLoadTimer = Timer(Duration(milliseconds: 2000), () {
+    if (mounted) {
+      print('Starting location services...');
+      _startLiveLocationDeferred();
+    }
+  });
+  
+  print('Deferred initialization completed.');
+}
+
+// NEW: Setup periodic tasks with optimized intervals - MUCH LESS AGGRESSIVE
+void _setupPeriodicTasksOptimized() {
+  // Cleanup orphaned notifications (much less frequent initially)
+  Timer(Duration(minutes: 10), () { // Increased from 5 minutes
+    if (mounted) {
+      Timer.periodic(const Duration(hours: 2), (_) => _cleanupOrphanedNotifications()); // Increased from 1 hour
+    }
+  });
+  
+  // Connection check (much less frequent initially)
+  Timer(Duration(minutes: 5), () { // Increased from 1 minute
+    if (mounted) {
+      Timer.periodic(const Duration(minutes: 5), (_) => _checkRealtimeConnection()); // Increased from 2 minutes
+    }
+  });
+}
+
+// NEW: Setup periodic tasks with optimized intervals
+
+// NEW: Deferred location services startup
+void _startLiveLocationDeferred() {
+  // Start with longer intervals, then optimize based on usage
+  Timer(Duration(milliseconds: 500), () {
+    if (mounted) {
+      _startLiveLocation();
+    }
+  });
+}
+
+// OPTIMIZED: Enhanced dispose with timer cleanup
 @override
 void dispose() {
   _positionStream?.cancel();
@@ -333,14 +529,21 @@ void dispose() {
   _notificationsChannel?.unsubscribe();
   _reconnectionTimer?.cancel(); 
   _routeUpdateTimer?.cancel();
-  _proximityCheckTimer?.cancel(); 
+  _proximityCheckTimer?.cancel();
+  _deferredLoadTimer?.cancel(); // NEW: Clean up deferred timer
   
-  // Enhanced safe spots cleanup
   if (_safeSpotsChannel != null) {
     print('Unsubscribing from safe spots real-time channel...');
     _safeSpotsChannel!.unsubscribe();
     _safeSpotsChannel = null;
   }
+
+    for (final timer in _updateTimers.values) {
+    timer.cancel();
+  }
+  _updateTimers.clear();
+  _updateDebounceTimer?.cancel();
+  _processedUpdateIds.clear();
   
   super.dispose();
 }
@@ -531,100 +734,154 @@ void _handleSafeSpotInsert(PostgresChangePayload payload) async {
 void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
   if (!mounted) return;
   
-  print('=== SAFE SPOT UPDATE DEBUG ===');
-  print('Payload new record: ${payload.newRecord}');
+  final spotId = payload.newRecord['id'] as String;
+  final updateKey = '${spotId}_${payload.newRecord['updated_at']}';
   
-  try {
-    final spotId = payload.newRecord['id'] as String;
+  // Prevent duplicate processing of the same update
+  if (_processedUpdateIds.contains(updateKey)) {
+    print('🔄 Skipping duplicate update for safe spot: $spotId');
+    return;
+  }
+  
+  // Cancel any existing timer for this spot ID
+  _updateTimers[spotId]?.cancel();
+  
+  // Debounce rapid updates for the same spot
+  _updateTimers[spotId] = Timer(Duration(milliseconds: 500), () async {
+    if (!mounted) return;
     
-    // Get the previous safe spot data
-    final previousSafeSpot = _safeSpots.firstWhere(
-      (s) => s['id'] == spotId,
-      orElse: () => {},
-    );
+    // Mark this update as processed
+    _processedUpdateIds.add(updateKey);
     
-    print('Previous status: ${previousSafeSpot['status']}');
-    print('New status from payload: ${payload.newRecord['status']}');
+    // Clean up old processed IDs to prevent memory bloat (keep last 100)
+    if (_processedUpdateIds.length > 100) {
+      final oldIds = _processedUpdateIds.take(_processedUpdateIds.length - 50).toList();
+      _processedUpdateIds.removeAll(oldIds);
+    }
+    
+    print('=== PROCESSING SAFE SPOT UPDATE ===');
+    print('Spot ID: $spotId');
+    print('Update key: $updateKey');
+    
+    try {
+      // Get the previous safe spot data BEFORE making the API call
+      final previousSafeSpot = _safeSpots.firstWhere(
+        (s) => s['id'] == spotId,
+        orElse: () => {},
+      );
+      
+      final previousStatus = previousSafeSpot.isNotEmpty ? previousSafeSpot['status'] ?? 'pending' : null;
+      print('Previous status: $previousStatus');
+      print('New status from payload: ${payload.newRecord['status']}');
 
-    // Fetch the updated safe spot data
-    final response = await Supabase.instance.client
-        .from('safe_spots')
-        .select('''
-          *,
-          safe_spot_types!inner (
-            id,
-            name,
-            icon,
-            description
-          ),
-          users!safe_spots_created_by_fkey (
-            id,
-            first_name,
-            last_name,
-            role
-          )
-        ''')
-        .eq('id', spotId)
-        .single();
+      // Fetch the updated safe spot data
+      final response = await Supabase.instance.client
+          .from('safe_spots')
+          .select('''
+            *,
+            safe_spot_types!inner (
+              id,
+              name,
+              icon,
+              description
+            ),
+            users!safe_spots_created_by_fkey (
+              id,
+              first_name,
+              last_name,
+              role
+            )
+          ''')
+          .eq('id', spotId)
+          .single();
 
-    print('Fetched response status: ${response['status']}');
+      if (!mounted) return;
 
-    if (mounted) {
+      print('Fetched response status: ${response['status']}');
+
+      // Check if the spot should be visible to the current user
+      final shouldShow = _shouldUserSeeSafeSpot(response);
+      
       setState(() {
-        // REMOVE any existing instances of this safe spot first
-        _safeSpots.removeWhere((s) => s['id'] == spotId);
+        // Find existing spot index
+        final existingIndex = _safeSpots.indexWhere((s) => s['id'] == spotId);
         
-        // Then add the updated one
-        _safeSpots.add(response);
+        if (shouldShow) {
+          if (existingIndex != -1) {
+            // Update existing spot
+            _safeSpots[existingIndex] = response;
+            print('✅ Updated existing safe spot at index $existingIndex');
+          } else {
+            // Add new spot if it wasn't visible before
+            _safeSpots.add(response);
+            print('✅ Added previously hidden safe spot');
+          }
+        } else {
+          // Remove spot if it should no longer be visible
+          if (existingIndex != -1) {
+            _safeSpots.removeAt(existingIndex);
+            print('🗑️ Removed safe spot that should no longer be visible');
+          }
+        }
         
-        // Remove duplicates as a safety measure
-        _removeDuplicateSafeSpots();
-        
-        print('Updated safe spots list. Total count: ${_safeSpots.length}');
+        print('Final safe spots count: ${_safeSpots.length}');
       });
 
-      // Show status change messages or edit confirmations
-      final previousStatus = previousSafeSpot.isNotEmpty ? previousSafeSpot['status'] ?? 'pending' : 'pending';
-      final newStatus = response['status'] ?? 'pending';
-      final typeName = response['safe_spot_types']['name'];
+      // Show appropriate message (only once per actual status change)
+      _showUpdateMessage(previousSafeSpot, response, previousStatus);
 
-      print('Status comparison: $previousStatus -> $newStatus');
-
-      // Check if it's a regular update (edit) vs status change
-      final previousName = previousSafeSpot.isNotEmpty ? previousSafeSpot['name'] : '';
-      final newName = response['name'] ?? '';
-      final previousDescription = previousSafeSpot.isNotEmpty ? previousSafeSpot['description'] : '';
-      final newDescription = response['description'] ?? '';
-      final previousTypeId = previousSafeSpot.isNotEmpty ? previousSafeSpot['type_id'] : null;
-      final newTypeId = response['type_id'];
-
-      // Check if it's an edit (content changed but status stayed same)
-      bool isEdit = (previousName != newName || 
-                    previousDescription != newDescription || 
-                    previousTypeId != newTypeId) && 
-                   previousStatus == newStatus;
-
-      if (isEdit && newStatus == previousStatus) {
-        print('Showing edit confirmation message');
-        _showSnackBar('Safe spot updated: $typeName');
-      } else if (newStatus != previousStatus) {
-        // Status change messages (existing logic)
-        if (newStatus == 'approved') {
-          print('Showing approved message');
-          _showSnackBar('Safe spot approved: $typeName');
-        } else if (newStatus == 'rejected') {
-          print('Showing rejected message');
-          _showSnackBar('Safe spot rejected: $typeName');
-        }
+    } catch (e) {
+      print('❌ Error in _handleSafeSpotUpdate: $e');
+      if (mounted) {
+        _showSnackBar('Error updating safe spot: ${e.toString()}');
       }
     }
-  } catch (e) {
-    print('❌ Error in _handleSafeSpotUpdate: $e');
-    if (mounted) {
-      _showSnackBar('Error updating safe spot: ${e.toString()}');
+    
+    // Clean up the timer reference
+    _updateTimers.remove(spotId);
+    
+    print('=== END PROCESSING SAFE SPOT UPDATE ===\n');
+  });
+}
+
+void _showUpdateMessage(Map<String, dynamic> previousSafeSpot, Map<String, dynamic> response, String? previousStatus) {
+  final newStatus = response['status'] ?? 'pending';
+  final typeName = response['safe_spot_types']['name'];
+
+  print('Message check - Previous status: $previousStatus, New status: $newStatus');
+
+  // Only show messages for actual status changes
+  if (previousStatus != null && newStatus != previousStatus) {
+    if (newStatus == 'approved') {
+      print('🟢 Showing approved message');
+      _showSnackBar('Safe spot approved: $typeName');
+    } else if (newStatus == 'rejected') {
+      print('🔴 Showing rejected message');
+      _showSnackBar('Safe spot rejected: $typeName');
+    } else {
+      print('📝 Status changed to: $newStatus');
+      _showSnackBar('Safe spot status updated: $typeName');
+    }
+  } else if (previousStatus == newStatus) {
+    // Check if it's an edit (content changed but status stayed same)
+    final previousName = previousSafeSpot.isNotEmpty ? previousSafeSpot['name'] : '';
+    final newName = response['name'] ?? '';
+    final previousDescription = previousSafeSpot.isNotEmpty ? previousSafeSpot['description'] : '';
+    final newDescription = response['description'] ?? '';
+    final previousTypeId = previousSafeSpot.isNotEmpty ? previousSafeSpot['type_id'] : null;
+    final newTypeId = response['type_id'];
+
+    bool isEdit = (previousName != newName || 
+                  previousDescription != newDescription || 
+                  previousTypeId != newTypeId);
+
+    if (isEdit) {
+      print('✏️ Showing edit confirmation message');
+      _showSnackBar('Safe spot updated: $typeName');
+    } else {
+      print('ℹ️ No significant changes detected, skipping message');
     }
   }
-  print('=== END SAFE SPOT UPDATE DEBUG ===\n');
 }
 
 // Also add debug to the visibility check
@@ -676,7 +933,31 @@ void _handleSafeSpotDelete(PostgresChangePayload payload) {
     // Remove the safe spot from local state
     _safeSpots.removeWhere((spot) => spot['id'] == deletedSafeSpotId);
     
+    // Remove related notifications from local state
+    final relatedNotifications = _notifications.where((notification) => 
+      notification['safe_spot_id'] == deletedSafeSpotId
+    ).toList();
+    
+    // Update unread count for any unread notifications that will be removed
+    for (final notification in relatedNotifications) {
+      if (!(notification['is_read'] ?? false)) {
+        _unreadNotificationCount = (_unreadNotificationCount - 1).clamp(0, double.infinity).toInt();
+      }
+    }
+    
+    // Remove the notifications
+    _notifications.removeWhere((notification) => 
+      notification['safe_spot_id'] == deletedSafeSpotId
+    );
+    
+    // Clear selection if the deleted safe spot was selected
+    if (_selectedSafeSpot != null && _selectedSafeSpot!['id'] == deletedSafeSpotId) {
+      _selectedSafeSpot = null;
+    }
+    
     print('Safe spot deleted via real-time: $deletedSafeSpotId');
+    print('Related notifications removed: ${relatedNotifications.length}');
+    print('Updated unread count: $_unreadNotificationCount');
     
     // Show notification
     if (deletedSafeSpot.isNotEmpty) {
@@ -686,33 +967,40 @@ void _handleSafeSpotDelete(PostgresChangePayload payload) {
   });
 }
 
-void _handleSafeSpotUpvoteChange(PostgresChangePayload payload) async {
+void _handleSafeSpotUpvoteChange(PostgresChangePayload payload) {
   if (!mounted) return;
   
-  try {
-    final safeSpotId = payload.eventType == PostgresChangeEvent.delete 
-        ? payload.oldRecord['safe_spot_id']
-        : payload.newRecord['safe_spot_id'];
+  // Get the safe spot ID from the upvote record
+  final safeSpotId = payload.newRecord['safe_spot_id'] ?? payload.oldRecord['safe_spot_id'];
+  if (safeSpotId == null) return;
+  
+  print('Safe spot upvote changed for spot: $safeSpotId');
+  
+  // Debounce upvote updates to prevent excessive API calls
+  Timer(Duration(milliseconds: 1000), () async {
+    if (!mounted) return;
     
-    // Find the safe spot in our local list
-    final index = _safeSpots.indexWhere((s) => s['id'] == safeSpotId);
-    
-    if (index != -1) {
-      // Get updated upvote count
-      final upvoteCount = await SafeSpotService.getSafeSpotUpvoteCount(safeSpotId);
+    try {
+      // Refresh just this specific safe spot's upvote count
+      final response = await Supabase.instance.client
+          .from('safe_spots')
+          .select('id, upvotes')
+          .eq('id', safeSpotId)
+          .single();
       
-      setState(() {
-        _safeSpots[index] = {
-          ..._safeSpots[index],
-          'upvote_count': upvoteCount,
-        };
-      });
-      
-      print('Upvote count updated via real-time: $upvoteCount for safe spot $safeSpotId');
+      if (mounted) {
+        setState(() {
+          final index = _safeSpots.indexWhere((s) => s['id'] == safeSpotId);
+          if (index != -1) {
+            _safeSpots[index]['upvotes'] = response['upvotes'];
+            print('Updated upvote count for safe spot $safeSpotId');
+          }
+        });
+      }
+    } catch (e) {
+      print('Error updating upvote count: $e');
     }
-  } catch (e) {
-    print('Error in _handleSafeSpotUpvoteChange: $e');
-  }
+  });
 }
 
 
@@ -727,12 +1015,12 @@ void _showWelcomeModal() async {
     try {
       final response = await Supabase.instance.client
           .from('users')
-          .select('username, role, created_at')
+          .select('first_name, role, created_at') // 👈 fetch first_name instead
           .eq('id', user.id)
           .single();
       
       final isAdmin = response['role'] == 'admin';
-      final userName = response['username'];
+      final firstName = response['first_name']; // 👈 use first_name
       final createdAt = DateTime.parse(response['created_at']);
       final isNewUser = DateTime.now().difference(createdAt).inMinutes < 5; // Created within last 5 minutes
       
@@ -740,14 +1028,14 @@ void _showWelcomeModal() async {
         // Show first-time welcome modal for new users
         showFirstTimeWelcomeModal(
           context,
-          userName: userName,
+          userName: firstName, // 👈 pass first name
         );
       } else {
         // Show regular welcome modal for returning users
         showWelcomeModal(
           context,
           userType: isAdmin ? UserType.admin : UserType.user,
-          userName: userName,
+          userName: firstName, // 👈 pass first name
         );
       }
     } catch (e) {
@@ -772,6 +1060,7 @@ void _showWelcomeModal() async {
   }
 }
 
+
 void _startProximityMonitoring() {
   _proximityCheckTimer?.cancel();
   _proximityCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
@@ -779,6 +1068,7 @@ void _startProximityMonitoring() {
   });
 }
 
+// NEW: Lightweight marker builder for distant zoom levels
 
 
 // Main method to check proximity to active hotspots
@@ -1045,7 +1335,14 @@ Future<void> _loadNotifications() async {
   try {
     final response = await Supabase.instance.client
         .from('notifications')
-        .select()
+        .select('''
+          *,
+          safe_spots:safe_spot_id (
+            id,
+            name,
+            location
+          )
+        ''') // Include safe spot data in the query
         .eq('user_id', userId)
         .order('created_at', ascending: false);
     
@@ -1070,12 +1367,22 @@ Future<void> _loadNotifications() async {
   }
 }
 
+// Update your duplicate removal to handle safe spot notifications
 List<Map<String, dynamic>> _removeDuplicateNotifications(List<dynamic> notifications) {
   final uniqueKeys = <String>{};
   final uniqueNotifications = <Map<String, dynamic>>[];
   
   for (final notification in notifications.cast<Map<String, dynamic>>()) {
-    final key = '${notification['hotspot_id']}_${notification['user_id']}_${notification['type']}';
+    // Create unique key based on notification type and related IDs
+    String key;
+    if (notification['safe_spot_id'] != null) {
+      key = '${notification['safe_spot_id']}_${notification['user_id']}_${notification['type']}';
+    } else if (notification['hotspot_id'] != null) {
+      key = '${notification['hotspot_id']}_${notification['user_id']}_${notification['type']}';
+    } else {
+      key = '${notification['id']}_${notification['user_id']}_${notification['type']}';
+    }
+    
     if (!uniqueKeys.contains(key)) {
       uniqueKeys.add(key);
       uniqueNotifications.add(notification);
@@ -1729,7 +2036,50 @@ Future<void> _loadHotspots() async {
 
 // Alternative safer approach - separate queries for different cases
 
-
+void _moveToCurrentLocation() {
+  if (_currentPosition != null && mounted) {
+    // Check if MapController is ready before using it
+    try {
+      _mapController.move(_currentPosition!, 15.0);
+      setState(() {
+        _locationButtonPressed = true;
+      });
+      
+      // Reset the button state after animation
+      Timer(const Duration(milliseconds: 300), () {
+        if (mounted) {
+          setState(() {
+            _locationButtonPressed = false;
+          });
+        }
+      });
+    } catch (e) {
+      // If MapController isn't ready, wait and try again
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _currentPosition != null) {
+          try {
+            _mapController.move(_currentPosition!, 15.0);
+            setState(() {
+              _locationButtonPressed = true;
+            });
+            
+            Timer(const Duration(milliseconds: 300), () {
+              if (mounted) {
+                setState(() {
+                  _locationButtonPressed = false;
+                });
+              }
+            });
+          } catch (e) {
+            _showSnackBar('Unable to center map on location');
+          }
+        }
+      });
+    }
+  } else if (_currentPosition == null) {
+    _showSnackBar('Location not available yet');
+  }
+}
 
 
 Future<void> _getCurrentLocation() async {
@@ -1773,7 +2123,7 @@ Future<void> _getCurrentLocation() async {
         _currentPosition = LatLng(position.latitude, position.longitude);
         _isLoading = false;
       });
-      _mapController.move(_currentPosition!, 15.0);
+      // REMOVE THIS LINE: _mapController.move(_currentPosition!, 15.0);
     }
   } catch (e) {
     if (mounted) {
@@ -1782,6 +2132,8 @@ Future<void> _getCurrentLocation() async {
     _showSnackBar('Error getting location: ${e.toString()}');
   }
 }
+
+
 
 void _startLiveLocation() {
   if (mounted) {
@@ -2979,13 +3331,13 @@ double _calculateRouteDistance(List<LatLng> route) {
     
     switch (_selectedTravelMode) {
       case TravelMode.walking:
-        averageSpeedKmh = 3.0; // 5 km/h walking speed
+        averageSpeedKmh = 5.0; // 5 km/h walking speed
         break;
       case TravelMode.cycling:
-        averageSpeedKmh = 12.0; // 15 km/h cycling speed  
+        averageSpeedKmh = 13.0; // 15 km/h cycling speed  
         break;
       case TravelMode.driving:
-        averageSpeedKmh = 30.0; // 40 km/h average driving speed (considering traffic, stops, etc.)
+        averageSpeedKmh = 38.0; // 40 km/h average driving speed (considering traffic, stops, etc.)
         break;
     }
     
@@ -4835,6 +5187,9 @@ void _navigateToSafeSpot(Map<String, dynamic> safeSpot) {
 // AUTO ADJUST FROM SIDEBAR TO BOTTOM NAVBAR WHEN SCREEN is MINIMIZED
 @override
 Widget build(BuildContext context) {
+  // REMOVED: No more loading screen - map renders immediately
+  // The map will show immediately even without location/data
+  
   // Check if it's web or a large desktop screen
   final bool isDesktop = MediaQuery.of(context).size.width >= 800;
 
@@ -4890,6 +5245,21 @@ Widget _buildResponsiveDesktopLayout() {
         ],
       ),
       
+      // Backdrop overlay when notifications are open
+      if (_currentTab == MainTab.notifications)
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: () {
+              setState(() {
+                _currentTab = MainTab.map; // Close notification panel
+              });
+            },
+            child: Container(
+              color: Colors.black.withOpacity(0.1), // Semi-transparent backdrop
+            ),
+          ),
+        ),
+      
       // Your existing ResponsiveSidebarToggle
       ResponsiveSidebarToggle(
         isSidebarVisible: _isSidebarVisible,
@@ -4902,7 +5272,7 @@ Widget _buildResponsiveDesktopLayout() {
         },
       ),
       
-      // ADD THIS: Floating notification panel
+      // Floating notification panel (this will be on top of the backdrop)
       _buildFloatingNotificationPanel(),
     ],
   );
@@ -5367,28 +5737,29 @@ Widget _buildFloatingActionButtons() {
       const SizedBox(height: 4),
       
       // My Location button (always visible) - Google Maps style
-      Tooltip(
-        message: 'My Location',
-        child: FloatingActionButton(
-          heroTag: 'myLocation',
-          onPressed: () async {
-            setState(() {
-              _locationButtonPressed = true;
-              // Close map type selector when other buttons are pressed
-              if (_showMapTypeSelector) {
-                _showMapTypeSelector = false;
-              }
-            });
-            await _getCurrentLocation();
-            // Reset the state after a short delay
-            Future.delayed(const Duration(seconds: 2), () {
-              if (mounted) {
-                setState(() {
-                  _locationButtonPressed = false;
-                });
-              }
-            });
-          },
+Tooltip(
+  message: 'My Location',
+  child: FloatingActionButton(
+    heroTag: 'myLocation',
+    onPressed: () async {
+      setState(() {
+        // Close map type selector when other buttons are pressed
+        if (_showMapTypeSelector) {
+          _showMapTypeSelector = false;
+        }
+      });
+      
+      // Use the new safe location method
+      _moveToCurrentLocation();
+      
+      // Optionally refresh location if it's stale
+      if (_currentPosition == null) {
+        await _getCurrentLocation();
+        // Try moving again after getting fresh location
+        _moveToCurrentLocation();
+      }
+    },
+    // ... rest of your FAB properties
           backgroundColor: Colors.white,
           foregroundColor: _locationButtonPressed ? Colors.blue.shade600 : Colors.grey.shade600,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -5525,7 +5896,8 @@ Widget _buildNotificationsScreen() {
             const PopupMenuItem(value: 'Critical', child: Text('Critical')),
             const PopupMenuItem(value: 'High', child: Text('High')),
             const PopupMenuItem(value: 'Medium', child: Text('Medium')), 
-            const PopupMenuItem(value: 'Low', child: Text('Low')),       
+            const PopupMenuItem(value: 'Low', child: Text('Low')), 
+            const PopupMenuItem(value: 'Safe Spots', child: Text('Safe Spots')),      
           ],
         ),
         // Mark all as read
@@ -5713,105 +6085,117 @@ Widget _buildFloatingNotificationPanel() {
   return Positioned(
     left: _isSidebarVisible ? 285 : 85, // Adjust based on sidebar width
     top: 100,   // Adjust based on your layout
-    child: Material(
-      elevation: 16,
-      borderRadius: BorderRadius.circular(16),
-      shadowColor: Colors.black.withOpacity(0.2),
-      child: Container(
-        width: 450,
-        height: 800,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey[200]!),
-        ),
-        child: Column(
-          children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  topRight: Radius.circular(16),
-                ),
-                border: Border(
-                  bottom: BorderSide(color: Colors.grey[200]!),
-                ),
-              ),
-              child: Row(
-                children: [
-                  const Text(
-                    'Notifications',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
+    child: Listener(
+      // Prevent pointer events on the notification panel from bubbling up
+      onPointerDown: (event) {
+        // Stop the event from reaching the backdrop GestureDetector
+        // Do nothing here - this prevents the panel from closing when clicked inside
+      },
+      child: Material(
+        elevation: 16,
+        borderRadius: BorderRadius.circular(16),
+        shadowColor: Colors.black.withOpacity(0.2),
+        child: Container(
+          width: 450,
+          height: 800,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Column(
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
                   ),
-                  const Spacer(),
-                  
-                  // Filter dropdown
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey[300]!),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _notificationFilter,
-                        items: const [
-                          DropdownMenuItem(value: 'All', child: Text('All')),
-                          DropdownMenuItem(value: 'Unread', child: Text('Unread')),
-                          DropdownMenuItem(value: 'Critical', child: Text('Critical')),
-                          DropdownMenuItem(value: 'High', child: Text('High')),
-                          DropdownMenuItem(value: 'Medium', child: Text('Medium')),
-                          DropdownMenuItem(value: 'Low', child: Text('Low')),
-                        ],
-                        onChanged: (value) {
-                          setState(() {
-                            _notificationFilter = value ?? 'All';
-                          });
-                        },
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black87,
-                        ),
-                        isDense: true,
+                  border: Border(
+                    bottom: BorderSide(color: Colors.grey[200]!),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Notifications',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
                       ),
                     ),
-                  ),
-                  
-                  const SizedBox(width: 8),
-                  
-                  // Mark all as read
-                  if (_getFilteredNotifications().any((n) => !n['is_read']))
-                    IconButton(
-                      onPressed: _markAllAsRead,
-                      icon: const Icon(Icons.done_all, size: 16),
-                      tooltip: 'Mark all as read',
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.blue[100],
-                        foregroundColor: Colors.blue[700],
-                        minimumSize: const Size(32, 32),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
+                    const Spacer(),
+                    
+
+                    
+                    const SizedBox(width: 8),
+                    
+                    // Filter dropdown
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey[300]!),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _notificationFilter,
+                          items: const [
+                            DropdownMenuItem(value: 'All', child: Text('All')),
+                            DropdownMenuItem(value: 'Unread', child: Text('Unread')),
+                            DropdownMenuItem(value: 'Critical', child: Text('Critical')),
+                            DropdownMenuItem(value: 'High', child: Text('High')),
+                            DropdownMenuItem(value: 'Medium', child: Text('Medium')),
+                            DropdownMenuItem(value: 'Low', child: Text('Low')),
+                            DropdownMenuItem(value: 'Safe Spots', child: Text('Safe Spots')),
+                          ],
+                          onChanged: (value) {
+                            setState(() {
+                              _notificationFilter = value ?? 'All';
+                            });
+                          },
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.black87,
+                          ),
+                          isDense: true,
                         ),
                       ),
                     ),
-                ],
+                    
+                    const SizedBox(width: 8),
+                    
+                    // Mark all as read
+                    if (_getFilteredNotifications().any((n) => !n['is_read']))
+                      IconButton(
+                        onPressed: _markAllAsRead,
+                        icon: const Icon(Icons.done_all, size: 16),
+                        tooltip: 'Mark all as read',
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.blue[100],
+                          foregroundColor: Colors.blue[700],
+                          minimumSize: const Size(32, 32),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            
-            // Notifications List
-            Expanded(
-              child: _getFilteredNotifications().isEmpty
-                  ? _buildEmptyState()
-                  : _buildScrollableNotifications(),
-            ),
-          ],
+              
+              // Notifications List
+              Expanded(
+                child: _getFilteredNotifications().isEmpty
+                    ? _buildEmptyState()
+                    : _buildScrollableNotifications(),
+              ),
+            ],
+          ),
         ),
       ),
     ),
@@ -6067,6 +6451,15 @@ Widget _buildEmptyState() {
 Color _getIconBackgroundColor(Map<String, dynamic> notification) {
   final type = notification['type'];
   
+  // Handle safe spot notifications
+  if (type == 'safe_spot_report') {
+    return Colors.blue.withOpacity(0.1);
+  } else if (type == 'safe_spot_approval') {
+    return Colors.green.withOpacity(0.1);
+  } else if (type == 'safe_spot_rejection') {
+    return Colors.red.withOpacity(0.1);
+  }
+  
   if (type == 'report' && notification['hotspot_id'] != null) {
     final relatedHotspot = _hotspots.firstWhere(
       (hotspot) => hotspot['id'] == notification['hotspot_id'],
@@ -6105,6 +6498,15 @@ Color _getIconBackgroundColor(Map<String, dynamic> notification) {
 
 Widget _getNotificationIcon(Map<String, dynamic> notification) {
   final type = notification['type'];
+  
+  // Handle safe spot notifications
+  if (type == 'safe_spot_report') {
+    return const Icon(Icons.add_location_alt, color: Colors.blue, size: 18);
+  } else if (type == 'safe_spot_approval') {
+    return const Icon(Icons.check_circle, color: Colors.green, size: 18);
+  } else if (type == 'safe_spot_rejection') {
+    return const Icon(Icons.cancel, color: Colors.red, size: 18);
+  }
   
   // For report notifications, get the crime level from the related hotspot
   if (type == 'report' && notification['hotspot_id'] != null) {
@@ -6170,7 +6572,40 @@ bool _isToday(DateTime date) {
 
 
 void _handleNotificationTap(Map<String, dynamic> notification) {
-  if (notification['hotspot_id'] != null) {
+  // Handle safe spot notifications
+  if (notification['safe_spot_id'] != null) {
+    // Check if safe spot still exists
+    final safeSpot = _safeSpots.firstWhere(
+      (s) => s['id'] == notification['safe_spot_id'],
+      orElse: () => {},
+    );
+    
+    if (safeSpot.isNotEmpty) {
+      // Get safe spot coordinates
+      final coords = safeSpot['location']['coordinates'];
+      final safeSpotPosition = LatLng(coords[1], coords[0]);
+      
+      setState(() {
+        _currentTab = MainTab.map; // Switch to map view
+        _selectedSafeSpot = safeSpot; // Store the selected safe spot
+      });
+      
+      // Use post frame callback to ensure UI is ready
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Move map to safe spot location
+        _mapController.move(safeSpotPosition, 15.0);
+        
+        // Show safe spot details after a small delay to allow map animation
+        Future.delayed(const Duration(milliseconds: 200), () {
+          _showSafeSpotDetails(safeSpot);
+        });
+      });
+    } else {
+      _showSnackBar('The related safe spot has been deleted');
+    }
+  }
+  // Handle hotspot notifications (existing code)
+  else if (notification['hotspot_id'] != null) {
     // Check if hotspot still exists
     final hotspot = _hotspots.firstWhere(
       (h) => h['id'] == notification['hotspot_id'],
@@ -6202,6 +6637,8 @@ void _handleNotificationTap(Map<String, dynamic> notification) {
     }
   }
 }
+
+
 
 
 
@@ -6276,6 +6713,43 @@ IconData _getMapTypeIcon(MapType type) {
 }
 
 
+
+
+// NEW: Lightweight marker builder for distant zoom levels
+Widget _buildSimpleHotspotMarker({
+  required Map<String, dynamic> hotspot,
+  required Color markerColor,
+  required IconData markerIcon,
+  required double opacity,
+}) {
+  return GestureDetector(
+    onTap: () {
+      setState(() {
+        _selectedHotspot = hotspot;
+        _selectedSafeSpot = null;
+      });
+      _showHotspotDetails(hotspot);
+    },
+    child: Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: markerColor.withOpacity(opacity),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 2,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Icon(markerIcon, color: Colors.white, size: 12),
+    ),
+  );
+}
+
 // MAP MAP MAP
 
 Widget _buildMap() {
@@ -6306,6 +6780,15 @@ Widget _buildMap() {
               minZoom: 3.0,
               // Platform-specific tap behavior
               onTap: (tapPosition, latLng) {
+                // FIRST: Check if notification panel is open and close it
+                if (_currentTab == MainTab.notifications) {
+                  setState(() {
+                    _currentTab = MainTab.map; // Close notification panel
+                  });
+                  return; // Don't process other tap behaviors when closing notifications
+                }
+                
+                // THEN: Continue with existing tap behavior
                 FocusScope.of(context).unfocus();
                 
                 // Clear selections when tapping on empty map
@@ -6325,6 +6808,15 @@ Widget _buildMap() {
               },
               // Long press for mobile devices
               onLongPress: (tapPosition, latLng) {
+                // FIRST: Check if notification panel is open and close it
+                if (_currentTab == MainTab.notifications) {
+                  setState(() {
+                    _currentTab = MainTab.map; // Close notification panel
+                  });
+                  return; // Don't process other behaviors when closing notifications
+                }
+                
+                // THEN: Continue with existing long press behavior
                 // Only provide haptic feedback on mobile
                 if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
                   HapticFeedback.mediumImpact();
@@ -6441,8 +6933,8 @@ Widget _buildMap() {
 // FIXED: Hotspots layer with stable markers and labels
 Consumer<HotspotFilterService>(
   builder: (context, filterService, child) {
-    // Create filtered hotspots list once and cache it
-    final filteredHotspots = _hotspots.where((hotspot) {
+    // Use progressive loading
+    final visibleHotspots = _visibleHotspots.where((hotspot) {
       final currentUserId = _userProfile?['id'];
       final isAdmin = _isAdmin;
       final status = hotspot['status'] ?? 'approved';
@@ -6452,37 +6944,22 @@ Consumer<HotspotFilterService>(
       final isOwnHotspot = currentUserId != null &&
                        (currentUserId == createdBy || currentUserId == reportedBy);
       
-      // FIRST: Apply filter service logic to ALL hotspots (including own)
       if (!filterService.shouldShowHotspot(hotspot)) {
-        return false;  // Hide if filter says no
+        return false;
       }
       
-      // SECOND: Apply visibility rules based on user role
-      if (isAdmin) {
-        // Admins see everything that passes the filter
-        return true;
-      }
+      if (isAdmin) return true;
       
-      // For regular users and guests
-      if (status == 'approved' && activeStatus == 'active') {
-        // Show approved and active hotspots to everyone
-        return true;
-      }
+      if (status == 'approved' && activeStatus == 'active') return true;
       
-      // Show own pending/rejected hotspots to authenticated users
-      if (isOwnHotspot && currentUserId != null) {
-        return true;
-      }
+      if (isOwnHotspot && currentUserId != null) return true;
       
-      // Hide everything else
       return false;
     }).toList();
 
     return MarkerLayer(
-      // CRITICAL: Add stable key that only changes when data actually changes
-      key: ValueKey('hotspots_${filteredHotspots.map((h) => '${h['id']}_${h['status']}_${h['active_status']}_${_selectedHotspot?['id']}').join('_')}'),
-      markers: filteredHotspots.map((hotspot) {
-        // Cache these values to prevent recalculation
+      key: ValueKey('hotspots_optimized_${visibleHotspots.length}_${_currentZoom.round()}_${_selectedHotspot?['id']}'),
+      markers: visibleHotspots.map((hotspot) {
         final coords = hotspot['location']['coordinates'];
         final point = LatLng(coords[1], coords[0]);
         final status = hotspot['status'] ?? 'approved';
@@ -6495,7 +6972,10 @@ Consumer<HotspotFilterService>(
                          (_userProfile?['id'] == hotspot['created_by'] ||
                           _userProfile?['id'] == hotspot['reported_by']);
         final isSelected = _selectedHotspot != null && _selectedHotspot!['id'] == hotspot['id'];
-        final hotspotId = hotspot['id'].toString(); // Ensure string for key
+        final hotspotId = hotspot['id'].toString();
+        
+        // Determine marker complexity based on zoom
+        final useSimpleMarker = _currentZoom < 13.0;
         
         // Color and icon logic (cached)
         Color markerColor;
@@ -6505,83 +6985,85 @@ Consumer<HotspotFilterService>(
         if (status == 'pending') {
           markerColor = Colors.deepPurple;
           markerIcon = Icons.hourglass_empty;
-        }
-        else if (status == 'rejected') {
+        } else if (status == 'rejected') {
           markerColor = Colors.grey;
           markerIcon = Icons.cancel_outlined;
           opacity = isOwnHotspot ? 1.0 : 0.6;
         } else {
-          // Set color based on crime level (keep existing level colors)
           switch (crimeLevel) {
             case 'critical':
-              markerColor = const Color.fromARGB(255, 219, 0, 0);  // Red for critical
+              markerColor = const Color.fromARGB(255, 219, 0, 0);
               break;
             case 'high':
-              markerColor = const Color.fromARGB(255, 223, 106, 11);  // Orange for high
+              markerColor = const Color.fromARGB(255, 223, 106, 11);
               break;
             case 'medium':
-              markerColor = const Color.fromARGB(167, 116, 66, 9);  // Brown for medium
+              markerColor = const Color.fromARGB(167, 116, 66, 9);
               break;
             case 'low':
-              markerColor = const Color.fromARGB(255, 216, 187, 23);  // Yellow for low
+              markerColor = const Color.fromARGB(255, 216, 187, 23);
               break;
             default:
               markerColor = Colors.blue;
           }
           
-          // Icon selection based on category to match filter dialog
           switch (crimeCategory?.toLowerCase()) {
             case 'property':
-              markerIcon = Icons.home_outlined;  // Match filter icon
+              markerIcon = Icons.home_outlined;
               break;
             case 'violent':
-              markerIcon = Icons.warning;   // Match filter icon
+              markerIcon = Icons.warning;
               break;
             case 'drug':
-              markerIcon = FontAwesomeIcons.cannabis;  // Match filter icon
+              markerIcon = FontAwesomeIcons.cannabis;
               break;
             case 'public order':
-              markerIcon = Icons.balance;  // Match filter icon
+              markerIcon = Icons.balance;
               break;
             case 'financial':
-              markerIcon = Icons.attach_money;  // Match filter icon
+              markerIcon = Icons.attach_money;
               break;
             case 'traffic':
-              markerIcon = Icons.traffic;  // Match filter icon
+              markerIcon = Icons.traffic;
               break;
             case 'alert':
-              markerIcon = Icons.campaign;  // Match filter icon
+              markerIcon = Icons.campaign;
               break;
             default:
-              markerIcon = Icons.location_pin;  // Default fallback
+              markerIcon = Icons.location_pin;
           }
           
-            if (!isActive) {
-              markerColor = markerColor.withOpacity(0.7);
-              opacity = 0.45; 
-            }
+          if (!isActive) {
+            markerColor = markerColor.withOpacity(0.7);
+            opacity = 0.45;
+          }
         }
         
         return Marker(
-          // CRITICAL: Use stable, unique key that includes all relevant state
-          key: ValueKey('hotspot_$hotspotId\_$status\_$activeStatus\_$isSelected'),
+          key: ValueKey('hotspot_optimized_$hotspotId\_$status\_$activeStatus\_$isSelected\_$useSimpleMarker'),
           point: point,
-          width: isSelected ? 120 : 100,
-          height: isSelected ? 70 : 60,
-          // CRITICAL: Wrap child in RepaintBoundary to prevent unnecessary repaints
+          width: useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 120 : 100),
+          height: useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 70 : 60),
           child: RepaintBoundary(
-            child: _buildStableHotspotMarker(
-              hotspot: hotspot,
-              markerColor: markerColor,
-              markerIcon: markerIcon,
-              opacity: opacity,
-              isSelected: isSelected,
-              isActive: isActive,
-              isOwnHotspot: isOwnHotspot,
-              status: status,
-              crimeTypeName: crimeTypeName,
-              showLabel: _currentZoom >= 14.0, // Pass zoom-based label visibility
-            ),
+            child: useSimpleMarker
+              ? _buildSimpleHotspotMarker(
+                  hotspot: hotspot,
+                  markerColor: markerColor,
+                  markerIcon: markerIcon,
+                  opacity: opacity,
+                )
+              : _buildStableHotspotMarker(
+                  hotspot: hotspot,
+                  markerColor: markerColor,
+                  markerIcon: markerIcon,
+                  opacity: opacity,
+                  isSelected: isSelected,
+                  isActive: isActive,
+                  isOwnHotspot: isOwnHotspot,
+                  status: status,
+                  crimeTypeName: crimeTypeName,
+                  showLabel: _currentZoom >= 14.0,
+                ),
           ),
         );
       }).toList(),
@@ -6589,47 +7071,31 @@ Consumer<HotspotFilterService>(
   },
 ),
 
-              // Safe Spots Marker Layer - FIXED with stable keys and selection support
-// Safe Spots Marker Layer - FIXED with stable keys and selection support
+
+
+         
+// Safe Spots Marker Layer 
 if (_showSafeSpots)
   MarkerLayer(
-    // CRITICAL: Stable key for safe spots layer - now includes selected safe spot
-    key: ValueKey('safe_spots_layer_${_safeSpots.map((s) => '${s['id']}_${s['status']}_${s['verified']}').join('_')}_${_selectedSafeSpot?['id']}'),
-    markers: _safeSpots.asMap().entries.where((entry) {
-      final safeSpot = entry.value;
-      final status = safeSpot['status'] ?? 'pending';
-      final currentUserId = _userProfile?['id'];
-      final createdBy = safeSpot['created_by'];
-      final isOwnSpot = currentUserId != null && currentUserId == createdBy;
-      
-      // Show approved safe spots to everyone
-      if (status == 'approved') return true;
-      
-      // Show ALL pending spots to authenticated users (for voting)
-      if (status == 'pending' && currentUserId != null) return true;
-      
-      // Show own rejected spots
-      if (isOwnSpot && status == 'rejected') return true;
-      
-      // Show all to admin
-      if (_isAdmin) return true;
-
-      return false;
-    }).map((entry) {
+    key: ValueKey('safe_spots_optimized_${_visibleSafeSpots.length}_${_currentZoom.round()}_${_selectedSafeSpot?['id']}'),
+    markers: _visibleSafeSpots.asMap().entries.map((entry) {
       final index = entry.key;
       final safeSpot = entry.value;
       final coords = safeSpot['location']['coordinates'];
       final point = LatLng(coords[1], coords[0]);
       final status = safeSpot['status'] ?? 'pending';
       final verified = safeSpot['verified'] ?? false;
-      final verifiedByAdmin = safeSpot['verified_by_admin'] ?? false; // Extract verifiedByAdmin
+      final verifiedByAdmin = safeSpot['verified_by_admin'] ?? false;
       final safeSpotType = safeSpot['safe_spot_types'];
       final safeSpotName = safeSpot['name'] ?? 'Safe Spot';
       final currentUserId = _userProfile?['id'];
       final createdBy = safeSpot['created_by'];
       final isOwnSpot = currentUserId != null && currentUserId == createdBy;
       final safeSpotId = safeSpot['id'].toString();
-      final isSelected = _selectedSafeSpot != null && _selectedSafeSpot!['id'] == safeSpot['id']; // NEW: Check if selected
+      final isSelected = _selectedSafeSpot != null && _selectedSafeSpot!['id'] == safeSpot['id'];
+      
+      // Use simple markers when zoomed out
+      final useSimpleMarker = _currentZoom < 13.0;
       
       Color markerColor;
       IconData markerIcon = _getIconFromString(safeSpotType['icon']);
@@ -6652,28 +7118,59 @@ if (_showSafeSpots)
       }
       
       return Marker(
-        // CRITICAL: Stable unique key for each safe spot - now includes selection state
-        key: ValueKey('safe_spot_$safeSpotId\_$status\_$verified\_$index\_$isSelected'),
+        key: ValueKey('safe_spot_optimized_$safeSpotId\_$status\_$verified\_$index\_$isSelected\_$useSimpleMarker'),
         point: point,
-        width: isSelected ? 140 : 120,
-        height: isSelected ? 60 : 40,
-        
+        width: useSimpleMarker ? 32 : (isSelected ? 140 : 120),
+        height: useSimpleMarker ? 32 : (isSelected ? 60 : 40),
         alignment: Alignment.center,
-        // CRITICAL: Wrap in RepaintBoundary
         child: RepaintBoundary(
-          child: _buildStableSafeSpotMarker(
-            safeSpot: safeSpot,
-            markerColor: markerColor,
-            markerIcon: markerIcon,
-            opacity: opacity,
-            status: status,
-            verified: verified,
-            verifiedByAdmin: verifiedByAdmin, // Add this parameter
-            safeSpotName: safeSpotName,
-            isOwnSpot: isOwnSpot,
-            isSelected: isSelected,
-            showLabel: _currentZoom >= 14.0,
-          ),
+          child: useSimpleMarker
+            ? GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _selectedSafeSpot = safeSpot;
+                    _selectedHotspot = null;
+                  });
+                  SafeSpotDetails.showSafeSpotDetails(
+                    context: context,
+                    safeSpot: safeSpot,
+                    userProfile: _userProfile,
+                    isAdmin: _isAdmin,
+                    onUpdate: () => _loadSafeSpots(),
+                    onGetSafeRoute: _getSafeRoute,
+                  );
+                },
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: markerColor.withOpacity(opacity),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.2),
+                        blurRadius: 2,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: Icon(markerIcon, color: Colors.white, size: 14),
+                ),
+              )
+            : _buildStableSafeSpotMarker(
+                safeSpot: safeSpot,
+                markerColor: markerColor,
+                markerIcon: markerIcon,
+                opacity: opacity,
+                status: status,
+                verified: verified,
+                verifiedByAdmin: verifiedByAdmin,
+                safeSpotName: safeSpotName,
+                isOwnSpot: isOwnSpot,
+                isSelected: isSelected,
+                showLabel: _currentZoom >= 14.0,
+              ),
         ),
       );
     }).toList(),
@@ -7360,16 +7857,22 @@ Padding(
               coordinates,
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
-            if (_isAdmin) // Only visible for admin
+
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: TextButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    final lat = hotspot['location']['coordinates'][1];
-                    final lng = hotspot['location']['coordinates'][0];
-                    _getDirections(LatLng(lat, lng));
-                  },
+onPressed: () {
+  final lat = hotspot['location']['coordinates'][1];
+  final lng = hotspot['location']['coordinates'][0];
+  _showDirectionsConfirmation(
+    LatLng(lat, lng),
+    context,
+    () {
+      Navigator.pop(context);
+      _getDirections(LatLng(lat, lng));
+    },
+  );
+},
                   icon: const Icon(Icons.directions, size: 16),
                   label: const Text('Get Directions'),
                   style: TextButton.styleFrom(
@@ -7703,16 +8206,22 @@ showModalBottomSheet(
                                 coordinates,
                                 style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                               ),
-                              if (_isAdmin) // only visible for admin
+                  
                                 Padding(
                                   padding: const EdgeInsets.only(top: 8),
                                   child: TextButton.icon(
-                                    onPressed: () {
-                                      Navigator.pop(context);
-                                      final lat = hotspot['location']['coordinates'][1];
-                                      final lng = hotspot['location']['coordinates'][0];
-                                      _getDirections(LatLng(lat, lng));
-                                    },
+                                      onPressed: () {
+                                        final lat = hotspot['location']['coordinates'][1];
+                                        final lng = hotspot['location']['coordinates'][0];
+                                        _showDirectionsConfirmation(
+                                          LatLng(lat, lng),
+                                          context,
+                                          () {
+                                            Navigator.pop(context);
+                                            _getDirections(LatLng(lat, lng));
+                                          },
+                                        );
+                                      },
                                     icon: const Icon(Icons.directions, size: 16),
                                     label: const Text('Get Directions'),
                                     style: TextButton.styleFrom(
@@ -8353,6 +8862,142 @@ Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, b
 
 
 
+void _showDirectionsConfirmation(LatLng coordinates, BuildContext context, VoidCallback onConfirm) {
+  showDialog(
+    context: context,
+    builder: (context) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: Colors.white,
+      insetPadding: const EdgeInsets.all(24), // Ensures margin from screen edges
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.9, // Max 90% of screen width
+          maxHeight: MediaQuery.of(context).size.height * 0.8, // Max 80% of screen height
+        ),
+        child: IntrinsicHeight(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header Section
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.red.shade600,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Warning: Navigate to Location',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red.shade800,
+                          fontSize: 16,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Content Section
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'You are about to navigate to a reported crime location. This area may be unsafe. Please ensure you are taking necessary precautions before proceeding.',
+                        style: TextStyle(
+                          color: Colors.grey.shade800,
+                          fontSize: 15,
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Do you want to proceed?',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade900,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              
+              // Actions Section
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: Text(
+                        'Cancel',
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        onConfirm();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        elevation: 2,
+                      ),
+                      child: const Text(
+                        'Proceed',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
 
 
 
@@ -9290,6 +9935,19 @@ void _onSuggestionSelected(LocationSuggestion suggestion) {
     _mapController.move(newPosition, 15.0);
     _searchController.text = suggestion.displayName;
     _showLocationOptions(newPosition);
+  }
+}
+
+void _showSafeSpotDetails(Map<String, dynamic> safeSpot) {
+  if (mounted) {
+    SafeSpotDetails.showSafeSpotDetails(
+      context: context,
+      safeSpot: safeSpot,
+      userProfile: _userProfile,
+      isAdmin: _isAdmin,
+      onUpdate: () => _loadSafeSpots(),
+      onGetSafeRoute: _getSafeRoute,
+    );
   }
 }
 }

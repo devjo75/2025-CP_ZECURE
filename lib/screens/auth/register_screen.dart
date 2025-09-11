@@ -514,7 +514,7 @@ void _showErrorSnackBar(String message) {
     );
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     final bool isWeb = MediaQuery.of(context).size.width > 600;
     final screenWidth = MediaQuery.of(context).size.width;

@@ -358,9 +358,15 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
               'color': Colors.red.shade600,
             },
             {
+              'icon': Icons.add_location_alt_rounded, 
+              'title': 'Mark Safe Locations',
+              'description': 'Contribute by adding safe spots to the community map.',
+              'color': Colors.green.shade600,
+            },
+            {
               'icon': Icons.route_rounded, 
               'title': 'Get Safe Routes',
-              'description': 'Receive personalized route suggestions based on current safety data.',
+              'description': 'Receive safe route suggestions based on current safety data.',
               'color': Colors.blue.shade600,
             },
             {
@@ -369,12 +375,8 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
               'description': 'Stay informed with instant safety alerts in your vicinity.',
               'color': Colors.orange.shade600,
             },
-            {
-              'icon': Icons.analytics_rounded, 
-              'title': 'Safety Analytics',
-              'description': 'View detailed safety statistics and trends for Zamboanga City.',
-              'color': Colors.purple.shade600,
-            },
+
+
           ]),
           
           const SizedBox(height: 20),
