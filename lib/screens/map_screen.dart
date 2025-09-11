@@ -8153,6 +8153,7 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
   final category = crimeType['category'] ?? 'Unknown Category';
 
 // Fetch officer details
+// Fetch officer details - UPDATED to include creator/reporter info
 Map<String, String> officerDetails = {};
 try {
   final response = await Supabase.instance.client
@@ -8161,25 +8162,47 @@ try {
         approved_by,
         rejected_by,
         last_updated_by,
+        created_by,
+        reported_by,
         approved_profile:approved_by (first_name, last_name),
         rejected_profile:rejected_by (first_name, last_name),
-        updated_profile:last_updated_by (first_name, last_name)
+        updated_profile:last_updated_by (first_name, last_name),
+        creator_profile:created_by (first_name, last_name),
+        reporter_profile:reported_by (first_name, last_name)
       ''')
       .eq('id', hotspot['id'])
       .single();
 
-  if (response['approved_by'] != null) {
+  // Process approved_by
+  if (response['approved_by'] != null && response['approved_profile'] != null) {
     officerDetails['approved_by'] = 
-        '${response['approved_profile']?['first_name'] ?? ''} ${response['approved_profile']?['last_name'] ?? ''}'.trim();
+        '${response['approved_profile']['first_name'] ?? ''} ${response['approved_profile']['last_name'] ?? ''}'.trim();
   }
-  if (response['rejected_by'] != null) {
+  
+  // Process rejected_by
+  if (response['rejected_by'] != null && response['rejected_profile'] != null) {
     officerDetails['rejected_by'] = 
-        '${response['rejected_profile']?['first_name'] ?? ''} ${response['rejected_profile']?['last_name'] ?? ''}'.trim();
+        '${response['rejected_profile']['first_name'] ?? ''} ${response['rejected_profile']['last_name'] ?? ''}'.trim();
   }
-  if (response['last_updated_by'] != null) {
+  
+  // Process last_updated_by
+  if (response['last_updated_by'] != null && response['updated_profile'] != null) {
     officerDetails['last_updated_by'] = 
-        '${response['updated_profile']?['first_name'] ?? ''} ${response['updated_profile']?['last_name'] ?? ''}'.trim();
+        '${response['updated_profile']['first_name'] ?? ''} ${response['updated_profile']['last_name'] ?? ''}'.trim();
   }
+  
+  // Process created_by - NEW
+  if (response['created_by'] != null && response['creator_profile'] != null) {
+    officerDetails['created_by'] = 
+        '${response['creator_profile']['first_name'] ?? ''} ${response['creator_profile']['last_name'] ?? ''}'.trim();
+  }
+  
+  // Process reported_by - NEW  
+  if (response['reported_by'] != null && response['reporter_profile'] != null) {
+    officerDetails['reported_by'] = 
+        '${response['reporter_profile']['first_name'] ?? ''} ${response['reporter_profile']['last_name'] ?? ''}'.trim();
+  }
+  
 } catch (e) {
   print('Error fetching officer details: $e');
 }
@@ -8571,7 +8594,7 @@ onPressed: () {
                                 ),
                               ),
                             // Action buttons
-// Officer details section
+// Officer details section - CLEANED
 if (_hasAdminPermissions || _isOfficer) ...[
   Container(
     margin: const EdgeInsets.symmetric(vertical: 12),
@@ -8594,6 +8617,7 @@ if (_hasAdminPermissions || _isOfficer) ...[
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Review Status Header
         Row(
           children: [
             Icon(
@@ -8606,63 +8630,93 @@ if (_hasAdminPermissions || _isOfficer) ...[
               size: 20,
             ),
             const SizedBox(width: 8),
-            Text(
-              'Last Actions:',
+            const Text(
+              'Review Status',
               style: TextStyle(
-                color: (officerDetails['approved_by']?.isNotEmpty ?? false)
-                    ? Colors.green.shade700
-                    : (officerDetails['rejected_by']?.isNotEmpty ?? false)
-                        ? Colors.red.shade700
-                        : Colors.blue.shade700,
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
+                color: Colors.black87,
               ),
             ),
           ],
         ),
         const SizedBox(height: 8),
-        if (officerDetails['approved_by']?.isNotEmpty ?? false)
-          Text(
-            'Approved by: ${officerDetails['approved_by']}',
-            style: TextStyle(
-              color: Colors.green.shade700,
-              fontSize: 14,
+
+        // Creator / Reporter (just under Review Status)
+        if (status == 'pending') ...[
+          if (officerDetails['reported_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Reported by: ${officerDetails['reported_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else if (officerDetails['created_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Created by: ${officerDetails['created_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else
+            Text(
+              'Reporter information not available',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
             ),
-          ),
-        const SizedBox(height: 4),
-        if (officerDetails['rejected_by']?.isNotEmpty ?? false)
-          Text(
-            'Rejected by: ${officerDetails['rejected_by']}',
-            style: TextStyle(
-              color: Colors.red.shade700,
-              fontSize: 14,
+        ] else ...[
+          if (officerDetails['created_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Created by: ${officerDetails['created_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else if (officerDetails['reported_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Reported by: ${officerDetails['reported_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else
+            Text(
+              'Creator information not available',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
             ),
-          ),
-        const SizedBox(height: 4),
-        if (officerDetails['last_updated_by']?.isNotEmpty ?? false)
+        ],
+        const SizedBox(height: 8),
+
+        // Show approval / rejection
+        if (officerDetails['approved_by']?.isNotEmpty ?? false) ...[
           Text(
-            'Last updated by: ${officerDetails['last_updated_by']}',
-            style: TextStyle(
-              color: Colors.grey.shade700,
-              fontSize: 14,
-            ),
+            '✅ Approved by: ${officerDetails['approved_by']}',
+            style: const TextStyle(fontSize: 14, color: Colors.black87),
           ),
-        if (officerDetails.isEmpty ||
-            (officerDetails['approved_by']?.isEmpty ?? true) &&
-            (officerDetails['rejected_by']?.isEmpty ?? true) &&
-            (officerDetails['last_updated_by']?.isEmpty ?? true))
+          const SizedBox(height: 4),
+        ],
+        if (officerDetails['rejected_by']?.isNotEmpty ?? false) ...[
           Text(
-            'No actions recorded',
-            style: TextStyle(
-              color: Colors.blue.shade700,
-              fontSize: 14,
-              fontStyle: FontStyle.italic,
-            ),
+            '❌ Rejected by: ${officerDetails['rejected_by']}',
+            style: const TextStyle(fontSize: 14, color: Colors.black87),
           ),
+          const SizedBox(height: 4),
+        ],
+
+        // Always at the bottom: Last updated by
+        if (officerDetails['last_updated_by']?.isNotEmpty ?? false) ...[
+          const SizedBox(height: 8),
+          Text(
+            '🔄 Last updated by: ${officerDetails['last_updated_by']}',
+            style: const TextStyle(fontSize: 14, color: Colors.black87),
+          ),
+        ],
       ],
     ),
   ),
 ],
+
+
+
                             const SizedBox(height: 20),
                             _buildDesktopActionButtons(hotspot, status, isOwner),
                             const SizedBox(height: 16),
@@ -9013,7 +9067,7 @@ showModalBottomSheet(
                       ),
                     ),
 
-// Officer details section
+// Officer details section - CLEANED
 if (_hasAdminPermissions || _isOfficer) ...[
   Container(
     margin: const EdgeInsets.symmetric(vertical: 12),
@@ -9036,6 +9090,7 @@ if (_hasAdminPermissions || _isOfficer) ...[
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Review Status Header
         Row(
           children: [
             Icon(
@@ -9048,63 +9103,92 @@ if (_hasAdminPermissions || _isOfficer) ...[
               size: 20,
             ),
             const SizedBox(width: 8),
-            Text(
-              'Last Actions:',
+            const Text(
+              'Review Status',
               style: TextStyle(
-                color: (officerDetails['approved_by']?.isNotEmpty ?? false)
-                    ? Colors.green.shade700
-                    : (officerDetails['rejected_by']?.isNotEmpty ?? false)
-                        ? Colors.red.shade700
-                        : Colors.blue.shade700,
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
+                color: Colors.black87,
               ),
             ),
           ],
         ),
         const SizedBox(height: 8),
-        if (officerDetails['approved_by']?.isNotEmpty ?? false)
-          Text(
-            'Approved by: ${officerDetails['approved_by']}',
-            style: TextStyle(
-              color: Colors.green.shade700,
-              fontSize: 14,
+
+        // Creator / Reporter (just under Review Status)
+        if (status == 'pending') ...[
+          if (officerDetails['reported_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Reported by: ${officerDetails['reported_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else if (officerDetails['created_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Created by: ${officerDetails['created_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else
+            Text(
+              'Reporter information not available',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
             ),
-          ),
-        const SizedBox(height: 4),
-        if (officerDetails['rejected_by']?.isNotEmpty ?? false)
-          Text(
-            'Rejected by: ${officerDetails['rejected_by']}',
-            style: TextStyle(
-              color: Colors.red.shade700,
-              fontSize: 14,
+        ] else ...[
+          if (officerDetails['created_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Created by: ${officerDetails['created_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else if (officerDetails['reported_by']?.isNotEmpty ?? false)
+            Text(
+              '📝 Reported by: ${officerDetails['reported_by']}',
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            )
+          else
+            Text(
+              'Creator information not available',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
             ),
-          ),
-        const SizedBox(height: 4),
-        if (officerDetails['last_updated_by']?.isNotEmpty ?? false)
+        ],
+        const SizedBox(height: 8),
+
+        // Show approval / rejection
+        if (officerDetails['approved_by']?.isNotEmpty ?? false) ...[
           Text(
-            'Last updated by: ${officerDetails['last_updated_by']}',
-            style: TextStyle(
-              color: Colors.grey.shade700,
-              fontSize: 14,
-            ),
+            '✅ Approved by: ${officerDetails['approved_by']}',
+            style: const TextStyle(fontSize: 14, color: Colors.black87),
           ),
-        if (officerDetails.isEmpty ||
-            (officerDetails['approved_by']?.isEmpty ?? true) &&
-            (officerDetails['rejected_by']?.isEmpty ?? true) &&
-            (officerDetails['last_updated_by']?.isEmpty ?? true))
+          const SizedBox(height: 4),
+        ],
+        if (officerDetails['rejected_by']?.isNotEmpty ?? false) ...[
           Text(
-            'No actions recorded',
-            style: TextStyle(
-              color: Colors.blue.shade700,
-              fontSize: 14,
-              fontStyle: FontStyle.italic,
-            ),
+            '❌ Rejected by: ${officerDetails['rejected_by']}',
+            style: const TextStyle(fontSize: 14, color: Colors.black87),
           ),
+          const SizedBox(height: 4),
+        ],
+
+        // Always at the bottom: Last updated by
+        if (officerDetails['last_updated_by']?.isNotEmpty ?? false) ...[
+          const SizedBox(height: 8),
+          Text(
+            '🔄 Last updated by: ${officerDetails['last_updated_by']}',
+            style: const TextStyle(fontSize: 14, color: Colors.black87),
+          ),
+        ],
       ],
     ),
   ),
 ],
+
+
                   // Mobile action buttons
                   if (_hasAdminPermissions && status == 'pending')
                     Padding(

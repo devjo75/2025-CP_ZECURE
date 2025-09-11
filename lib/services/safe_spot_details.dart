@@ -484,97 +484,145 @@ class _SafeSpotDetailsContentState extends State<SafeSpotDetailsContent> {
                       Icons.access_time,
                     ),
 
-                    // Officer details section (visible only to admins)
-                    if (widget.isAdmin)
-                      Container(
-                        margin: const EdgeInsets.symmetric(vertical: 12),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
-                              ? Colors.green.shade50
-                              : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
-                                  ? Colors.red.shade50
-                                  : Colors.blue.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
-                                ? Colors.green.shade200
-                                : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
-                                    ? Colors.red.shade200
-                                    : Colors.blue.shade200,
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.person,
-                                  color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
-                                      ? Colors.green.shade600
-                                      : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
-                                          ? Colors.red.shade600
-                                          : Colors.blue.shade600,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Last Actions:',
-                                  style: TextStyle(
-                                    color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
-                                        ? Colors.green.shade700
-                                        : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
-                                            ? Colors.red.shade700
-                                            : Colors.blue.shade700,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            if (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
-                              Text(
-                                'Approved by: ${widget.officerDetails['approved_by']}',
-                                style: TextStyle(
-                                  color: Colors.green.shade700,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            const SizedBox(height: 4),
-                            if (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
-                              Text(
-                                'Rejected by: ${widget.officerDetails['rejected_by']}',
-                                style: TextStyle(
-                                  color: Colors.red.shade700,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            const SizedBox(height: 4),
-                            if (widget.officerDetails['last_updated_by']?.isNotEmpty ?? false)
-                              Text(
-                                'Last updated by: ${widget.officerDetails['last_updated_by']}',
-                                style: TextStyle(
-                                  color: Colors.grey.shade700,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            if (widget.officerDetails.isEmpty ||
-                                (widget.officerDetails['approved_by']?.isEmpty ?? true) &&
-                                (widget.officerDetails['rejected_by']?.isEmpty ?? true) &&
-                                (widget.officerDetails['last_updated_by']?.isEmpty ?? true))
-                              Text(
-                                'No actions recorded',
-                                style: TextStyle(
-                                  color: Colors.blue.shade700,
-                                  fontSize: 14,
-                                  fontStyle: FontStyle.italic,
-                                ),
-                              ),
-                          ],
-                        ),
+// Officer details section (visible only to admins) - CLEANED
+if (widget.isAdmin)
+  Container(
+    margin: const EdgeInsets.symmetric(vertical: 12),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+          ? Colors.green.shade50
+          : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+              ? Colors.red.shade50
+              : Colors.blue.shade50,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(
+        color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+            ? Colors.green.shade200
+            : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+                ? Colors.red.shade200
+                : Colors.blue.shade200,
+      ),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Review Status Header
+        Row(
+          children: [
+            Icon(
+              Icons.person,
+              color: (widget.officerDetails['approved_by']?.isNotEmpty ?? false)
+                  ? Colors.green.shade600
+                  : (widget.officerDetails['rejected_by']?.isNotEmpty ?? false)
+                      ? Colors.red.shade600
+                      : Colors.blue.shade600,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'Review Status',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+
+        // Creator (just under Review Status)
+        Builder(
+          builder: (context) {
+            final creatorProfile = widget.safeSpot['users'];
+            if (creatorProfile != null) {
+              final creatorName =
+                  '${creatorProfile['first_name'] ?? ''} ${creatorProfile['last_name'] ?? ''}'.trim();
+              if (creatorName.isNotEmpty) {
+                return Text(
+                  '📝 Created by: $creatorName',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Colors.black87,
+                  ),
+                );
+              }
+            }
+            return Text(
+              'Creator information not available',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+
+        // Approved
+        if (widget.officerDetails['approved_by']?.isNotEmpty ?? false) ...[
+          Text(
+            '✅ Approved by: ${widget.officerDetails['approved_by']}',
+            style: const TextStyle(
+              fontSize: 14,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+
+        // Rejected
+        if (widget.officerDetails['rejected_by']?.isNotEmpty ?? false) ...[
+          Text(
+            '❌ Rejected by: ${widget.officerDetails['rejected_by']}',
+            style: const TextStyle(
+              fontSize: 14,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+
+        // Last updated (only if unique)
+        Builder(
+          builder: (context) {
+            final lastUpdatedBy = widget.officerDetails['last_updated_by'];
+            final approvedBy = widget.officerDetails['approved_by'];
+            final rejectedBy = widget.officerDetails['rejected_by'];
+
+            final creatorProfile = widget.safeSpot['users'];
+            final creatorName = creatorProfile != null
+                ? '${creatorProfile['first_name'] ?? ''} ${creatorProfile['last_name'] ?? ''}'.trim()
+                : '';
+
+            if (lastUpdatedBy?.isNotEmpty ?? false) {
+              if (lastUpdatedBy != approvedBy &&
+                  lastUpdatedBy != rejectedBy &&
+                  lastUpdatedBy != creatorName) {
+                return Column(
+                  children: [
+                    const SizedBox(height: 4),
+                    Text(
+                      '🔄 Last updated by: $lastUpdatedBy',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black87,
                       ),
+                    ),
+                  ],
+                );
+              }
+            }
+            return const SizedBox.shrink();
+          },
+        ),
+      ],
+    ),
+  ),
+
+
 
                     // Upvote section
                     if (widget.status == 'pending') ...[
@@ -615,16 +663,18 @@ class _SafeSpotDetailsContentState extends State<SafeSpotDetailsContent> {
                                 // Voting button
                                 if (widget.userProfile != null && !widget.isOwner)
                                   ElevatedButton.icon(
+                                  // In safe_spot_details.dart, replace the upvote button onPressed with this:
+
                                     onPressed: () async {
                                       try {
+                                        final bool newUpvoteState = !hasUpvoted;
+                                        
+                                        // Optimistically update UI
                                         setState(() {
-                                          hasUpvoted = !hasUpvoted;
-                                          widget.safeSpot['upvote_count'] = hasUpvoted 
-                                              ? (widget.safeSpot['upvote_count'] + 1)
-                                              : (widget.safeSpot['upvote_count'] - 1);
+                                          hasUpvoted = newUpvoteState;
                                         });
 
-                                        if (hasUpvoted) {
+                                        if (newUpvoteState) {
                                           await SafeSpotService.upvoteSafeSpot(
                                             safeSpotId: widget.safeSpot['id'],
                                             userId: widget.userProfile!['id'],
@@ -636,24 +686,24 @@ class _SafeSpotDetailsContentState extends State<SafeSpotDetailsContent> {
                                           );
                                         }
                                         
+                                        // Refresh the actual data from database (don't manipulate counts locally)
                                         final actualUpvoteCount = await SafeSpotService.getSafeSpotUpvoteCount(widget.safeSpot['id']);
                                         final actualHasUpvoted = await SafeSpotService.hasUserUpvoted(
                                           safeSpotId: widget.safeSpot['id'],
                                           userId: widget.userProfile!['id'],
                                         );
                                         
+                                        // Update UI with actual database values
                                         setState(() {
                                           hasUpvoted = actualHasUpvoted;
                                           widget.safeSpot['upvote_count'] = actualUpvoteCount;
                                         });
                                         
-                                        widget.onUpdate();
+                                        widget.onUpdate(); // Refresh parent view
                                       } catch (e) {
+                                        // Revert optimistic update on error
                                         setState(() {
                                           hasUpvoted = !hasUpvoted;
-                                          widget.safeSpot['upvote_count'] = hasUpvoted 
-                                              ? (widget.safeSpot['upvote_count'] - 1)
-                                              : (widget.safeSpot['upvote_count'] + 1);
                                         });
                                         
                                         ScaffoldMessenger.of(context).showSnackBar(

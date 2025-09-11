@@ -1044,7 +1044,7 @@ String _getPageTitle() {
       return 'User Management';
     case 'reports':
       return 'Crime Reports';
-    case 'safespots':  // ADD THIS CASE
+    case 'safespots': 
       return 'Safe Spots';
       case 'officers':
   return 'Officer Management';
@@ -1060,7 +1060,7 @@ String _getPageSubtitle() {
       return 'Manage system users';
     case 'reports':
       return 'Manage crime reports';
-    case 'safespots':  // ADD THIS CASE
+    case 'safespots': 
       return 'Manage safe spot reports';
     case 'officers':
     return 'Manage system officers';
@@ -1907,9 +1907,16 @@ Future<void> _deleteUser(String userId) async {
     );
   }
 }
-// USER LIST PAGE
+
+// USER LIST MOBILE
 
 Widget _buildUsersPage() {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      if (constraints.maxWidth > 768) {
+        // Desktop view for screens wider than 768px
+        return _buildUsersPageDesktop();
+      } else {
   return Column(
     children: [
       // Search and Filter Bar (keeping your existing design)
@@ -2103,11 +2110,14 @@ Widget _buildUsersPage() {
             itemBuilder: (context, index) {
               final user = _filteredUsersData[index];
               return _buildUserCard(user);
-            },
-          ),
-        ),
-      ),
-    ],
+                },
+                ),
+              ),
+            ),
+          ],
+        );
+      }
+    },
   );
 }
 
@@ -2452,10 +2462,433 @@ Widget _buildDetailItem({
   );
 }
 
+//USER LIST DESKTOP
+Widget _buildUsersPageDesktop() {
+  return Column(
+    children: [
+      // Search and Filter Bar
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF5F7FA),
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Expanded Search Bar (larger space)
+            Expanded(
+              flex: 3,
+              child: Container(
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: TextField(
+                  controller: _userSearchController,
+                  onChanged: (value) {
+                    _filterUsers();
+                  },
+                  decoration: const InputDecoration(
+                    hintText: 'Search users by name, email, or username...',
+                    hintStyle: TextStyle(
+                      color: Color(0xFF6B7280),
+                      fontSize: 14,
+                    ),
+                    prefixIcon: Icon(
+                      Icons.search,
+                      color: Color(0xFF6B7280),
+                      size: 20,
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Role Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedUserRole,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableRoles.map((role) {
+                    return DropdownMenuItem(
+                      value: role,
+                      child: Text(
+                        role,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateUserFilter('role', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Gender Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedUserGender,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableGenders.map((gender) {
+                    return DropdownMenuItem(
+                      value: gender,
+                      child: Text(
+                        gender,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateUserFilter('gender', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            
+            // Clear Filters Button
+            if (_userSearchController.text.isNotEmpty || 
+                _selectedUserRole != 'All Roles' || 
+                _selectedUserGender != 'All Genders')
+              Container(
+                margin: const EdgeInsets.only(left: 16),
+                height: 40,
+                width: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xFFF87171)),
+                ),
+                child: IconButton(
+                  onPressed: _clearUserFilters,
+                  icon: const Icon(
+                    Icons.clear,
+                    color: Color(0xFFEF4444),
+                    size: 20,
+                  ),
+                  tooltip: 'Clear Filters',
+                ),
+              ),
+          ],
+        ),
+      ),
+      
+      // Data Table
+      Expanded(
+        child: Container(
+          width: double.infinity,
+          color: const Color(0xFFFAFAFA),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.vertical,
+            child: DataTable(
+              columnSpacing: 16,
+              headingRowHeight: 56,
+              dataRowHeight: 56,
+              horizontalMargin: 24,
+              headingRowColor: MaterialStateProperty.all(const Color(0xFFF5F7FA)),
+              columns: const [
+                DataColumn(
+                  label: Text(
+                    'Name',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Email',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Role',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Gender',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Birthday',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Age',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Contact #',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Member Since',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Actions',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+              rows: _filteredUsersData.map((user) {
+                return DataRow(
+                  cells: [
+                    DataCell(
+                      Row(
+                        children: [
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: _getGenderColor(user['gender']).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Center(
+                              child: Text(
+                                _getInitials('${user['first_name'] ?? ''} ${user['last_name'] ?? ''}'),
+                                style: TextStyle(
+                                  color: _getGenderColor(user['gender']),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${user['first_name'] ?? ''} ${user['last_name'] ?? ''}'.trim(),
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFF374151),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        user['email'] ?? 'No email',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getRoleColor(user['role']).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: _getRoleColor(user['role'])),
+                        ),
+                        child: Text(
+                          (user['role'] ?? 'USER').toUpperCase(),
+                          style: TextStyle(
+                            color: _getRoleColor(user['role']),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getGenderColor(user['gender']).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: _getGenderColor(user['gender'])),
+                        ),
+                        child: Text(
+                          user['gender'] ?? 'N/A',
+                          style: TextStyle(
+                            color: _getGenderColor(user['gender']),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        user['bday'] != null
+                            ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['bday']))
+                            : 'Not provided',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        user['bday'] != null
+                            ? '${_calculateAge(user['bday']) ?? 'Unknown'} years'
+                            : 'Not provided',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        user['contact_number'] ?? 'Not provided',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        user['created_at'] != null
+                            ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['created_at']))
+                            : 'Unknown',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      user['id'] == Supabase.instance.client.auth.currentUser?.id
+                          ? const Text(
+                              'No actions available',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Color(0xFF6B7280),
+                              ),
+                            )
+                          : Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  onPressed: () => _showChangeRoleDialog(user),
+                                  icon: const Icon(
+                                    Icons.admin_panel_settings_outlined,
+                                    size: 20,
+                                    color: Color(0xFF374151),
+                                  ),
+                                  tooltip: 'Change Role',
+                                ),
+                                IconButton(
+                                  onPressed: () => _showDeleteUserDialog(user),
+                                  icon: const Icon(
+                                    Icons.delete_outlined,
+                                    size: 20,
+                                    color: Color(0xFFEF4444),
+                                  ),
+                                  tooltip: 'Delete User',
+                                ),
+                              ],
+                            ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
 
-// REPORT PAGE
+
+// REPORT PAGE MOBILE
 
 Widget _buildReportsPage() {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      if (constraints.maxWidth > 768) {
+        // Desktop view for screens wider than 768px
+        return _buildReportsPageDesktop();
+      } else {
   return Column(
     children: [
       // Search and Filter Bar (keeping your existing design)
@@ -2737,11 +3170,14 @@ Widget _buildReportsPage() {
             itemBuilder: (context, index) {
               final report = _filteredReportsData[index];
               return _buildReportCard(report);
-            },
-          ),
-        ),
-      ),
-    ],
+          },
+                ),
+              ),
+            ),
+          ],
+        );
+      }
+    },
   );
 }
 
@@ -3035,11 +3471,473 @@ Widget _buildReportCard(Map<String, dynamic> report) {
   );
 }
 
+// REPORT PAGE DESKTOP
+
+Widget _buildReportsPageDesktop() {
+  return Column(
+    children: [
+      // Search and Filter Bar
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF5F7FA),
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Expanded Search Bar (larger space)
+            Expanded(
+              flex: 3,
+              child: Container(
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: TextField(
+                  controller: _reportSearchController,
+                  onChanged: (value) {
+                    _filterReports();
+                  },
+                  decoration: const InputDecoration(
+                    hintText: 'Search reports by crime type, level, or reporter...',
+                    hintStyle: TextStyle(
+                      color: Color(0xFF6B7280),
+                      fontSize: 14,
+                    ),
+                    prefixIcon: Icon(
+                      Icons.search,
+                      color: Color(0xFF6B7280),
+                      size: 20,
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Status Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedReportStatus,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableStatuses.map((status) {
+                    return DropdownMenuItem(
+                      value: status,
+                      child: Text(
+                        status,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateReportFilter('status', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Crime Level Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedReportLevel,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableLevels.map((level) {
+                    return DropdownMenuItem(
+                      value: level,
+                      child: Text(
+                        level,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateReportFilter('level', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Category Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedReportCategory,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableCategories.map((category) {
+                    return DropdownMenuItem(
+                      value: category,
+                      child: Text(
+                        category,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateReportFilter('category', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Activity Status Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedActivityStatus,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableActivityStatuses.map((activity) {
+                    return DropdownMenuItem(
+                      value: activity,
+                      child: Text(
+                        activity,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateReportFilter('activity', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            
+            // Clear Filters Button
+            if (_reportSearchController.text.isNotEmpty || 
+                _selectedReportStatus != 'All Status' || 
+                _selectedReportLevel != 'All Levels' ||
+                _selectedReportCategory != 'All Categories' ||
+                _selectedActivityStatus != 'All Activity')
+              Container(
+                margin: const EdgeInsets.only(left: 16),
+                height: 40,
+                width: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xFFF87171)),
+                ),
+                child: IconButton(
+                  onPressed: _clearReportFilters,
+                  icon: const Icon(
+                    Icons.clear,
+                    color: Color(0xFFEF4444),
+                    size: 20,
+                  ),
+                  tooltip: 'Clear Filters',
+                ),
+              ),
+          ],
+        ),
+      ),
+      
+      // Data Table
+      Expanded(
+        child: Container(
+          width: double.infinity,
+          color: const Color(0xFFFAFAFA),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.vertical,
+            child: DataTable(
+              columnSpacing: 16,
+              headingRowHeight: 56,
+              dataRowHeight: 56,
+              horizontalMargin: 24,
+              headingRowColor: MaterialStateProperty.all(const Color(0xFFF5F7FA)),
+              columns: const [
+                DataColumn(
+                  label: Text(
+                    'Crime Type',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Category',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Level',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Status',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Activity',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Time of Incident',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Reported At',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                DataColumn(
+                  label: Text(
+                    'Reporter',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+              rows: _filteredReportsData.map((report) {
+                return DataRow(
+                  cells: [
+                    DataCell(
+                      Text(
+                        report['crime_type']?['name'] ?? 'Unknown Crime',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF374151),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        report['crime_type']?['category'] ?? 'Unknown Category',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getCrimeLevelColor(report['crime_type']?['level']).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: _getCrimeLevelColor(report['crime_type']?['level'])),
+                        ),
+                        child: Text(
+                          (report['crime_type']?['level'] ?? 'N/A').toUpperCase(),
+                          style: TextStyle(
+                            color: _getCrimeLevelColor(report['crime_type']?['level']),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusColor(report['status']).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: _getStatusColor(report['status'])),
+                        ),
+                        child: Text(
+                          (report['status'] ?? 'PENDING').toUpperCase(),
+                          style: TextStyle(
+                            color: _getStatusColor(report['status']),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getActivityColor(report['active_status']).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: _getActivityColor(report['active_status'])),
+                        ),
+                        child: Text(
+                          (report['active_status'] ?? 'ACTIVE').toUpperCase(),
+                          style: TextStyle(
+                            color: _getActivityColor(report['active_status']),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        report['time'] != null
+                            ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['time']))} at ${DateFormat('h:mm a').format(DateTime.parse(report['time']))}'
+                            : 'Unknown time',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        report['created_at'] != null
+                            ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['created_at']))} at ${DateFormat('h:mm a').format(DateTime.parse(report['created_at']))}'
+                            : 'Unknown date',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Row(
+                        children: [
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6366F1).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Center(
+                              child: Text(
+                                _getInitials(report['reporter'] != null
+                                    ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'
+                                    : 'Admin'),
+                                style: const TextStyle(
+                                  color: Color(0xFF6366F1),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            report['reporter'] != null
+                                ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'.trim()
+                                : 'Administrator',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFF374151),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
 
 
-
-// SAFE SPOTS PAGE 
+// SAFE SPOTS PAGE MOBILE
 Widget _buildSafeSpotsPage() {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      if (constraints.maxWidth > 768) {
+        // Desktop view for screens wider than 768px
+        return _buildSafeSpotsPageDesktop();
+      } else {
   return Column(
     children: [
       // Search and Filter Bar (matching Reports page design)
@@ -3306,11 +4204,14 @@ Widget _buildSafeSpotsPage() {
                   itemCount: _filteredSafeSpotsData.length,
                   itemBuilder: (context, index) {
                     return _buildSafeSpotCard(_filteredSafeSpotsData[index]);
-                  },
-                ),
-        ),
-      ),
-    ],
+              },
+                      ),
+              ),
+            ),
+          ],
+        );
+      }
+    },
   );
 }
 
@@ -3618,8 +4519,438 @@ Widget _buildSafeSpotCard(Map<String, dynamic> safeSpot) {
   );
 }
 
-// OFFICER PAGE
+
+//SAFE SPOT DESKTOP
+
+Widget _buildSafeSpotsPageDesktop() {
+  return Column(
+    children: [
+      // Search and Filter Bar
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF5F7FA),
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Expanded Search Bar (larger space)
+            Expanded(
+              flex: 3,
+              child: Container(
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: TextField(
+                  controller: _safeSpotSearchController,
+                  onChanged: (value) {
+                    _filterSafeSpots();
+                  },
+                  decoration: const InputDecoration(
+                    hintText: 'Search safe spots by name, type, or description...',
+                    hintStyle: TextStyle(
+                      color: Color(0xFF6B7280),
+                      fontSize: 14,
+                    ),
+                    prefixIcon: Icon(
+                      Icons.search,
+                      color: Color(0xFF6B7280),
+                      size: 20,
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Status Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedSafeSpotStatus,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableSafeSpotStatuses.map((status) {
+                    return DropdownMenuItem(
+                      value: status,
+                      child: Text(
+                        status,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateSafeSpotFilter('status', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Type Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedSafeSpotType,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableSafeSpotTypes.map((type) {
+                    return DropdownMenuItem(
+                      value: type,
+                      child: Text(
+                        type,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateSafeSpotFilter('type', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Verification Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedSafeSpotVerified,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableSafeSpotVerified.map((verified) {
+                    return DropdownMenuItem(
+                      value: verified,
+                      child: Text(
+                        verified,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateSafeSpotFilter('verified', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            
+            // Clear Filters Button
+            if (_safeSpotSearchController.text.isNotEmpty || 
+                _selectedSafeSpotStatus != 'All Status' || 
+                _selectedSafeSpotType != 'All Types' ||
+                _selectedSafeSpotVerified != 'All Verification')
+              Container(
+                margin: const EdgeInsets.only(left: 16),
+                height: 40,
+                width: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xFFF87171)),
+                ),
+                child: IconButton(
+                  onPressed: _clearSafeSpotFilters,
+                  icon: const Icon(
+                    Icons.clear,
+                    color: Color(0xFFEF4444),
+                    size: 20,
+                  ),
+                  tooltip: 'Clear Filters',
+                ),
+              ),
+          ],
+        ),
+      ),
+      
+      // Data Table
+      Expanded(
+        child: Container(
+          width: double.infinity,
+          color: const Color(0xFFFAFAFA),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.vertical,
+            child: _filteredSafeSpotsData.isEmpty
+                ? const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.place_outlined, size: 64, color: Color(0xFF9CA3AF)),
+                        SizedBox(height: 16),
+                        Text(
+                          'No safe spots found',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF6B7280),
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'Try adjusting your filters or search terms',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : DataTable(
+                    columnSpacing: 16,
+                    headingRowHeight: 56,
+                    dataRowHeight: 56,
+                    horizontalMargin: 24,
+                    headingRowColor: MaterialStateProperty.all(const Color(0xFFF5F7FA)),
+                    columns: const [
+                      DataColumn(
+                        label: Text(
+                          'Name',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Type',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Status',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Verification',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Description',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Created At',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Added By',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                    rows: _filteredSafeSpotsData.map((safeSpot) {
+                      return DataRow(
+                        cells: [
+                          DataCell(
+                            Text(
+                              safeSpot['name'] ?? 'Unnamed Safe Spot',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF374151),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              safeSpot['safe_spot_types']?['name'] ?? 'Unknown Type',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _getStatusColor(safeSpot['status']).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: _getStatusColor(safeSpot['status'])),
+                              ),
+                              child: Text(
+                                (safeSpot['status'] ?? 'PENDING').toUpperCase(),
+                                style: TextStyle(
+                                  color: _getStatusColor(safeSpot['status']),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: safeSpot['verified'] == true ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: safeSpot['verified'] == true ? Colors.green : Colors.grey,
+                                ),
+                              ),
+                              child: Text(
+                                safeSpot['verified'] == true ? 'VERIFIED' : 'UNVERIFIED',
+                                style: TextStyle(
+                                  color: safeSpot['verified'] == true ? Colors.green : Colors.grey,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              safeSpot['description']?.toString() ?? 'No description',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              safeSpot['created_at'] != null
+                                  ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(safeSpot['created_at']))} at ${DateFormat('HH:mm').format(DateTime.parse(safeSpot['created_at']))}'
+                                  : 'Unknown date',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Row(
+                              children: [
+                                Container(
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF6366F1).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      _getInitials(safeSpot['users'] != null
+                                          ? '${safeSpot['users']['first_name'] ?? ''} ${safeSpot['users']['last_name'] ?? ''}'
+                                          : 'Admin'),
+                                      style: const TextStyle(
+                                        color: Color(0xFF6366F1),
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  safeSpot['users'] != null
+                                      ? '${safeSpot['users']['first_name'] ?? ''} ${safeSpot['users']['last_name'] ?? ''}'.trim()
+                                      : 'Administrator',
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: Color(0xFF374151),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+
+// OFFICER PAGE MOBILE
 Widget _buildOfficersPage() {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      if (constraints.maxWidth > 768) {
+        // Desktop view for screens wider than 768px
+        return _buildOfficersPageDesktop();
+      } else {
   return Column(
     children: [
       // Search and Filter Bar
@@ -3918,11 +5249,14 @@ AnimatedContainer(
                   itemBuilder: (context, index) {
                     final officer = _filteredOfficersData[index];
                     return _buildOfficerCard(officer);
-                  },
-                ),
-        ),
-      ),
-    ],
+                       },
+                      ),
+              ),
+            ),
+          ],
+        );
+      }
+    },
   );
 }
 
@@ -4192,7 +5526,507 @@ Widget _buildOfficerCard(Map<String, dynamic> officer) {
   );
 }
 
-// Update the _buildDetailItem helper to support subtitles
+// OFFICER PAGE DESKTOP 
+
+Widget _buildOfficersPageDesktop() {
+  return Column(
+    children: [
+      // Search and Filter Bar
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF5F7FA),
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Expanded Search Bar (larger space)
+            Expanded(
+              flex: 3,
+              child: Container(
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: TextField(
+                  controller: _officerSearchController,
+                  onChanged: (value) {
+                    _filterOfficers();
+                  },
+                  decoration: const InputDecoration(
+                    hintText: 'Search officers by name, email, or username...',
+                    hintStyle: TextStyle(
+                      color: Color(0xFF6B7280),
+                      fontSize: 14,
+                    ),
+                    prefixIcon: Icon(
+                      Icons.search,
+                      color: Color(0xFF6B7280),
+                      size: 20,
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Gender Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedOfficerGender,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availableOfficerGenders.map((gender) {
+                    return DropdownMenuItem(
+                      value: gender,
+                      child: Text(
+                        gender,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateOfficerFilter('gender', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Rank Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedOfficerRank,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availablePoliceRanks.map((rank) {
+                    return DropdownMenuItem(
+                      value: rank,
+                      child: Text(
+                        rank,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateOfficerFilter('rank', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Station Filter Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedOfficerStation,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: _availablePoliceStations.map((station) {
+                    return DropdownMenuItem(
+                      value: station,
+                      child: Text(
+                        station,
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateOfficerFilter('station', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            
+            // Sort By Dropdown
+            Expanded(
+              flex: 1,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xE0E0E0)),
+                ),
+                child: DropdownButton<String>(
+                  value: _officerSortBy,
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+                  isExpanded: true,
+                  items: const [
+                    DropdownMenuItem(value: 'name', child: Text('Sort by Name', style: TextStyle(fontSize: 14, color: Color(0xFF374151)))),
+                    DropdownMenuItem(value: 'email', child: Text('Sort by Email', style: TextStyle(fontSize: 14, color: Color(0xFF374151)))),
+                    DropdownMenuItem(value: 'rank', child: Text('Sort by Rank', style: TextStyle(fontSize: 14, color: Color(0xFF374151)))),
+                    DropdownMenuItem(value: 'station', child: Text('Sort by Station', style: TextStyle(fontSize: 14, color: Color(0xFF374151)))),
+                    DropdownMenuItem(value: 'date_joined', child: Text('Date Joined', style: TextStyle(fontSize: 14, color: Color(0xFF374151)))),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      _updateOfficerFilter('sort', value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            
+            // Clear Filters Button
+            if (_officerSearchController.text.isNotEmpty || 
+                _selectedOfficerGender != 'All Genders' ||
+                _selectedOfficerRank != 'All Ranks' ||
+                _selectedOfficerStation != 'All Stations')
+              Container(
+                margin: const EdgeInsets.only(left: 16),
+                height: 40,
+                width: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xFFF87171)),
+                ),
+                child: IconButton(
+                  onPressed: _clearOfficerFilters,
+                  icon: const Icon(
+                    Icons.clear,
+                    color: Color(0xFFEF4444),
+                    size: 20,
+                  ),
+                  tooltip: 'Clear Filters',
+                ),
+              ),
+          ],
+        ),
+      ),
+      
+      // Data Table
+      Expanded(
+        child: Container(
+          width: double.infinity,
+          color: const Color(0xFFFAFAFA),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.vertical,
+            child: _filteredOfficersData.isEmpty
+                ? const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.shield_outlined,
+                          size: 64,
+                          color: Color(0xFF9CA3AF),
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          'No officers found',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF6B7280),
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'Try adjusting your search or filters',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : DataTable(
+                    columnSpacing: 16,
+                    headingRowHeight: 56,
+                    dataRowHeight: 56,
+                    horizontalMargin: 24,
+                    headingRowColor: MaterialStateProperty.all(const Color(0xFFF5F7FA)),
+                    columns: const [
+                      DataColumn(
+                        label: Text(
+                          'Name',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Email',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Gender',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Rank',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Station',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Username',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Birthday',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Age',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Contact',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Date Joined',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                    rows: _filteredOfficersData.map((officer) {
+                      return DataRow(
+                        cells: [
+                          DataCell(
+                            Text(
+                              '${officer['first_name'] ?? ''} ${officer['last_name'] ?? ''}'.trim(),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF374151),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              officer['email'] ?? 'No email',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _getGenderColor(officer['gender']).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: _getGenderColor(officer['gender']).withOpacity(0.3),
+                                ),
+                              ),
+                              child: Text(
+                                officer['gender'] ?? 'N/A',
+                                style: TextStyle(
+                                  color: _getGenderColor(officer['gender']),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: Colors.indigo.withOpacity(0.3)),
+                              ),
+                              child: Text(
+                                officer['police_ranks']?['new_rank'] != null && officer['police_ranks']?['old_rank'] != null
+                                    ? '${officer['police_ranks']['new_rank']} (${officer['police_ranks']['old_rank']})'
+                                    : officer['police_ranks']?['new_rank'] ?? officer['police_ranks']?['old_rank'] ?? 'OFFICER',
+                                style: const TextStyle(
+                                  color: Colors.indigo,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: Colors.green.withOpacity(0.3)),
+                              ),
+                              child: Text(
+                                officer['police_stations']?['name'] ?? 'Not assigned',
+                                style: const TextStyle(
+                                  color: Colors.green,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              officer['username'] ?? 'Not provided',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              officer['bday'] != null
+                                  ? DateFormat('MMM d, yyyy').format(DateTime.parse(officer['bday']))
+                                  : 'Not provided',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              officer['bday'] != null
+                                  ? '${_calculateAge(officer['bday']) ?? 'Unknown'} years old'
+                                  : 'Not provided',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              officer['contact_number'] ?? 'Not provided',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              officer['created_at'] != null
+                                  ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(officer['created_at']))} at ${DateFormat('HH:mm').format(DateTime.parse(officer['created_at']))}'
+                                  : 'Unknown date',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
 
 
 
