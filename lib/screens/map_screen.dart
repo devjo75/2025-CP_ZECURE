@@ -3822,7 +3822,7 @@ Widget _buildFloatingDurationWidget() {
 }
 
 
-//ADD HOTSPOT FOR ADMIN
+////ADD HOTSPOT FOR ADMIN
   void _showAddHotspotForm(LatLng position) async {
     final isDesktop = MediaQuery.of(context).size.width >= 600;
 
@@ -4062,135 +4062,213 @@ Widget _buildFloatingDurationWidget() {
           },
         );
       } else {
-
-
-        // MOBILE 
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          builder: (context) {
-            return StatefulBuilder(
-              builder: (context, setState) => SingleChildScrollView(
-                child: Padding(
+showModalBottomSheet(
+  context: context,
+  isScrollControlled: true,
+  constraints: BoxConstraints(
+    maxHeight: MediaQuery.of(context).size.height * 0.95,
+  ),
+  builder: (context) {
+    return StatefulBuilder(
+      builder: (context, setState) => IntrinsicHeight(
+        child: Container(
+          width: double.infinity,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag indicator at the top
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              
+              // Content that will expand as needed
+              Flexible(
+                child: SingleChildScrollView(
                   padding: EdgeInsets.only(
                     bottom: MediaQuery.of(context).viewInsets.bottom + 20,
                     left: 16,
                     right: 16,
-                    top: 16,
                   ),
-                  child: Form(
-                    key: formKey,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        DropdownButtonFormField<String>(
-                          value: selectedCrimeType,
-                          decoration: const InputDecoration(
-                            labelText: 'Crime Type',
-                            border: OutlineInputBorder(),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Header Title
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).primaryColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Theme.of(context).primaryColor.withOpacity(0.3),
                           ),
-                          items: crimeTypes.map((crimeType) {
-                            return DropdownMenuItem<String>(
-                              value: crimeType['name'],
-                              child: Text(
-                                '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                style: const TextStyle(fontSize: 14),
-                                overflow: TextOverflow.ellipsis,
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.add_location_alt,
+                              size: 32,
+                              color: Theme.of(context).primaryColor,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Add Crime Incident',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).primaryColor,
                               ),
-                            );
-                          }).toList(),
-                          onChanged: (newValue) {
-                            if (newValue != null) {
-                              final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
-                              selectedCrimeType = newValue;
-                              selectedCrimeId = selected['id'];
-                            }
-                          },
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please select a crime type';
-                            }
-                            return null;
-                          },
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Report a new crime incident to the system',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[600],
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 16),
-                        TextFormField(
-                          controller: descriptionController,
-                          decoration: const InputDecoration(
-                            labelText: 'Description (optional)',
-                            border: OutlineInputBorder(),
-                          ),
-                          maxLines: 3,
+                      ),
+                      const SizedBox(height: 20),
+                      
+                      Form(
+                        key: formKey,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            DropdownButtonFormField<String>(
+                              value: selectedCrimeType,
+                              decoration: const InputDecoration(
+                                labelText: 'Crime Type',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: crimeTypes.map((crimeType) {
+                                return DropdownMenuItem<String>(
+                                  value: crimeType['name'],
+                                  child: Text(
+                                    '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                                    style: const TextStyle(fontSize: 14),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (newValue) {
+                                if (newValue != null) {
+                                  final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
+                                  selectedCrimeType = newValue;
+                                  selectedCrimeId = selected['id'];
+                                }
+                              },
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please select a crime type';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: descriptionController,
+                              decoration: const InputDecoration(
+                                labelText: 'Description (optional)',
+                                border: OutlineInputBorder(),
+                              ),
+                              maxLines: 3,
+                            ),
+                            const SizedBox(height: 16),
+                            
+                            // Photo section
+                            _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                              setState(() {
+                                selectedPhoto = photo;
+                                isUploadingPhoto = uploading;
+                              });
+                            }),
+                            const SizedBox(height: 16),
+                            
+                            TextFormField(
+                              controller: dateController,
+                              decoration: const InputDecoration(
+                                labelText: 'Date of Incident',
+                                border: OutlineInputBorder(),
+                              ),
+                              readOnly: true,
+                              onTap: () async {
+                                DateTime? pickedDate = await showDatePicker(
+                                  context: context,
+                                  initialDate: now,
+                                  firstDate: DateTime(2000),
+                                  lastDate: DateTime(2101),
+                                );
+                                if (pickedDate != null) {
+                                  dateController.text =
+                                      "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: timeController,
+                              decoration: const InputDecoration(
+                                labelText: 'Time of Incident',
+                                border: OutlineInputBorder(),
+                              ),
+                              readOnly: true,
+                              onTap: () async {
+                                TimeOfDay? pickedTime = await showTimePicker(
+                                  context: context,
+                                  initialTime: TimeOfDay.now(),
+                                );
+                                if (pickedTime != null) {
+                                  timeController.text =
+                                      "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 24),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: isUploadingPhoto ? null : onSubmit,
+                                child: isUploadingPhoto
+                                    ? const CircularProgressIndicator()
+                                    : const Text('Submit'),
+                              ),
+                            ),
+                            // Add extra space at bottom for better scrolling
+                            const SizedBox(height: 20),
+                          ],
                         ),
-                        const SizedBox(height: 16),
-                        
-                        // Photo section
-                        _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
-                          setState(() {
-                            selectedPhoto = photo;
-                            isUploadingPhoto = uploading;
-                          });
-                        }),
-                        const SizedBox(height: 16),
-                        
-                        TextFormField(
-                          controller: dateController,
-                          decoration: const InputDecoration(
-                            labelText: 'Date of Incident',
-                            border: OutlineInputBorder(),
-                          ),
-                          readOnly: true,
-                          onTap: () async {
-                            DateTime? pickedDate = await showDatePicker(
-                              context: context,
-                              initialDate: now,
-                              firstDate: DateTime(2000),
-                              lastDate: DateTime(2101),
-                            );
-                            if (pickedDate != null) {
-                              dateController.text =
-                                  "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                            }
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        TextFormField(
-                          controller: timeController,
-                          decoration: const InputDecoration(
-                            labelText: 'Time of Incident',
-                            border: OutlineInputBorder(),
-                          ),
-                          readOnly: true,
-                          onTap: () async {
-                            TimeOfDay? pickedTime = await showTimePicker(
-                              context: context,
-                              initialTime: TimeOfDay.now(),
-                            );
-                            if (pickedTime != null) {
-                              timeController.text =
-                                  "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
-                            }
-                          },
-                        ),
-                        const SizedBox(height: 24),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: isUploadingPhoto ? null : onSubmit,
-                            child: isUploadingPhoto
-                                ? const CircularProgressIndicator()
-                                : const Text('Submit'),
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            );
-          },
-        );
-      }
+            ],
+          ),
+        ),
+      ),
+    );
+  },
+);
+}
     } catch (e) {
       if (mounted) {
         _showSnackBar('Error loading crime types: ${e.toString()}');
@@ -4315,9 +4393,6 @@ Widget _buildFloatingDurationWidget() {
     );
   }
 
-
-
-
 // REPORT HOTSPOT FOR REGULAR USERS
 
 void _showReportHotspotForm(LatLng position) async {
@@ -4386,155 +4461,238 @@ Future<void> _showMobileReportForm(
   final result = await showModalBottomSheet(
     context: context,
     isScrollControlled: true,
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.of(context).size.height * 0.95,
+    ),
     builder: (context) {
       return StatefulBuilder(
         builder: (context, setState) {
-          return SingleChildScrollView(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              left: 16,
-              right: 16,
-              top: 16,
-            ),
-            child: Form(
-              key: formKey,
+          return IntrinsicHeight(
+            child: Container(
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                ),
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  DropdownButtonFormField<String>(
-                    value: selectedCrimeType,
-                    decoration: const InputDecoration(
-                      labelText: 'Crime Type',
-                      border: OutlineInputBorder(),
+                  // Drag indicator at the top
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                    items: crimeTypes.map((crimeType) {
-                      return DropdownMenuItem<String>(
-                        value: crimeType['name'],
-                        child: Text(
-                          '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                          style: const TextStyle(fontSize: 14),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: isSubmitting
-                        ? null
-                        : (newValue) {
-                            if (newValue != null) {
-                              final selected = crimeTypes.firstWhere((c) => c['name'] == newValue);
-                              setState(() {
-                                selectedCrimeType = newValue;
-                                selectedCrimeId = selected['id'];
-                              });
-                            }
-                          },
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please select a crime type';
-                      }
-                      return null;
-                    },
                   ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: descriptionController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description (optional)',
-                      border: OutlineInputBorder(),
-                    ),
-                    maxLines: 3,
-                    enabled: !isSubmitting,
-                  ),
-                  const SizedBox(height: 16),
                   
-                  // Photo section
-                  _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
-                    setState(() {
-                      selectedPhoto = photo;
-                      isUploadingPhoto = uploading;
-                    });
-                  }),
-                  const SizedBox(height: 16),
-                  
-                  TextFormField(
-                    controller: dateController,
-                    decoration: const InputDecoration(
-                      labelText: 'Date of Incident',
-                      border: OutlineInputBorder(),
-                    ),
-                    readOnly: true,
-                    onTap: isSubmitting
-                        ? null
-                        : () async {
-                            final pickedDate = await showDatePicker(
-                              context: context,
-                              initialDate: now,
-                              firstDate: DateTime(2000),
-                              lastDate: DateTime(2101),
-                            );
-                            if (pickedDate != null) {
-                              dateController.text =
-                                  DateFormat('yyyy-MM-dd').format(pickedDate);
-                            }
-                          },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: timeController,
-                    decoration: const InputDecoration(
-                      labelText: 'Time of Incident',
-                      border: OutlineInputBorder(),
-                    ),
-                    readOnly: true,
-                    onTap: isSubmitting
-                        ? null
-                        : () async {
-                            final pickedTime = await showTimePicker(
-                              context: context,
-                              initialTime: TimeOfDay.now(),
-                            );
-                            if (pickedTime != null) {
-                              timeController.text =
-                                  '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
-                            }
-                          },
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: (isSubmitting || isUploadingPhoto)
-                          ? null
-                          : () async {
-                              if (formKey.currentState!.validate()) {
-                                setState(() => isSubmitting = true);
-                                try {
-                                  final dateTime = DateTime.parse(
-                                      '${dateController.text} ${timeController.text}');
-                                  
-                                  await _reportHotspot(
-                                    selectedCrimeId,
-                                    descriptionController.text,
-                                    position,
-                                    dateTime,
-                                    selectedPhoto, // Pass the photo
-                                  );
+                  // Content that will expand as needed
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.only(
+                        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                        left: 16,
+                        right: 16,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Header Title
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Colors.orange.withOpacity(0.3),
+                              ),
+                            ),
+                            child: Column(
+                              children: [
+                                const Icon(
+                                  Icons.report_problem,
+                                  size: 32,
+                                  color: Colors.orange,
+                                ),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Report Crime Incident',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.orange,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Submit a crime report for admin review',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey[600],
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          
+                          Form(
+                            key: formKey,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                DropdownButtonFormField<String>(
+                                  value: selectedCrimeType,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Crime Type',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  items: crimeTypes.map((crimeType) {
+                                    return DropdownMenuItem<String>(
+                                      value: crimeType['name'],
+                                      child: Text(
+                                        '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                                        style: const TextStyle(fontSize: 14),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    );
+                                  }).toList(),
+                                  onChanged: isSubmitting
+                                      ? null
+                                      : (newValue) {
+                                          if (newValue != null) {
+                                            final selected = crimeTypes.firstWhere((c) => c['name'] == newValue);
+                                            setState(() {
+                                              selectedCrimeType = newValue;
+                                              selectedCrimeId = selected['id'];
+                                            });
+                                          }
+                                        },
+                                  validator: (value) {
+                                    if (value == null || value.isEmpty) {
+                                      return 'Please select a crime type';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 16),
+                                TextFormField(
+                                  controller: descriptionController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Description (optional)',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  maxLines: 3,
+                                  enabled: !isSubmitting,
+                                ),
+                                const SizedBox(height: 16),
+                                
+                                // Photo section
+                                _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                                  setState(() {
+                                    selectedPhoto = photo;
+                                    isUploadingPhoto = uploading;
+                                  });
+                                }),
+                                const SizedBox(height: 16),
+                                
+                                TextFormField(
+                                  controller: dateController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Date of Incident',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  readOnly: true,
+                                  onTap: isSubmitting
+                                      ? null
+                                      : () async {
+                                          final pickedDate = await showDatePicker(
+                                            context: context,
+                                            initialDate: now,
+                                            firstDate: DateTime(2000),
+                                            lastDate: DateTime(2101),
+                                          );
+                                          if (pickedDate != null) {
+                                            dateController.text =
+                                                DateFormat('yyyy-MM-dd').format(pickedDate);
+                                          }
+                                        },
+                                ),
+                                const SizedBox(height: 16),
+                                TextFormField(
+                                  controller: timeController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Time of Incident',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  readOnly: true,
+                                  onTap: isSubmitting
+                                      ? null
+                                      : () async {
+                                          final pickedTime = await showTimePicker(
+                                            context: context,
+                                            initialTime: TimeOfDay.now(),
+                                          );
+                                          if (pickedTime != null) {
+                                            timeController.text =
+                                                '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
+                                          }
+                                        },
+                                ),
+                                const SizedBox(height: 24),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton(
+                                    onPressed: (isSubmitting || isUploadingPhoto)
+                                        ? null
+                                        : () async {
+                                            if (formKey.currentState!.validate()) {
+                                              setState(() => isSubmitting = true);
+                                              try {
+                                                final dateTime = DateTime.parse(
+                                                    '${dateController.text} ${timeController.text}');
+                                                
+                                                await _reportHotspot(
+                                                  selectedCrimeId,
+                                                  descriptionController.text,
+                                                  position,
+                                                  dateTime,
+                                                  selectedPhoto, // Pass the photo
+                                                );
 
-                                  if (mounted) {
-                                    Navigator.pop(context, true);
-                                  }
-                                } catch (e) {
-                                  if (mounted) {
-                                    setState(() => isSubmitting = false);
-                                    _showSnackBar(
-                                        'Failed to report hotspot: ${e.toString()}');
-                                  }
-                                }
-                              }
-                            },
-                      child: (isSubmitting || isUploadingPhoto)
-                          ? const CircularProgressIndicator()
-                          : const Text('Submit Report'),
+                                                if (mounted) {
+                                                  Navigator.pop(context, true);
+                                                }
+                                              } catch (e) {
+                                                if (mounted) {
+                                                  setState(() => isSubmitting = false);
+                                                  _showSnackBar(
+                                                      'Failed to report hotspot: ${e.toString()}');
+                                                }
+                                              }
+                                            }
+                                          },
+                                    child: (isSubmitting || isUploadingPhoto)
+                                        ? const CircularProgressIndicator()
+                                        : const Text('Submit Report'),
+                                  ),
+                                ),
+                                // Add extra space at bottom for better scrolling
+                                const SizedBox(height: 20),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -5693,6 +5851,267 @@ Widget build(BuildContext context) {
 }
 
 
+
+
+// BOTTOM NAV BARS MAIN WIDGETS
+
+Widget _buildBottomNavBar() {
+  return Container(
+    decoration: BoxDecoration(
+      color: Colors.white,
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 12,
+          offset: const Offset(0, -3),
+        ),
+      ],
+    ),
+    child: ClipRRect(
+      borderRadius: const BorderRadius.only(
+        topLeft: Radius.circular(16),
+        topRight: Radius.circular(16),
+      ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Bottom Nav Bar
+          BottomNavigationBar(
+            currentIndex: _getCurrentTabIndex(),
+            onTap: _handleBottomNavTap,
+            items: [
+              BottomNavigationBarItem(
+                icon: Icon(
+                _currentTab == MainTab.map 
+                    ? Icons.explore_rounded 
+                    : Icons.explore_outlined,
+               
+                  size: 26,
+                ),
+                label: 'Map',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(
+                  _currentTab == MainTab.quickAccess
+                      ? Icons.navigation
+                      : Icons.navigation_outlined,
+                  size: 26,
+                ),
+                label: 'Navigate',
+              ),
+              const BottomNavigationBarItem(
+                icon: SizedBox(width: 30, height: 30),
+                label: '',
+              ),
+              BottomNavigationBarItem(
+                icon: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      _currentTab == MainTab.notifications
+                          ? Icons.notifications_rounded
+                          : Icons.notifications_outlined,
+                      size: 26,
+                    ),
+                    if (_unreadNotificationCount > 0)
+                      Positioned(
+                        right: -2,
+                        top: -2,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            _unreadNotificationCount > 99
+                                ? '99+'
+                                : '$_unreadNotificationCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              height: 1.1,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                label: 'Alerts',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(
+                  _currentTab == MainTab.profile
+                      ? Icons.person_rounded
+                      : Icons.person_outline_rounded,
+                  size: 26,
+                ),
+                label: 'Profile',
+              ),
+            ],
+            selectedItemColor: Colors.blue.shade600,
+            unselectedItemColor: Colors.grey.shade600,
+            showSelectedLabels: false,
+            showUnselectedLabels: false,
+            type: BottomNavigationBarType.fixed,
+            backgroundColor: Colors.white.withOpacity(0.95),
+            elevation: 0,
+          ),
+
+          // Center + Button (Balanced Style)
+          Positioned(
+            top: 11, // aligned with icons
+            left: 0,
+            right: 0,
+            child: Center(
+              child: GestureDetector(
+                onTap: _quickReportCrime,
+                child: Container(
+                  width: 36,  // <-- adjust freely
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(10), // ⬅️ subtle rounded corners
+                    border: Border.all(color: Colors.grey.shade300, width: 1),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    Icons.add_rounded,
+                    color: Colors.grey.shade600,
+                    size: 24, // scaled for smaller button
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+
+
+
+// HELPER METHODS FOR 5-TAB STRUCTURE
+int _getCurrentTabIndex() {
+  // Map your existing 4-tab enum to 5-tab structure
+  switch (_currentTab) {
+    case MainTab.map:
+      return 0;
+    case MainTab.quickAccess:
+      return 1;
+    case MainTab.notifications:
+      return 3; // Skip index 2 (center button)
+    case MainTab.profile:
+      return 4;
+    }
+}
+
+void _handleBottomNavTap(int index) {
+  // Handle tap avoiding the center button (index 2)
+  MainTab? targetTab;
+  
+  switch (index) {
+    case 0:
+      targetTab = MainTab.map;
+      break;
+    case 1:
+      targetTab = MainTab.quickAccess;
+      break;
+    case 2:
+      // Center button - do nothing, handled by floating button
+      return;
+    case 3:
+      targetTab = MainTab.notifications;
+      break;
+    case 4:
+      targetTab = MainTab.profile;
+      break;
+  }
+  
+  if (targetTab != null) {
+    setState(() {
+      _currentTab = targetTab!;
+      if (_currentTab == MainTab.profile) {
+        _profileScreen.isEditingProfile = false;
+      }
+    });
+  }
+}
+
+// QUICK REPORT FUNCTION
+void _quickReportCrime() async {
+  // Show loading indicator
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => const Center(
+      child: CircularProgressIndicator(),
+    ),
+  );
+  
+  try {
+    // Get current location
+    await _getCurrentLocation();
+    
+    // Close loading dialog
+    if (mounted) Navigator.pop(context);
+    
+    if (_currentPosition == null) {
+      _showSnackBar('Unable to get current location. Please try again.');
+      return;
+    }
+    
+    // Check if user is admin or regular user and show appropriate form
+    if (_isAdmin) {
+      _showAddHotspotForm(_currentPosition!);
+    } else {
+      _showReportHotspotForm(_currentPosition!);
+    }
+    
+    // Optionally switch to map tab to show the location
+    setState(() {
+      _currentTab = MainTab.map;
+    });
+    
+  } catch (e) {
+    // Close loading dialog if still open
+    if (mounted && Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+    _showSnackBar('Error getting location: ${e.toString()}');
+  }
+}
+
+
+
+
+Widget? _buildResponsiveBottomNav(bool isDesktop) {
+  // Only show bottom nav on mobile screens AND when user is logged in
+  // Don't show on desktop even when sidebar is hidden
+  if (isDesktop || _userProfile == null) {
+    return null;
+  }
+
+  // Use your existing bottom nav bar design for mobile only
+  return _buildBottomNavBar();
+}
+
+
 //  SIDEBAR FOR DESKTOP
 Widget _buildResponsiveDesktopLayout() {
   return Stack(
@@ -5778,180 +6197,6 @@ if (_currentTab == MainTab.quickAccess)
   );
 }
 
-
-// BOTTOM NAV BARS MAIN WIDGETS
-Widget _buildBottomNavBar() {
-  return Container(
-    decoration: BoxDecoration(
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.1),
-          blurRadius: 20,
-          offset: const Offset(0, -5),
-        ),
-      ],
-    ),
-    child: ClipRRect(
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.95),
-          border: Border(
-            top: BorderSide(
-              color: Colors.grey.withOpacity(0.2),
-              width: 0.5,
-            ),
-          ),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: _currentTab.index,
-          onTap: (index) {
-            setState(() {
-              _currentTab = MainTab.values[index];
-              if (_currentTab == MainTab.profile) {
-                _profileScreen.isEditingProfile = false;
-              }
-            });
-          },
-          items: [
-            // Map Tab
-            BottomNavigationBarItem(
-              icon: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _currentTab == MainTab.map
-                      ? Colors.blue.withOpacity(0.1)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  _currentTab == MainTab.map ? Icons.map_rounded : Icons.map_outlined,
-                  size: 24,
-                ),
-              ),
-              label: 'Map',
-            ),
-            
-// Direction Tab (UPDATED)
-BottomNavigationBarItem(
-  icon: AnimatedContainer(
-    duration: const Duration(milliseconds: 200),
-    padding: const EdgeInsets.all(8),
-    decoration: BoxDecoration(
-      color: _currentTab == MainTab.quickAccess
-          ? Colors.blue.withOpacity(0.1)
-          : Colors.transparent,
-      borderRadius: BorderRadius.circular(12),
-    ),
-child: Icon(
-  _currentTab == MainTab.quickAccess
-      ? Icons.navigation // Active state
-      : Icons.navigation_outlined, // Inactive state
-  size: 24,
-),
-  ),
-  label: 'Navigation',
-),
-
-            
-            // Notifications Tab
-            BottomNavigationBarItem(
-              icon: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _currentTab == MainTab.notifications
-                      ? Colors.blue.withOpacity(0.1)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Stack(
-                  clipBehavior: Clip.none, // Allow badge to overflow
-                  children: [
-                    Icon(
-                      _currentTab == MainTab.notifications
-                          ? Icons.notifications_rounded
-                          : Icons.notifications_outlined,
-                      size: 24,
-                    ),
-                    if (_unreadNotificationCount > 0)
-                      Positioned(
-                        right: 0,
-                        top: 0,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.white, width: 1.5),
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 16,
-                            minHeight: 16,
-                          ),
-                          child: Text(
-                            _unreadNotificationCount > 99 ? '99+' : '$_unreadNotificationCount',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              height: 1.1,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              label: 'Notifications',
-            ),
-            
-            // Profile Tab
-            BottomNavigationBarItem(
-              icon: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _currentTab == MainTab.profile
-                      ? Colors.blue.withOpacity(0.1)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  _currentTab == MainTab.profile ? Icons.person_rounded : Icons.person_outline_rounded,
-                  size: 24,
-                ),
-              ),
-              label: 'Profile',
-            ),
-          ],
-          selectedItemColor: Colors.blue.shade600,
-          unselectedItemColor: Colors.grey.shade600,
-          showUnselectedLabels: true,
-          type: BottomNavigationBarType.fixed,
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          selectedFontSize: 12,
-          unselectedFontSize: 12,
-          selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-      ),
-    ),
-  );
-}
-
-
-Widget? _buildResponsiveBottomNav(bool isDesktop) {
-  // Only show bottom nav on mobile screens AND when user is logged in
-  // Don't show on desktop even when sidebar is hidden
-  if (isDesktop || _userProfile == null) {
-    return null;
-  }
-
-  // Use your existing bottom nav bar design for mobile only
-  return _buildBottomNavBar();
-}
 
 
 
