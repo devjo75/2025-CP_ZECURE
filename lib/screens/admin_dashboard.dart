@@ -1021,13 +1021,26 @@ Widget build(BuildContext context) {
       child: SafeArea(
         child: Stack(
           children: [
-            Column(
-              children: [
-                _buildModernAppBar(),
-                Expanded(
-                  child: _buildCurrentPage(),
-                ),
-              ],
+            // Wrap main content with GestureDetector for swipe
+            GestureDetector(
+              onHorizontalDragUpdate: (details) {
+                // Detect left-to-right swipe
+                if (details.delta.dx > 5 && !_isSidebarOpen) {
+                  // Threshold to avoid accidental swipes (adjust as needed)
+                  setState(() {
+                    _isSidebarOpen = true;
+                  });
+                  _sidebarController.forward();
+                }
+              },
+              child: Column(
+                children: [
+                  _buildModernAppBar(),
+                  Expanded(
+                    child: _buildCurrentPage(),
+                  ),
+                ],
+              ),
             ),
             _buildSidebar(),
           ],
@@ -1091,29 +1104,35 @@ Widget _buildSidebar() {
                 color: Colors.black.withOpacity(0.3 * _sidebarAnimation.value),
               ),
             ),
-          // Sidebar - Fixed height and proper layout
-          Transform.translate(
-            offset: Offset(-320.0 + (320.0 * _sidebarAnimation.value), 0.0),
-            child: Container(
-              width: 320,
-              height: double.infinity,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.only(
-                  topRight: Radius.circular(24),
-                  bottomRight: Radius.circular(24),
+          // Sidebar with swipe-to-close
+          GestureDetector(
+            onHorizontalDragUpdate: (details) {
+              if (details.delta.dx < -5 && _isSidebarOpen) {
+                setState(() {
+                  _isSidebarOpen = false;
+                });
+                _sidebarController.reverse();
+              }
+            },
+            child: Transform.translate(
+              offset: Offset(-320.0 + (320.0 * _sidebarAnimation.value), 0.0),
+              child: Container(
+                width: 320,
+                height: double.infinity,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+       
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black12,
+                      blurRadius: 20,
+                      offset: Offset(4, 0),
+                      spreadRadius: 0,
+                    ),
+                  ],
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 20,
-                    offset: Offset(4, 0),
-                    spreadRadius: 0,
-                  ),
-                ],
-              ),
-              child: Column(
-                children: [
+                child: Column(
+                  children: [
                   // Logo section with new gradient
                   Container(
                     width: double.infinity,
@@ -1124,9 +1143,7 @@ Widget _buildSidebar() {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
-                      borderRadius: BorderRadius.only(
-                        topRight: Radius.circular(24),
-                      ),
+           
                     ),
                     child: GestureDetector(
                       onTap: () {
@@ -1358,6 +1375,7 @@ Widget _buildSidebar() {
               ),
             ),
           ),
+            ),
         ],
       );
     },

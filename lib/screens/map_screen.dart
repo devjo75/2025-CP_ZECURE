@@ -19,8 +19,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/desktop/hotlines_desktop.dart';
 import 'package:zecure/desktop/quick_access_desktop.dart';
 import 'package:zecure/main.dart';
+import 'package:zecure/screens/add_save_point.dart';
 import 'package:zecure/screens/auth/register_screen.dart';
 import 'package:zecure/screens/quick_access_screen.dart';
+import 'package:zecure/screens/save_point.dart';
+import 'package:zecure/screens/save_point_details.dart';
 import 'package:zecure/screens/welcome_message_first_timer.dart';
 import 'package:zecure/screens/welcome_message_screen.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
@@ -37,6 +40,7 @@ import 'package:zecure/services/auth_service.dart';
 import 'package:zecure/services/safe_spot_details.dart';
 import 'package:zecure/services/safe_spot_form.dart';
 import 'package:zecure/services/safe_spot_service.dart';
+import 'package:zecure/services/save_point_service.dart';
 
 
 
@@ -139,7 +143,7 @@ Timer? _deferredLoadTimer;
   bool _locationButtonPressed = false;
 
 
-  // ADD: New variables for route tracking
+  // ADD: ROUTE TRACKING
   List<LatLng> _routePoints = []; // Only for directions/safe routes
   bool _hasActiveRoute = false;
   Timer? _routeUpdateTimer;
@@ -168,7 +172,6 @@ Timer? _deferredLoadTimer;
   bool _notificationsChannelConnected = false;
   Timer? _reconnectionTimer;
 
-  bool _showClearButton = false;
 
   // User state
 Map<String, dynamic>? _userProfile;
@@ -185,6 +188,9 @@ late ProfileScreen _profileScreen;
   Map<String, dynamic>? _selectedHotspot;
   RealtimeChannel? _hotspotsChannel;
 
+
+  
+
   // NOTIFICATIONS
 List<Map<String, dynamic>> _notifications = [];
 RealtimeChannel? _notificationsChannel;
@@ -200,6 +206,14 @@ bool _showSafeSpots = true;
 Set<String> _processedUpdateIds = {}; // Track processed updates
 Timer? _updateDebounceTimer;
 Map<String, Timer> _updateTimers = {}; // Per-ID debounce timers
+
+
+// SAVE POINTS
+Map<String, dynamic>? _selectedSavePoint;
+List<Map<String, dynamic>> _savePoints = [];
+final SavePointService _savePointService = SavePointService();
+bool _showSavePointSelector = false; // New state for savepoint button
+
 
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
@@ -507,6 +521,16 @@ void _deferredInitialization() async {
     print('Setting up safe spots realtime...');
     _setupSafeSpotsRealtime();
   }
+
+  await Future.delayed(Duration(milliseconds: 200));
+  if (!mounted) return;
+
+  // Load save points - only if not already loaded
+  if (_savePoints.isEmpty) {
+    print('Loading save points...');
+    await _loadSavePoints();
+    if (!mounted) return;
+}
   
   // Mark markers as loaded
   setState(() {
@@ -581,12 +605,134 @@ void dispose() {
   _updateTimers.clear();
   _updateDebounceTimer?.cancel();
   _processedUpdateIds.clear();
+  _savePoints.clear();
   
   super.dispose();
 }
 
 
-
+Future<void> _loadSavePoints() async {
+  if (_userProfile == null) return;
+  
+  try {
+    print('=== LOADING SAVE POINTS ===');
+    print('User ID: ${_userProfile!['id']}');
+    
+    final points = await _savePointService.getUserSavePoints(_userProfile!['id']);
+    print('Loaded ${points.length} save points from database');
+    
+    // CRITICAL: Validate and clean the save points data
+    final validSavePoints = <Map<String, dynamic>>[];
+    
+    for (final point in points) {
+      try {
+        // Validate required fields
+        if (point['id'] == null) {
+          print('❌ Skipping save point with null ID');
+          continue;
+        }
+        
+        if (point['location'] == null) {
+          print('❌ Skipping save point ${point['id']} with null location');
+          continue;
+        }
+        
+        // Handle different location data formats
+        Map<String, dynamic> locationData;
+        
+        if (point['location'] is String) {
+          // Handle PostGIS string format like "POINT(-122.4194 37.7749)"
+          final locationStr = point['location'] as String;
+          print('Processing location string: $locationStr');
+          
+          // Extract coordinates from POINT string
+          final regex = RegExp(r'POINT\s*\(\s*(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s*\)');
+          final match = regex.firstMatch(locationStr);
+          
+          if (match != null) {
+            final longitude = double.parse(match.group(1)!);
+            final latitude = double.parse(match.group(2)!);
+            
+            locationData = {
+              'type': 'Point',
+              'coordinates': [longitude, latitude],
+            };
+          } else {
+            print('❌ Could not parse location string for save point ${point['id']}');
+            continue;
+          }
+        } else if (point['location'] is Map) {
+          // Handle GeoJSON format
+          locationData = Map<String, dynamic>.from(point['location']);
+          
+          // Validate coordinates
+          if (locationData['coordinates'] == null || 
+              !(locationData['coordinates'] is List) ||
+              (locationData['coordinates'] as List).length != 2) {
+            print('❌ Invalid coordinates for save point ${point['id']}');
+            continue;
+          }
+        } else {
+          print('❌ Unknown location format for save point ${point['id']}: ${point['location'].runtimeType}');
+          continue;
+        }
+        
+        // Validate coordinates are valid numbers
+        final coords = locationData['coordinates'] as List;
+        final longitude = coords[0];
+        final latitude = coords[1];
+        
+        if (longitude is! num || latitude is! num) {
+          print('❌ Non-numeric coordinates for save point ${point['id']}');
+          continue;
+        }
+        
+        if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+          print('❌ Invalid coordinate ranges for save point ${point['id']}: [$longitude, $latitude]');
+          continue;
+        }
+        
+        // Create clean save point data
+        final cleanSavePoint = {
+          'id': point['id'],
+          'name': point['name']?.toString() ?? 'Save Point',
+          'description': point['description']?.toString(),
+          'location': locationData,
+          'created_at': point['created_at'],
+          'updated_at': point['updated_at'],
+          'user_id': point['user_id'],
+        };
+        
+        validSavePoints.add(cleanSavePoint);
+        print('✅ Valid save point: ${cleanSavePoint['name']} at [${coords[0]}, ${coords[1]}]');
+        
+      } catch (e) {
+        print('❌ Error processing save point ${point['id']}: $e');
+        continue;
+      }
+    }
+    
+    print('Validated ${validSavePoints.length} out of ${points.length} save points');
+    
+    if (mounted) {
+      setState(() {
+        _savePoints = validSavePoints;
+      });
+      print('✅ Save points state updated successfully');
+    }
+    
+  } catch (e) {
+    print('❌ Error loading save points: $e');
+    if (mounted) {
+      // Don't show error to user unless it's critical
+      print('Setting empty save points list due to error');
+      setState(() {
+        _savePoints = [];
+      });
+    }
+  }
+  print('=== END LOADING SAVE POINTS ===');
+}
 
 // SAFE SPOTS METHOD STARTS HERE
 void _removeDuplicateSafeSpots() {
@@ -768,6 +914,59 @@ void _handleSafeSpotInsert(PostgresChangePayload payload) async {
   }
 }
 
+void _showUpdateMessage(Map<String, dynamic> previousSafeSpot, Map<String, dynamic> response, String? previousStatus) {
+  final newStatus = response['status'] ?? 'pending';
+  final typeName = response['safe_spot_types']['name'];
+
+  print('Message check - Previous status: $previousStatus, New status: $newStatus');
+
+  // Only show messages for actual status changes
+  if (previousStatus != null && newStatus != previousStatus) {
+    if (newStatus == 'approved') {
+      print('🟢 Showing approved message');
+      _showSnackBar('Safe spot approved: $typeName');
+    } else if (newStatus == 'rejected') {
+      print('🔴 Showing rejected message');
+      _showSnackBar('Safe spot rejected: $typeName');
+    } else {
+      print('📝 Status changed to: $newStatus');
+      _showSnackBar('Safe spot status updated: $typeName');
+    }
+  } else if (previousStatus == newStatus && previousSafeSpot.isNotEmpty) {
+    // Check if it's an edit (content changed but status stayed same)
+    final previousName = previousSafeSpot['name'] ?? '';
+    final newName = response['name'] ?? '';
+    final previousDescription = previousSafeSpot['description'] ?? '';
+    final newDescription = response['description'] ?? '';
+    final previousTypeId = previousSafeSpot['type_id'];
+    final newTypeId = response['type_id'];
+    final previousUpvotes = previousSafeSpot['upvotes'] ?? 0;
+    final newUpvotes = response['upvotes'] ?? 0;
+
+    // Check if the only change is to upvotes
+    bool isUpvoteOnlyChange = previousName == newName &&
+        previousDescription == newDescription &&
+        previousTypeId == newTypeId &&
+        previousUpvotes != newUpvotes;
+
+    if (isUpvoteOnlyChange) {
+      print('ℹ️ Upvote-only change detected, skipping message');
+      return; // Skip showing message for upvote changes
+    }
+
+    bool isEdit = (previousName != newName ||
+        previousDescription != newDescription ||
+        previousTypeId != newTypeId);
+
+    if (isEdit) {
+      print('✏️ Showing edit confirmation message');
+      _showSnackBar('Safe spot updated: $typeName');
+    } else {
+      print('ℹ️ No significant changes detected, skipping message');
+    }
+  }
+}
+
 void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
   if (!mounted) return;
 
@@ -834,6 +1033,11 @@ void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
       final shouldShow = _shouldUserSeeSafeSpot(response);
       setState(() {
         final existingIndex = _safeSpots.indexWhere((s) => s['id'] == spotId);
+        Map<String, dynamic> previousSafeSpot = {};
+        if (existingIndex != -1) {
+          previousSafeSpot = Map<String, dynamic>.from(_safeSpots[existingIndex]);
+        }
+
         if (shouldShow) {
           if (existingIndex != -1) {
             _safeSpots[existingIndex] = response;
@@ -847,9 +1051,15 @@ void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
           print('🗑️ Removed safe spot that should no longer be visible');
         }
         print('Final safe spots count: ${_safeSpots.length}');
-      });
 
-      _showUpdateMessage(_safeSpots.firstWhere((s) => s['id'] == spotId, orElse: () => {}), response, payload.newRecord['status']);
+        // Only call _showUpdateMessage if the update isn't handled by upvote change
+        if (payload.newRecord['upvotes'] == null || previousSafeSpot['upvotes'] != response['upvotes']) {
+          print('ℹ️ Update likely due to upvote change, checking further...');
+          _showUpdateMessage(previousSafeSpot, response, previousSafeSpot['status'] ?? 'pending');
+        } else {
+          _showUpdateMessage(previousSafeSpot, response, previousSafeSpot['status'] ?? 'pending');
+        }
+      });
     } catch (e) {
       print('❌ Error in _handleSafeSpotUpdate: $e');
       if (mounted) {
@@ -860,46 +1070,6 @@ void _handleSafeSpotUpdate(PostgresChangePayload payload) async {
     _updateTimers.remove(spotId);
     print('=== END PROCESSING SAFE SPOT UPDATE ===\n');
   });
-}
-
-void _showUpdateMessage(Map<String, dynamic> previousSafeSpot, Map<String, dynamic> response, String? previousStatus) {
-  final newStatus = response['status'] ?? 'pending';
-  final typeName = response['safe_spot_types']['name'];
-
-  print('Message check - Previous status: $previousStatus, New status: $newStatus');
-
-  // Only show messages for actual status changes
-  if (previousStatus != null && newStatus != previousStatus) {
-    if (newStatus == 'approved') {
-      print('🟢 Showing approved message');
-      _showSnackBar('Safe spot approved: $typeName');
-    } else if (newStatus == 'rejected') {
-      print('🔴 Showing rejected message');
-      _showSnackBar('Safe spot rejected: $typeName');
-    } else {
-      print('📝 Status changed to: $newStatus');
-      _showSnackBar('Safe spot status updated: $typeName');
-    }
-  } else if (previousStatus == newStatus) {
-    // Check if it's an edit (content changed but status stayed same)
-    final previousName = previousSafeSpot.isNotEmpty ? previousSafeSpot['name'] : '';
-    final newName = response['name'] ?? '';
-    final previousDescription = previousSafeSpot.isNotEmpty ? previousSafeSpot['description'] : '';
-    final newDescription = response['description'] ?? '';
-    final previousTypeId = previousSafeSpot.isNotEmpty ? previousSafeSpot['type_id'] : null;
-    final newTypeId = response['type_id'];
-
-    bool isEdit = (previousName != newName || 
-                  previousDescription != newDescription || 
-                  previousTypeId != newTypeId);
-
-    if (isEdit) {
-      print('✏️ Showing edit confirmation message');
-      _showSnackBar('Safe spot updated: $typeName');
-    } else {
-      print('ℹ️ No significant changes detected, skipping message');
-    }
-  }
 }
 
 // Also add debug to the visibility check
@@ -2228,7 +2398,6 @@ void _clearDirections() {
     _distance = 0;
     _duration = '';
     _destination = null;
-    _showClearButton = false;
     _hasActiveRoute = false; // Clear active route flag
   });
 }
@@ -2336,7 +2505,6 @@ Future<void> _getDirections(LatLng destination) async {
           _duration = _formatDuration(duration);
           _routePoints = routePoints; // Use _routePoints instead of _polylinePoints
           _destination = destination;
-          _showClearButton = true;
           _hasActiveRoute = true; // Set active route flag
         });
         
@@ -2422,234 +2590,129 @@ void _showHotspotFilterDialog() {
                 builder: (context, setModalState) {
                   bool isShowingCrimes = filterService.isShowingCrimes;
                   
-                  return SingleChildScrollView(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16.0, 24.0, 16.0, 16.0),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Header with toggle
-                          Row(
-                            children: [
-                              Text(
-                                isShowingCrimes ? 'Filter Crimes' : 'Safe Spots',
-                                style: const TextStyle(
-                                  fontSize: 20, 
-                                  fontWeight: FontWeight.bold,
+                  return GestureDetector(
+                    onHorizontalDragUpdate: (details) {
+                      // Detect swipe direction
+                      if (details.delta.dx < -5 && isShowingCrimes) {
+                        // Right-to-left swipe: switch to Safe Spots
+                        setModalState(() {
+                          filterService.setFilterMode(false);
+                        });
+                      } else if (details.delta.dx > 5 && !isShowingCrimes) {
+                        // Left-to-right swipe: switch to Crimes
+                        setModalState(() {
+                          filterService.setFilterMode(true);
+                        });
+                      }
+                    },
+                    child: SingleChildScrollView(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16.0, 24.0, 16.0, 16.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Header with toggle
+                            Row(
+                              children: [
+                                Text(
+                                  isShowingCrimes ? 'Filter Crimes' : 'Safe Spots',
+                                  style: const TextStyle(
+                                    fontSize: 20, 
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
-                              ),
-                              const Spacer(),
-                              // Toggle button
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade200,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    GestureDetector(
-                                      onTap: () {
-                                        setModalState(() {
-                                          filterService.setFilterMode(true); // Show crimes
-                                        });
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          color: isShowingCrimes ? Colors.red.shade600 : Colors.transparent,
-                                          borderRadius: BorderRadius.circular(16),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              Icons.warning_rounded,
-                                              size: 16,
-                                              color: isShowingCrimes ? Colors.white : Colors.grey.shade600,
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              'Crimes',
-                                              style: TextStyle(
+                                const Spacer(),
+                                // Toggle button
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade200,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () {
+                                          setModalState(() {
+                                            filterService.setFilterMode(true); // Show crimes
+                                          });
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                          decoration: BoxDecoration(
+                                            color: isShowingCrimes ? Colors.red.shade600 : Colors.transparent,
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.warning_rounded,
+                                                size: 16,
                                                 color: isShowingCrimes ? Colors.white : Colors.grey.shade600,
-                                                fontWeight: isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
-                                                fontSize: 12,
                                               ),
-                                            ),
-                                          ],
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                'Crimes',
+                                                style: TextStyle(
+                                                  color: isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                                  fontWeight: isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () {
-                                        setModalState(() {
-                                          filterService.setFilterMode(false); // Show safe spots
-                                        });
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          color: !isShowingCrimes ? Colors.green.shade600 : Colors.transparent,
-                                          borderRadius: BorderRadius.circular(16),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              Icons.shield_rounded,
-                                              size: 16,
-                                              color: !isShowingCrimes ? Colors.white : Colors.grey.shade600,
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              'Safe Spots',
-                                              style: TextStyle(
+                                      GestureDetector(
+                                        onTap: () {
+                                          setModalState(() {
+                                            filterService.setFilterMode(false); // Show safe spots
+                                          });
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                          decoration: BoxDecoration(
+                                            color: !isShowingCrimes ? Colors.green.shade600 : Colors.transparent,
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.shield_rounded,
+                                                size: 16,
                                                 color: !isShowingCrimes ? Colors.white : Colors.grey.shade600,
-                                                fontWeight: !isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
-                                                fontSize: 12,
                                               ),
-                                            ),
-                                          ],
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                'Safe Spots',
+                                                style: TextStyle(
+                                                  color: !isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                                  fontWeight: !isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          
-                          // Dynamic content based on toggle
-                          if (isShowingCrimes) ...[
-                            // CRIMES FILTERS
-                            // Severity filters
-                            const Padding(
-                              padding: EdgeInsets.only(left: 8.0),
-                              child: Text(
-                                'Severity',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildFilterToggle(
-                              context,
-                              'Critical',
-                              FontAwesomeIcons.exclamationTriangle,
-                              const Color.fromARGB(255, 219, 0, 0),
-                              filterService.showCritical,
-                              (value) => filterService.toggleCritical(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'High',
-                              Icons.priority_high,
-                              const Color.fromARGB(255, 223, 106, 11),
-                              filterService.showHigh,
-                              (value) => filterService.toggleHigh(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Medium',
-                              Icons.remove,
-                              const Color.fromARGB(167, 116, 66, 9),
-                              filterService.showMedium,
-                              (value) => filterService.toggleMedium(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Low',
-                              Icons.low_priority,
-                              const Color.fromARGB(255, 216, 187, 23),
-                              filterService.showLow,
-                              (value) => filterService.toggleLow(),
+                              ],
                             ),
                             const SizedBox(height: 16),
                             
-                            // Category filters
-                            const Padding(
-                              padding: EdgeInsets.only(left: 8.0),
-                              child: Text(
-                                'Categories',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildFilterToggle(
-                              context,
-                              'Violent',
-                              FontAwesomeIcons.triangleExclamation,
-                           const Color.fromARGB(255, 139, 96, 96),
-                              filterService.showViolent,
-                              (value) => filterService.toggleViolent(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Property',
-                              FontAwesomeIcons.bagShopping,
-                                const Color.fromARGB(255, 139, 96, 96),
-                              filterService.showProperty,
-                              (value) => filterService.toggleProperty(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Drug',
-                              FontAwesomeIcons.cannabis,
-                          const Color.fromARGB(255, 139, 96, 96),
-                              filterService.showDrug,
-                              (value) => filterService.toggleDrug(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Public Order',
-                              Icons.balance,
-                               const Color.fromARGB(255, 139, 96, 96),
-                              filterService.showPublicOrder,
-                              (value) => filterService.togglePublicOrder(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Financial',
-                              Icons.attach_money,
-                            const Color.fromARGB(255, 139, 96, 96),
-                              filterService.showFinancial,
-                              (value) => filterService.toggleFinancial(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Traffic',
-                              Icons.traffic,
-                               const Color.fromARGB(255, 139, 96, 96),
-                              filterService.showTraffic,
-                              (value) => filterService.toggleTraffic(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Alerts',
-                              Icons.campaign,
-                              const Color.fromARGB(255, 139, 96, 96),
-                              filterService.showAlerts,
-                              (value) => filterService.toggleAlerts(),
-                            ),
-                            
-                            const SizedBox(height: 16),
-                            
-                            // Status filters (only for logged-in users)
-                            if (_userProfile != null) ...[
+                            // Dynamic content based on toggle
+                            if (isShowingCrimes) ...[
+                              // CRIMES FILTERS
+                              // Severity filters
                               const Padding(
                                 padding: EdgeInsets.only(left: 8.0),
                                 child: Text(
-                                  'Status',
+                                  'Severity',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
@@ -2660,22 +2723,142 @@ void _showHotspotFilterDialog() {
                               const SizedBox(height: 8),
                               _buildFilterToggle(
                                 context,
-                                'Pending',
-                                Icons.hourglass_empty,
-                                Colors.deepPurple,
-                                filterService.showPending,
-                                (value) => filterService.togglePending(),
+                                'Critical',
+                                FontAwesomeIcons.exclamationTriangle,
+                                const Color.fromARGB(255, 219, 0, 0),
+                                filterService.showCritical,
+                                (value) => filterService.toggleCritical(),
                               ),
                               _buildFilterToggle(
                                 context,
-                                'Rejected',
-                                Icons.cancel_outlined,
-                                Colors.red,
-                                filterService.showRejected,
-                                (value) => filterService.toggleRejected(),
+                                'High',
+                                Icons.priority_high,
+                                const Color.fromARGB(255, 223, 106, 11),
+                                filterService.showHigh,
+                                (value) => filterService.toggleHigh(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Medium',
+                                Icons.remove,
+                                const Color.fromARGB(167, 116, 66, 9),
+                                filterService.showMedium,
+                                (value) => filterService.toggleMedium(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Low',
+                                Icons.low_priority,
+                                const Color.fromARGB(255, 216, 187, 23),
+                                filterService.showLow,
+                                (value) => filterService.toggleLow(),
+                              ),
+                              const SizedBox(height: 16),
+                              
+                              // Category filters
+                              const Padding(
+                                padding: EdgeInsets.only(left: 8.0),
+                                child: Text(
+                                  'Categories',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _buildFilterToggle(
+                                context,
+                                'Violent',
+                                FontAwesomeIcons.triangleExclamation,
+                                const Color.fromARGB(255, 139, 96, 96),
+                                filterService.showViolent,
+                                (value) => filterService.toggleViolent(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Property',
+                                FontAwesomeIcons.bagShopping,
+                                const Color.fromARGB(255, 139, 96, 96),
+                                filterService.showProperty,
+                                (value) => filterService.toggleProperty(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Drug',
+                                FontAwesomeIcons.cannabis,
+                                const Color.fromARGB(255, 139, 96, 96),
+                                filterService.showDrug,
+                                (value) => filterService.toggleDrug(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Public Order',
+                                Icons.balance,
+                                const Color.fromARGB(255, 139, 96, 96),
+                                filterService.showPublicOrder,
+                                (value) => filterService.togglePublicOrder(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Financial',
+                                Icons.attach_money,
+                                const Color.fromARGB(255, 139, 96, 96),
+                                filterService.showFinancial,
+                                (value) => filterService.toggleFinancial(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Traffic',
+                                Icons.traffic,
+                                const Color.fromARGB(255, 139, 96, 96),
+                                filterService.showTraffic,
+                                (value) => filterService.toggleTraffic(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Alerts',
+                                Icons.campaign,
+                                const Color.fromARGB(255, 139, 96, 96),
+                                filterService.showAlerts,
+                                (value) => filterService.toggleAlerts(),
                               ),
                               
-                         // Active/Inactive filters (for admin, officer, and regular users)
+                              const SizedBox(height: 16),
+                              
+                              // Status filters (only for logged-in users)
+                              if (_userProfile != null) ...[
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 8.0),
+                                  child: Text(
+                                    'Status',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                _buildFilterToggle(
+                                  context,
+                                  'Pending',
+                                  Icons.hourglass_empty,
+                                  Colors.deepPurple,
+                                  filterService.showPending,
+                                  (value) => filterService.togglePending(),
+                                ),
+                                _buildFilterToggle(
+                                  context,
+                                  'Rejected',
+                                  Icons.cancel_outlined,
+                                  Colors.red,
+                                  filterService.showRejected,
+                                  (value) => filterService.toggleRejected(),
+                                ),
+                                
+                                // Active/Inactive filters (for admin, officer, and regular users)
                                 if (_userProfile?['role'] == 'admin' || _userProfile?['role'] == 'officer' || _userProfile?['role'] == 'user') ...[
                                   _buildFilterToggle(
                                     context,
@@ -2694,113 +2877,16 @@ void _showHotspotFilterDialog() {
                                     (value) => filterService.toggleInactive(),
                                   ),
                                 ],
-                              
-                              const SizedBox(height: 16),
-                            ],
-                          ] else ...[
-                            // SAFE SPOTS FILTERS
-                            // Safe Spot Types
-                            const Padding(
-                              padding: EdgeInsets.only(left: 8.0),
-                              child: Text(
-                                'Safe Spot Types',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildFilterToggle(
-                              context,
-                              'Police Station',
-                              Icons.local_police,
-                               const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showPoliceStations,
-                              (value) => filterService.togglePoliceStations(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Government Building',
-                              Icons.account_balance,
-                            const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showGovernmentBuildings,
-                              (value) => filterService.toggleGovernmentBuildings(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Hospital',
-                              Icons.local_hospital,
-                            const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showHospitals,
-                              (value) => filterService.toggleHospitals(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'School',
-                              Icons.school,
-                              const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showSchools,
-                              (value) => filterService.toggleSchools(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Shopping Mall',
-                              Icons.store,
-                            const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showShoppingMalls,
-                              (value) => filterService.toggleShoppingMalls(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Well-lit Area',
-                              Icons.lightbulb,
-                             const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showWellLitAreas,
-                              (value) => filterService.toggleWellLitAreas(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Security Camera',
-                              Icons.security,
-                          const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showSecurityCameras,
-                              (value) => filterService.toggleSecurityCameras(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Fire Station',
-                              Icons.local_fire_department,
-                       const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showFireStations,
-                              (value) => filterService.toggleFireStations(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Religious Building',
-                              Icons.church,
-                           const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showReligiousBuildings,
-                              (value) => filterService.toggleReligiousBuildings(),
-                            ),
-                            _buildFilterToggle(
-                              context,
-                              'Community Center',
-                              Icons.group,
-                             const Color.fromARGB(255, 96, 139, 109),
-                              filterService.showCommunityCenters,
-                              (value) => filterService.toggleCommunityCenters(),
-                            ),
-                            
-                            const SizedBox(height: 16),
-                            
-                            // Safe Spot Status filters (only for logged-in users)
-                            if (_userProfile != null) ...[
+                                
+                                const SizedBox(height: 16),
+                              ],
+                            ] else ...[
+                              // SAFE SPOTS FILTERS
+                              // Safe Spot Types
                               const Padding(
                                 padding: EdgeInsets.only(left: 8.0),
                                 child: Text(
-                                  'Status',
+                                  'Safe Spot Types',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
@@ -2811,82 +2897,180 @@ void _showHotspotFilterDialog() {
                               const SizedBox(height: 8),
                               _buildFilterToggle(
                                 context,
-                                'Pending',
-                                Icons.hourglass_empty,
-                                Colors.deepPurple,
-                                filterService.showSafeSpotsPending,
-                                (value) => filterService.toggleSafeSpotsPending(),
+                                'Police Station',
+                                Icons.local_police,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showPoliceStations,
+                                (value) => filterService.togglePoliceStations(),
                               ),
                               _buildFilterToggle(
                                 context,
-                                'Approved',
-                                Icons.check_circle_outline,
-                                Colors.green,
-                                filterService.showSafeSpotsApproved,
-                                (value) => filterService.toggleSafeSpotsApproved(),
+                                'Government Building',
+                                Icons.account_balance,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showGovernmentBuildings,
+                                (value) => filterService.toggleGovernmentBuildings(),
                               ),
                               _buildFilterToggle(
                                 context,
-                                'Rejected',
-                                Icons.cancel_outlined,
-                                Colors.red,
-                                filterService.showSafeSpotsRejected,
-                                (value) => filterService.toggleSafeSpotsRejected(),
+                                'Hospital',
+                                Icons.local_hospital,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showHospitals,
+                                (value) => filterService.toggleHospitals(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'School',
+                                Icons.school,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showSchools,
+                                (value) => filterService.toggleSchools(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Shopping Mall',
+                                Icons.store,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showShoppingMalls,
+                                (value) => filterService.toggleShoppingMalls(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Well-lit Area',
+                                Icons.lightbulb,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showWellLitAreas,
+                                (value) => filterService.toggleWellLitAreas(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Security Camera',
+                                Icons.security,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showSecurityCameras,
+                                (value) => filterService.toggleSecurityCameras(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Fire Station',
+                                Icons.local_fire_department,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showFireStations,
+                                (value) => filterService.toggleFireStations(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Religious Building',
+                                Icons.church,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showReligiousBuildings,
+                                (value) => filterService.toggleReligiousBuildings(),
+                              ),
+                              _buildFilterToggle(
+                                context,
+                                'Community Center',
+                                Icons.group,
+                                const Color.fromARGB(255, 96, 139, 109),
+                                filterService.showCommunityCenters,
+                                (value) => filterService.toggleCommunityCenters(),
                               ),
                               
                               const SizedBox(height: 16),
                               
-                              // Verification filters
-                              const Padding(
-                                padding: EdgeInsets.only(left: 8.0),
-                                child: Text(
-                                  'Verification',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.grey,
+                              // Safe Spot Status filters (only for logged-in users)
+                              if (_userProfile != null) ...[
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 8.0),
+                                  child: Text(
+                                    'Status',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey,
+                                    ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              _buildFilterToggle(
-                                context,
-                                'Verified',
-                                Icons.verified,
-                                Colors.blue.shade600,
-                                filterService.showVerifiedSafeSpots,
-                                (value) => filterService.toggleVerifiedSafeSpots(),
-                              ),
-                              _buildFilterToggle(
-                                context,
-                                'Unverified',
-                                Icons.help_outline,
-                                Colors.grey.shade600,
-                                filterService.showUnverifiedSafeSpots,
-                                (value) => filterService.toggleUnverifiedSafeSpots(),
-                              ),
-                              
-                              const SizedBox(height: 16),
+                                const SizedBox(height: 8),
+                                _buildFilterToggle(
+                                  context,
+                                  'Pending',
+                                  Icons.hourglass_empty,
+                                  Colors.deepPurple,
+                                  filterService.showSafeSpotsPending,
+                                  (value) => filterService.toggleSafeSpotsPending(),
+                                ),
+                                _buildFilterToggle(
+                                  context,
+                                  'Approved',
+                                  Icons.check_circle_outline,
+                                  Colors.green,
+                                  filterService.showSafeSpotsApproved,
+                                  (value) => filterService.toggleSafeSpotsApproved(),
+                                ),
+                                _buildFilterToggle(
+                                  context,
+                                  'Rejected',
+                                  Icons.cancel_outlined,
+                                  Colors.red,
+                                  filterService.showSafeSpotsRejected,
+                                  (value) => filterService.toggleSafeSpotsRejected(),
+                                ),
+                                
+                                const SizedBox(height: 16),
+                                
+                                // Verification filters
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 8.0),
+                                  child: Text(
+                                    'Verification',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                _buildFilterToggle(
+                                  context,
+                                  'Verified',
+                                  Icons.verified,
+                                  Colors.blue.shade600,
+                                  filterService.showVerifiedSafeSpots,
+                                  (value) => filterService.toggleVerifiedSafeSpots(),
+                                ),
+                                _buildFilterToggle(
+                                  context,
+                                  'Unverified',
+                                  Icons.help_outline,
+                                  Colors.grey.shade600,
+                                  filterService.showUnverifiedSafeSpots,
+                                  (value) => filterService.toggleUnverifiedSafeSpots(),
+                                ),
+                                
+                                const SizedBox(height: 16),
+                              ],
                             ],
+                            
+                            // Close button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  foregroundColor: Theme.of(context).primaryColor,
+                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('Close'),
+                              ),
+                            ),
                           ],
-                          
-                          // Close button
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.white,
-                                foregroundColor: Theme.of(context).primaryColor,
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Close'),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   );
@@ -2935,7 +3119,7 @@ Widget _buildFilterToggle(
 
 void _showLocationOptions(LatLng position) async {
   String locationName = "Loading location...";
-  final isDesktop = MediaQuery.of(context).size.width >= 600;
+  final isDesktop = _isDesktopScreen();
 
   try {
     final response = await http.get(
@@ -2957,14 +3141,14 @@ void _showLocationOptions(LatLng position) async {
       builder: (context) {
         return LocationOptionsDialogDesktop(
           locationName: locationName,
-          isAdmin: _hasAdminPermissions, // Use combined permissions
+          isAdmin: _hasAdminPermissions,
           userProfile: _userProfile,
           distance: _distance,
           duration: _duration,
           onGetDirections: () => _getDirections(position),
           onGetSafeRoute: () => _getSafeRoute(position),
           onShareLocation: () => _shareLocation(position),
-          onReportHotspot: () => _showReportHotspotForm(position),
+          onReportHotspot: () => _showReportHotspotForm(position), // Updated method call
           onAddHotspot: () => _showAddHotspotForm(position),
           onAddSafeSpot: () => _navigateToSafeSpotForm(position),
         );
@@ -3016,13 +3200,29 @@ void _showLocationOptions(LatLng position) async {
               ),
 
               if (!_hasAdminPermissions && _userProfile != null)
-                ListTile(
-                  leading: const Icon(Icons.report, color: Colors.orange),
-                  title: const Text('Report Crime'),
-                  subtitle: const Text('Submit for admin approval'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showReportHotspotForm(position);
+                FutureBuilder<int>(
+                  future: _getDailyReportCount(),
+                  builder: (context, snapshot) {
+                    final dailyCount = snapshot.data ?? 0;
+                    final canReport = dailyCount < 5;
+                    
+                    return ListTile(
+                      leading: Icon(
+                        Icons.report, 
+                        color: canReport ? Colors.orange : Colors.grey,
+                      ),
+                      title: const Text('Report Crime'),
+                      subtitle: Text(
+                        canReport 
+                          ? 'Submit for admin approval ($dailyCount/5 today)'
+                          : 'Daily limit reached (5/5)',
+                      ),
+                      enabled: canReport,
+                      onTap: canReport ? () {
+                        Navigator.pop(context);
+                        _showReportHotspotForm(position); // Updated method call
+                      } : null,
+                    );
                   },
                 ),
               if (_hasAdminPermissions)
@@ -3036,7 +3236,7 @@ void _showLocationOptions(LatLng position) async {
                   },
                 ),
 
-              if (_userProfile != null) // Safe spot option for mobile
+              if (_userProfile != null)
                 ListTile(
                   leading: const Icon(Icons.safety_check, color: Colors.blue),
                   title: const Text('Add Safe Spot'),
@@ -3046,6 +3246,27 @@ void _showLocationOptions(LatLng position) async {
                     _navigateToSafeSpotForm(position);
                   },
                 ),
+                
+
+if (_userProfile != null)
+  ListTile(
+    leading: const Icon(Icons.bookmark_add, color: Colors.purple),
+    title: const Text('Save This Location'),
+    subtitle: const Text('Bookmark for quick navigation'),
+    onTap: () {
+      Navigator.pop(context); // Close the menu
+      AddSavePointScreen.showAddSavePointForm(
+        context: context,
+        userProfile: _userProfile,
+        initialLocation: position,
+        onUpdate: () {
+          print('onUpdate: Reloading save points...');
+          _loadSavePoints(); // Reload save points to update _savePoints
+          setState(() {}); // Ensure the UI rebuilds
+        },
+      );
+    },
+  ),
 
               ListTile(
                 leading: const Icon(Icons.share),
@@ -3511,7 +3732,6 @@ Future<void> _getSafeRoute(LatLng destination) async {
       _distance = distance / 1000;
       _duration = _formatDuration(duration);
       _destination = destination;
-      _showClearButton = true;
       _hasActiveRoute = true;
     });
     
@@ -3673,7 +3893,7 @@ double _calculateRouteDistance(List<LatLng> route) {
   }
 
  
-// TRAVEL TIME DURATION
+// TRAVEL TIME DURATION WITH CLOSE BUTTON
 Widget _buildFloatingDurationWidget() {
   // Only show if there's a destination and we have calculated distance
   if (_destination == null || _currentPosition == null || _distance <= 0) {
@@ -3769,51 +3989,81 @@ Widget _buildFloatingDurationWidget() {
             ),
           ),
         
-        // Duration display widget - further minimized
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              _showTravelModeSelector = !_showTravelModeSelector;
-            });
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), // Reduced padding
-            decoration: BoxDecoration(
-              color: Colors.blue.shade600,
-              borderRadius: BorderRadius.circular(8), // Reduced from 10
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.12), // Reduced opacity
-                  blurRadius: 4, // Reduced from 6
-                  offset: const Offset(0, 1), // Reduced from (0, 2)
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  _getTravelModeIcon(_selectedTravelMode),
-                  color: Colors.white,
-                  size: 14, // Reduced from 16
-                ),
-                const SizedBox(width: 4), // Reduced from 6
-                Text(
-                  '${_distance.toStringAsFixed(1)} km • $formattedDuration',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11, // Reduced from 12
+        // Duration display widget with close button
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.blue.shade600,
+            borderRadius: BorderRadius.circular(8), // Reduced from 10
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.12), // Reduced opacity
+                blurRadius: 4, // Reduced from 6
+                offset: const Offset(0, 1), // Reduced from (0, 2)
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Main duration display (clickable to toggle travel mode selector)
+              GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _showTravelModeSelector = !_showTravelModeSelector;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), // Reduced padding
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _getTravelModeIcon(_selectedTravelMode),
+                        color: Colors.white,
+                        size: 14, // Reduced from 16
+                      ),
+                      const SizedBox(width: 4), // Reduced from 6
+                      Text(
+                        '${_distance.toStringAsFixed(1)} km • $formattedDuration',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11, // Reduced from 12
+                        ),
+                      ),
+                      const SizedBox(width: 4), // Reduced from 6
+                      Icon(
+                        _showTravelModeSelector ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                        color: Colors.white,
+                        size: 12, // Reduced from 14
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 4), // Reduced from 6
-                Icon(
-                  _showTravelModeSelector ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                  color: Colors.white,
-                  size: 12, // Reduced from 14
+              ),
+              
+              // Close/Cancel route button
+              GestureDetector(
+                onTap: () {
+                  _clearDirections(); // Call your existing clear directions method
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: const BorderRadius.only(
+                      topRight: Radius.circular(8),
+                      bottomRight: Radius.circular(8),
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.close,
+                    color: Colors.white,
+                    size: 16,
+                  ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ],
@@ -3823,387 +4073,167 @@ Widget _buildFloatingDurationWidget() {
 
 
 ////ADD HOTSPOT FOR ADMIN
-  void _showAddHotspotForm(LatLng position) async {
-    final isDesktop = MediaQuery.of(context).size.width >= 600;
+void _showAddHotspotForm(LatLng position) async {
+  final isDesktop = _isDesktopScreen();
 
-    try {
-      final crimeTypesResponse = await Supabase.instance.client
-          .from('crime_type')
-          .select('*')
-          .order('name');
+  try {
+    final crimeTypesResponse = await Supabase.instance.client
+        .from('crime_type')
+        .select('*')
+        .order('name');
 
-      if (crimeTypesResponse.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No crime types available.')),
-        );
-        return;
-      }
+    if (crimeTypesResponse.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No crime types available.')),
+      );
+      return;
+    }
 
-      final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
-      final formKey = GlobalKey<FormState>();
-      final descriptionController = TextEditingController();
-      final dateController = TextEditingController();
-      final timeController = TextEditingController();
+    final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
+    final formKey = GlobalKey<FormState>();
+    final descriptionController = TextEditingController();
+    final dateController = TextEditingController();
+    final timeController = TextEditingController();
 
-      String selectedCrimeType = crimeTypes[0]['name'];
-      int selectedCrimeId = crimeTypes[0]['id'];
-      
-      // Photo state for this form
-      XFile? selectedPhoto;
-      bool isUploadingPhoto = false;
+    String selectedCrimeType = crimeTypes[0]['name'];
+    int selectedCrimeId = crimeTypes[0]['id'];
+    // Add active status state
+    bool isActiveStatus = true; // Default to active
+    String selectedActiveStatus = 'active';
 
-      final now = DateTime.now();
-      dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-      timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    // Photo state for this form
+    XFile? selectedPhoto;
+    bool isUploadingPhoto = false;
 
-      void onSubmit() async {
-        if (formKey.currentState!.validate()) {
-          try {
-            final dateTime = DateTime(
-              int.parse(dateController.text.split('-')[0]),
-              int.parse(dateController.text.split('-')[1]),
-              int.parse(dateController.text.split('-')[2]),
-              int.parse(timeController.text.split(':')[0]),
-              int.parse(timeController.text.split(':')[1]),
-            );
+    final now = DateTime.now();
+    dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+    timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
 
-            // Save hotspot first
-            final hotspotId = await _saveHotspot(
-              selectedCrimeId.toString(),
-              descriptionController.text,
-              position,
-              dateTime,
-            );
+    void onSubmit() async {
+      if (formKey.currentState!.validate()) {
+        try {
+          final dateTime = DateTime(
+            int.parse(dateController.text.split('-')[0]),
+            int.parse(dateController.text.split('-')[1]),
+            int.parse(dateController.text.split('-')[2]),
+            int.parse(timeController.text.split(':')[0]),
+            int.parse(timeController.text.split(':')[1]),
+          );
 
-            // Upload photo if selected
-            if (selectedPhoto != null && hotspotId != null) {
-              try {
-                await PhotoService.uploadPhoto(
-                  imageFile: selectedPhoto!,
-                  hotspotId: hotspotId,
-                  userId: _userProfile!['id'],
-                );
-              } catch (e) {
-                print('Photo upload failed: $e');
-                if (mounted) {
-                  _showSnackBar('Crime saved but photo upload failed: ${e.toString()}');
-                }
+          // Save hotspot with active status
+          final hotspotId = await _saveHotspot(
+            selectedCrimeId.toString(),
+            descriptionController.text,
+            position,
+            dateTime,
+            selectedActiveStatus, // Pass active status
+          );
+
+          // Upload photo if selected
+          if (selectedPhoto != null && hotspotId != null) {
+            try {
+              await PhotoService.uploadPhoto(
+                imageFile: selectedPhoto!,
+                hotspotId: hotspotId,
+                userId: _userProfile!['id'],
+              );
+            } catch (e) {
+              print('Photo upload failed: $e');
+              if (mounted) {
+                _showSnackBar('Crime saved but photo upload failed: ${e.toString()}');
               }
             }
+          }
 
-            await _loadHotspots();
+          await _loadHotspots();
 
-            if (mounted) {
-              Navigator.pop(context);
-              _showSnackBar('Crime reported successfully');
-            }
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Failed to save crime report: ${e.toString()}'),
-                  duration: const Duration(seconds: 5),
-                ),
-              );
-            }
+          if (mounted) {
+            Navigator.pop(context);
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to save crime report: ${e.toString()}'),
+                duration: const Duration(seconds: 5),
+              ),
+            );
           }
         }
       }
+    }
 
-      if (isDesktop) {
-        // Desktop dialog - you'll need to update your AddHotspotFormDesktop to include photo
-        showDialog(
-          context: context,
-          builder: (context) {
-            return StatefulBuilder(
-              builder: (context, setState) => AlertDialog(
-                title: const Text('Add Crime Incident'),
-                content: SizedBox(
-                  width: 400,
-                  child: Form(
-                    key: formKey,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Crime type dropdown
-                        DropdownButtonFormField<String>(
-                          value: selectedCrimeType,
-                          decoration: const InputDecoration(
-                            labelText: 'Crime Type',
-                            border: OutlineInputBorder(),
-                          ),
-                          items: crimeTypes.map((crimeType) {
-                            return DropdownMenuItem<String>(
-                              value: crimeType['name'],
-                              child: Text(
-                                '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                style: const TextStyle(fontSize: 14),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            );
-                          }).toList(),
-                          onChanged: (value) {
-                            if (value != null) {
-                              final selected = crimeTypes.firstWhere((c) => c['name'] == value);
-                              selectedCrimeType = value;
-                              selectedCrimeId = selected['id'];
-                            }
-                          },
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please select a crime type';
-                            }
-                            return null;
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        
-                        // Description field
-                        TextFormField(
-                          controller: descriptionController,
-                          decoration: const InputDecoration(
-                            labelText: 'Description (optional)',
-                            border: OutlineInputBorder(),
-                          ),
-                          maxLines: 3,
-                        ),
-                        const SizedBox(height: 16),
-                        
-                        // Photo section
-                        _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
-                          setState(() {
-                            selectedPhoto = photo;
-                            isUploadingPhoto = uploading;
-                          });
-                        }),
-                        const SizedBox(height: 16),
-                        
-                        // Date and time fields
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextFormField(
-                                controller: dateController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Date of Incident',
-                                  border: OutlineInputBorder(),
-                                ),
-                                readOnly: true,
-                                onTap: () async {
-                                  DateTime? pickedDate = await showDatePicker(
-                                    context: context,
-                                    initialDate: now,
-                                    firstDate: DateTime(2000),
-                                    lastDate: DateTime(2101),
-                                  );
-                                  if (pickedDate != null) {
-                                    dateController.text =
-                                        "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                                  }
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: TextFormField(
-                                controller: timeController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Time of Incident',
-                                  border: OutlineInputBorder(),
-                                ),
-                                readOnly: true,
-                                onTap: () async {
-                                  TimeOfDay? pickedTime = await showTimePicker(
-                                    context: context,
-                                    initialTime: TimeOfDay.now(),
-                                  );
-                                  if (pickedTime != null) {
-                                    timeController.text =
-                                        "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
-                                  }
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-    actions: [
-  Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      ElevatedButton(
-        onPressed: isUploadingPhoto ? null : onSubmit,
-        child: isUploadingPhoto 
-            ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Text('Submit'),
-      ),
-      const SizedBox(height: 12),
-      SizedBox(
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: isUploadingPhoto
-              ? null
-              : () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-      ),
-    ],
-  ),
-],
-              ),
-            );
-          },
-        );
-      } else {
-showModalBottomSheet(
-  context: context,
-  isScrollControlled: true,
-  constraints: BoxConstraints(
-    maxHeight: MediaQuery.of(context).size.height * 0.95,
-  ),
-  builder: (context) {
-    return StatefulBuilder(
-      builder: (context, setState) => IntrinsicHeight(
-        child: Container(
-          width: double.infinity,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(16),
-              topRight: Radius.circular(16),
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Drag indicator at the top
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              
-              // Content that will expand as needed
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.only(
-                    bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-                    left: 16,
-                    right: 16,
-                  ),
+    if (isDesktop) {
+      showDialog(
+        context: context,
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setState) => AlertDialog(
+              title: const Text('Add Crime Incident'),
+              content: SizedBox(
+                width: 400,
+                child: Form(
+                  key: formKey,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Header Title
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).primaryColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: Theme.of(context).primaryColor.withOpacity(0.3),
-                          ),
+                      // Crime type dropdown
+                      DropdownButtonFormField<String>(
+                        value: selectedCrimeType,
+                        decoration: const InputDecoration(
+                          labelText: 'Crime Type',
+                          border: OutlineInputBorder(),
                         ),
-                        child: Column(
-                          children: [
-                            Icon(
-                              Icons.add_location_alt,
-                              size: 32,
-                              color: Theme.of(context).primaryColor,
+                        items: crimeTypes.map((crimeType) {
+                          return DropdownMenuItem<String>(
+                            value: crimeType['name'],
+                            child: Text(
+                              '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                              style: const TextStyle(fontSize: 14),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Add Crime Incident',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).primaryColor,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Report a new crime incident to the system',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            final selected = crimeTypes.firstWhere((c) => c['name'] == value);
+                            setState(() {
+                              selectedCrimeType = value;
+                              selectedCrimeId = selected['id'];
+                            });
+                          }
+                        },
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please select a crime type';
+                          }
+                          return null;
+                        },
                       ),
-                      const SizedBox(height: 20),
-                      
-                      Form(
-                        key: formKey,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            DropdownButtonFormField<String>(
-                              value: selectedCrimeType,
-                              decoration: const InputDecoration(
-                                labelText: 'Crime Type',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: crimeTypes.map((crimeType) {
-                                return DropdownMenuItem<String>(
-                                  value: crimeType['name'],
-                                  child: Text(
-                                    '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                    style: const TextStyle(fontSize: 14),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                );
-                              }).toList(),
-                              onChanged: (newValue) {
-                                if (newValue != null) {
-                                  final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
-                                  selectedCrimeType = newValue;
-                                  selectedCrimeId = selected['id'];
-                                }
-                              },
-                              validator: (value) {
-                                if (value == null || value.isEmpty) {
-                                  return 'Please select a crime type';
-                                }
-                                return null;
-                              },
-                            ),
-                            const SizedBox(height: 16),
-                            TextFormField(
-                              controller: descriptionController,
-                              decoration: const InputDecoration(
-                                labelText: 'Description (optional)',
-                                border: OutlineInputBorder(),
-                              ),
-                              maxLines: 3,
-                            ),
-                            const SizedBox(height: 16),
-                            
-                            // Photo section
-                            _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
-                              setState(() {
-                                selectedPhoto = photo;
-                                isUploadingPhoto = uploading;
-                              });
-                            }),
-                            const SizedBox(height: 16),
-                            
-                            TextFormField(
+                      const SizedBox(height: 16),
+                      // Description field
+                      TextFormField(
+                        controller: descriptionController,
+                        decoration: const InputDecoration(
+                          labelText: 'Description (optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                        maxLines: 3,
+                      ),
+                      const SizedBox(height: 16),
+                      // Photo section
+                      _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                        setState(() {
+                          selectedPhoto = photo;
+                          isUploadingPhoto = uploading;
+                        });
+                      }),
+                      const SizedBox(height: 16),
+                      // Date and time fields
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
                               controller: dateController,
                               decoration: const InputDecoration(
                                 labelText: 'Date of Incident',
@@ -4223,8 +4253,10 @@ showModalBottomSheet(
                                 }
                               },
                             ),
-                            const SizedBox(height: 16),
-                            TextFormField(
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
                               controller: timeController,
                               decoration: const InputDecoration(
                                 labelText: 'Time of Incident',
@@ -4242,39 +4274,346 @@ showModalBottomSheet(
                                 }
                               },
                             ),
-                            const SizedBox(height: 24),
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton(
-                                onPressed: isUploadingPhoto ? null : onSubmit,
-                                child: isUploadingPhoto
-                                    ? const CircularProgressIndicator()
-                                    : const Text('Submit'),
-                              ),
-                            ),
-                            // Add extra space at bottom for better scrolling
-                            const SizedBox(height: 20),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 16),
+                      // Active status toggle for admins
+                      if (_hasAdminPermissions)
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Active Status:',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                              ),
+                              Row(
+                                children: [
+                                  Switch(
+                                    value: isActiveStatus,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        isActiveStatus = value;
+                                        selectedActiveStatus = value ? 'active' : 'inactive';
+                                      });
+                                    },
+                                    activeColor: Colors.green,
+                                    inactiveThumbColor: Colors.grey,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    isActiveStatus ? 'Active' : 'Inactive',
+                                    style: TextStyle(
+                                      color: isActiveStatus ? Colors.green : Colors.grey,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
                 ),
               ),
-            ],
-          ),
+              actions: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ElevatedButton(
+                      onPressed: isUploadingPhoto ? null : onSubmit,
+                      child: isUploadingPhoto
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Submit'),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: isUploadingPhoto
+                            ? null
+                            : () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    } else {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.95,
         ),
-      ),
-    );
-  },
-);
-}
-    } catch (e) {
-      if (mounted) {
-        _showSnackBar('Error loading crime types: ${e.toString()}');
-      }
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setState) => IntrinsicHeight(
+              child: Container(
+                width: double.infinity,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[300],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.only(
+                          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                          left: 16,
+                          right: 16,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).primaryColor.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Theme.of(context).primaryColor.withOpacity(0.3),
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    Icons.add_location_alt,
+                                    size: 32,
+                                    color: Theme.of(context).primaryColor,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Add Crime Incident',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Theme.of(context).primaryColor,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Report a new crime incident to the system',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[600],
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            Form(
+                              key: formKey,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  DropdownButtonFormField<String>(
+                                    value: selectedCrimeType,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Crime Type',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: crimeTypes.map((crimeType) {
+                                      return DropdownMenuItem<String>(
+                                        value: crimeType['name'],
+                                        child: Text(
+                                          '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                                          style: const TextStyle(fontSize: 14),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      );
+                                    }).toList(),
+                                    onChanged: (newValue) {
+                                      if (newValue != null) {
+                                        final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
+                                        setState(() {
+                                          selectedCrimeType = newValue;
+                                          selectedCrimeId = selected['id'];
+                                        });
+                                      }
+                                    },
+                                    validator: (value) {
+                                      if (value == null || value.isEmpty) {
+                                        return 'Please select a crime type';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                  TextFormField(
+                                    controller: descriptionController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Description (optional)',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    maxLines: 3,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  // Photo section
+                                  _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                                    setState(() {
+                                      selectedPhoto = photo;
+                                      isUploadingPhoto = uploading;
+                                    });
+                                  }),
+                                  const SizedBox(height: 16),
+                                  TextFormField(
+                                    controller: dateController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Date of Incident',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    readOnly: true,
+                                    onTap: () async {
+                                      DateTime? pickedDate = await showDatePicker(
+                                        context: context,
+                                        initialDate: now,
+                                        firstDate: DateTime(2000),
+                                        lastDate: DateTime(2101),
+                                      );
+                                      if (pickedDate != null) {
+                                        dateController.text =
+                                            "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                      }
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                  TextFormField(
+                                    controller: timeController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Time of Incident',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    readOnly: true,
+                                    onTap: () async {
+                                      TimeOfDay? pickedTime = await showTimePicker(
+                                        context: context,
+                                        initialTime: TimeOfDay.now(),
+                                      );
+                                      if (pickedTime != null) {
+                                        timeController.text =
+                                            "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                                      }
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                  // Active status toggle for admins
+                                  if (_hasAdminPermissions)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        color: isActiveStatus ? Colors.green.shade50 : Colors.grey.shade50,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: isActiveStatus ? Colors.green.shade200 : Colors.grey.shade300,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Icon(
+                                                isActiveStatus ? Icons.check_circle : Icons.cancel,
+                                                color: isActiveStatus ? Colors.green : Colors.grey,
+                                                size: 20,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          Transform.scale(
+                                            scale: 0.8,
+                                            child: Switch(
+                                              value: isActiveStatus,
+                                              onChanged: (value) {
+                                                setState(() {
+                                                  isActiveStatus = value;
+                                                  selectedActiveStatus = value ? 'active' : 'inactive';
+                                                });
+                                              },
+                                              activeColor: Colors.green,
+                                              inactiveThumbColor: Colors.grey,
+                                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  const SizedBox(height: 24),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton(
+                                      onPressed: isUploadingPhoto ? null : onSubmit,
+                                      child: isUploadingPhoto
+                                          ? const CircularProgressIndicator()
+                                          : const Text('Submit'),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 20),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+  } catch (e) {
+    if (mounted) {
+      _showSnackBar('Error loading crime types: ${e.toString()}');
     }
   }
+}
 
    Widget _buildPhotoSection(XFile? selectedPhoto, bool isUploading, Function(XFile?, bool) onPhotoChanged) {
     return Container(
@@ -4395,7 +4734,17 @@ showModalBottomSheet(
 
 // REPORT HOTSPOT FOR REGULAR USERS
 
+
 void _showReportHotspotForm(LatLng position) async {
+  // First check if user can still report today
+  final dailyCount = await _getDailyReportCount();
+  
+  if (dailyCount >= 5) {
+    _showSnackBar('Daily report limit reached (5/5). Try again tomorrow.');
+    return;
+  }
+
+  // Show current count in the form
   try {
     final crimeTypesResponse = await Supabase.instance.client
         .from('crime_type')
@@ -4410,24 +4759,51 @@ void _showReportHotspotForm(LatLng position) async {
     final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
     final now = DateTime.now();
 
-    if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
+    if (_isDesktopScreen()) {
       // Desktop dialog view
       if (!mounted) return;
       await showDialog(
         context: context,
         builder: (context) => Dialog(
-          child: ReportHotspotFormDesktop(
-            position: position,
-            crimeTypes: crimeTypes,
-            onSubmit: _reportHotspot,
-            onCancel: () => Navigator.of(context).pop(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Add daily limit indicator
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(8),
+                    topRight: Radius.circular(8),
+                  ),
+                ),
+                child: Text(
+                  'Daily Reports: $dailyCount/5',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              Expanded(
+            child: ReportHotspotFormDesktop(
+                      position: position,
+                      crimeTypes: crimeTypes,
+                      onSubmit: _reportHotspot, // Make sure this returns bool now
+                      onCancel: () => Navigator.of(context).pop(),
+                      dailyCount: dailyCount, // Pass the daily count
+                    ),
+              ),
+            ],
           ),
         ),
       );
     } else {
-      // Mobile bottom sheet view
-      if (!mounted) return;
-      await _showMobileReportForm(position, crimeTypes, now);
+      // For mobile, you can modify _showMobileReportForm to include the counter
+      await _showMobileReportForm(position, crimeTypes, now, dailyCount);
     }
   } catch (e) {
     if (mounted) {
@@ -4440,6 +4816,7 @@ Future<void> _showMobileReportForm(
   LatLng position,
   List<Map<String, dynamic>> crimeTypes,
   DateTime now,
+  int dailyCount,
 ) async {
   final formKey = GlobalKey<FormState>();
   final descriptionController = TextEditingController();
@@ -4458,7 +4835,7 @@ Future<void> _showMobileReportForm(
   XFile? selectedPhoto;
   bool isUploadingPhoto = false;
 
-  final result = await showModalBottomSheet(
+  final _ = await showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     constraints: BoxConstraints(
@@ -4504,6 +4881,38 @@ Future<void> _showMobileReportForm(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          // Daily Reports Counter
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                            margin: const EdgeInsets.only(bottom: 16),
+                            decoration: BoxDecoration(
+                              color: _getDailyCounterColor(dailyCount),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _getDailyCounterBorderColor(dailyCount),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.today,
+                                  size: 20,
+                                  color: _getDailyCounterTextColor(dailyCount),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Daily Reports: $dailyCount/5',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: _getDailyCounterTextColor(dailyCount),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          
                           // Header Title
                           Container(
                             width: double.infinity,
@@ -4648,44 +5057,93 @@ Future<void> _showMobileReportForm(
                                           }
                                         },
                                 ),
-                                const SizedBox(height: 24),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: ElevatedButton(
-                                    onPressed: (isSubmitting || isUploadingPhoto)
-                                        ? null
-                                        : () async {
-                                            if (formKey.currentState!.validate()) {
-                                              setState(() => isSubmitting = true);
-                                              try {
-                                                final dateTime = DateTime.parse(
-                                                    '${dateController.text} ${timeController.text}');
-                                                
-                                                await _reportHotspot(
-                                                  selectedCrimeId,
-                                                  descriptionController.text,
-                                                  position,
-                                                  dateTime,
-                                                  selectedPhoto, // Pass the photo
-                                                );
-
-                                                if (mounted) {
-                                                  Navigator.pop(context, true);
-                                                }
-                                              } catch (e) {
-                                                if (mounted) {
-                                                  setState(() => isSubmitting = false);
-                                                  _showSnackBar(
-                                                      'Failed to report hotspot: ${e.toString()}');
-                                                }
-                                              }
-                                            }
-                                          },
-                                    child: (isSubmitting || isUploadingPhoto)
-                                        ? const CircularProgressIndicator()
-                                        : const Text('Submit Report'),
+                                const SizedBox(height: 16),
+                                
+                         // Important notice about false reports
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.red.withOpacity(0.3),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.warning,
+                                        color: Colors.red[600],
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Important Notice',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.red[700],
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Daily limit: 5 reports. Avoid reporting same location twice. False reports may result in account restrictions.',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: Colors.red[700],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
+                                const SizedBox(height: 16),
+                                
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: ElevatedButton(
+                                          onPressed: (isSubmitting || isUploadingPhoto)
+                                              ? null
+                                              : () async {
+                                                  if (formKey.currentState!.validate()) {
+                                                    setState(() => isSubmitting = true);
+                                                    try {
+                                                      final dateTime = DateTime.parse(
+                                                          '${dateController.text} ${timeController.text}');
+                                                      
+                                                      // Await the result from _reportHotspot
+                                                      final success = await _reportHotspot(
+                                                        selectedCrimeId,
+                                                        descriptionController.text,
+                                                        position,
+                                                        dateTime,
+                                                        selectedPhoto,
+                                                      );
+
+                                                      if (mounted) {
+                                                        // Only close with success result if actually successful
+                                                        Navigator.pop(context, success);
+                                                      }
+                                                    } catch (e) {
+                                                      if (mounted) {
+                                                        setState(() => isSubmitting = false);
+                                                        _showSnackBar(
+                                                            'Failed to report hotspot: ${e.toString()}');
+                                                      }
+                                                    }
+                                                  }
+                                                },
+                                          child: (isSubmitting || isUploadingPhoto)
+                                              ? const CircularProgressIndicator()
+                                              : Text('Submit Report (${5 - dailyCount} remaining)'),
+                                        ),
+                                      ),
                                 // Add extra space at bottom for better scrolling
                                 const SizedBox(height: 20),
                               ],
@@ -4704,9 +5162,26 @@ Future<void> _showMobileReportForm(
     },
   );
 
-  if (result == true && mounted) {
-    _showSnackBar('Crime reported successfully. Waiting for admin approval.');
-  }
+
+}
+
+// Helper methods for daily counter styling
+Color _getDailyCounterColor(int count) {
+  if (count >= 5) return Colors.red.withOpacity(0.1);
+  if (count >= 3) return Colors.orange.withOpacity(0.1);
+  return Colors.green.withOpacity(0.1);
+}
+
+Color _getDailyCounterBorderColor(int count) {
+  if (count >= 5) return Colors.red.withOpacity(0.3);
+  if (count >= 3) return Colors.orange.withOpacity(0.3);
+  return Colors.green.withOpacity(0.3);
+}
+
+Color _getDailyCounterTextColor(int count) {
+  if (count >= 5) return Colors.red.shade700;
+  if (count >= 3) return Colors.orange.shade700;
+  return Colors.green.shade700;
 }
 
 
@@ -4752,8 +5227,8 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
     bool deleteExistingPhoto = false;
 
     // Desktop/Web view
-    if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
-      showDialog(
+if (_isDesktopScreen()) {
+    showDialog(
         context: context,
         builder: (context) => StatefulBuilder(
           builder: (context, setState) => AlertDialog(
@@ -5405,7 +5880,7 @@ onPressed: isUploadingPhoto
 }
 
 // REPORT HOTSPOT
-Future<void> _reportHotspot(
+Future<bool> _reportHotspot(
     int typeId,
     String description,
     LatLng position,
@@ -5413,14 +5888,60 @@ Future<void> _reportHotspot(
     [XFile? photo]
   ) async {
     try {
+      // Get current user ID
+      final currentUserId = _userProfile?['id'];
+      if (currentUserId == null) {
+        _showSnackBar('User not authenticated');
+        return false; // Return false on failure
+      }
+
+      // Check daily report limit (5 per day)
+      final today = DateTime.now();
+      final startOfDay = DateTime(today.year, today.month, today.day);
+      final endOfDay = startOfDay.add(const Duration(days: 1));
+
+      final dailyReportsResponse = await Supabase.instance.client
+          .from('hotspot')
+          .select('id')
+          .eq('reported_by', currentUserId)
+          .gte('created_at', startOfDay.toIso8601String())
+          .lt('created_at', endOfDay.toIso8601String());
+
+      if (dailyReportsResponse.length >= 5) {
+        _showSnackBar('Daily report limit reached (5 reports per day). Please try again tomorrow.');
+        return false; // Return false on failure
+      }
+
+      // Check for nearby reports (within 50 meters)
+      final nearbyDistance = 50; // meters
+      final nearbyReportsResponse = await Supabase.instance.client
+          .rpc('get_nearby_hotspots', params: {
+            'lat': position.latitude,
+            'lng': position.longitude,
+            'distance_meters': nearbyDistance,
+          });
+
+      // Filter for reports from the last 24 hours to prevent immediate duplicates
+      final oneDayAgo = DateTime.now().subtract(const Duration(hours: 24));
+      final recentNearbyReports = (nearbyReportsResponse as List).where((report) {
+        final createdAt = DateTime.parse(report['created_at']);
+        return createdAt.isAfter(oneDayAgo);
+      }).toList();
+
+      if (recentNearbyReports.isNotEmpty) {
+        _showSnackBar('A recent report already exists near this location. Please check existing reports or try a different location.');
+        return false; // Return false on failure
+      }
+
+      // Proceed with normal report submission
       final insertData = {
         'type_id': typeId,
         'description': description.trim().isNotEmpty ? description.trim() : null,
         'location': 'POINT(${position.longitude} ${position.latitude})',
         'time': dateTime.toIso8601String(),
         'status': 'pending',
-        'created_by': _userProfile?['id'],
-        'reported_by': _userProfile?['id'],
+        'created_by': currentUserId,
+        'reported_by': currentUserId,
         'created_at': DateTime.now().toIso8601String(),
       };
 
@@ -5439,7 +5960,7 @@ Future<void> _reportHotspot(
           await PhotoService.uploadPhoto(
             imageFile: photo,
             hotspotId: hotspotId,
-            userId: _userProfile!['id'],
+            userId: currentUserId,
           );
           print('Photo uploaded successfully for hotspot $hotspotId');
         } catch (e) {
@@ -5448,37 +5969,67 @@ Future<void> _reportHotspot(
         }
       }
 
-      // Create admin notifications (existing code)
-      if (response['status'] == 'pending') {
-        try {
-          final admins = await Supabase.instance.client
-              .from('users')
-              .select('id')
-              .eq('role', 'admin');
+      // Create admin notifications
+      try {
+        final admins = await Supabase.instance.client
+            .from('users')
+            .select('id')
+            .eq('role', 'admin');
 
-          if (admins.isNotEmpty) {
-            final notifications = admins.map((admin) => {
-              'user_id': admin['id'],
-              'title': 'New Crime Report',
-              'message': 'New crime report awaiting review',
-              'type': 'report',
-              'hotspot_id': hotspotId,
-              'created_at': DateTime.now().toIso8601String(),
-              'unique_key': 'report_${hotspotId}_${admin['id']}',
-            }).toList();
+        if (admins.isNotEmpty) {
+          final notifications = admins.map((admin) => {
+            'user_id': admin['id'],
+            'title': 'New Crime Report',
+            'message': 'New crime report awaiting review',
+            'type': 'report',
+            'hotspot_id': hotspotId,
+            'created_at': DateTime.now().toIso8601String(),
+            'unique_key': 'report_${hotspotId}_${admin['id']}',
+          }).toList();
 
-            await Supabase.instance.client
-                .from('notifications')
-                .upsert(notifications, onConflict: 'unique_key');
-          }
-        } catch (notificationError) {
-          print('Error creating notifications: $notificationError');
+          await Supabase.instance.client
+              .from('notifications')
+              .upsert(notifications, onConflict: 'unique_key');
         }
+      } catch (notificationError) {
+        print('Error creating notifications: $notificationError');
       }
+
+      // Show success message with remaining daily reports
+      final remainingReports = 4 - dailyReportsResponse.length;
+      _showSnackBar('Report submitted successfully and is awaiting admin approval. You have $remainingReports reports remaining today.');
+      return true; // Return true on success
+
     } catch (e) {
       _showSnackBar('Failed to report hotspot: ${e.toString()}');
+      print('Error in _reportHotspot: $e');
+      return false; // Return false on failure
     }
   }
+
+// Optional: Method to check current day's report count for UI display
+Future<int> _getDailyReportCount() async {
+  try {
+    final currentUserId = _userProfile?['id'];
+    if (currentUserId == null) return 0;
+
+    final today = DateTime.now();
+    final startOfDay = DateTime(today.year, today.month, today.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    final dailyReportsResponse = await Supabase.instance.client
+        .from('hotspot')
+        .select('id')
+        .eq('reported_by', currentUserId)
+        .gte('created_at', startOfDay.toIso8601String())
+        .lt('created_at', endOfDay.toIso8601String());
+
+    return dailyReportsResponse.length;
+  } catch (e) {
+    print('Error getting daily report count: $e');
+    return 0;
+  }
+}
 
 
 
@@ -5499,19 +6050,53 @@ void _checkRealtimeConnection() {
 
 
 // SAVE HOTSPOT
-Future<int?> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime) async {
+
+Future<int?> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime, String activeStatus) async {
   try {
+    final currentUserId = _userProfile?['id'];
+    if (currentUserId == null) {
+      _showSnackBar('User not authenticated');
+      return null;
+    }
+
+    // Check for nearby hotspots (within 50 meters)
+    final nearbyDistance = 50; // meters
+    final nearbyHotspotsResponse = await Supabase.instance.client
+        .rpc('get_nearby_hotspots', params: {
+          'lat': position.latitude,
+          'lng': position.longitude,
+          'distance_meters': nearbyDistance,
+        });
+
+    // Filter for recent hotspots (within last 30 minutes for admins)
+    final thirtyMinutesAgo = DateTime.now().subtract(const Duration(minutes: 30));
+    final recentNearbyHotspots = (nearbyHotspotsResponse as List).where((hotspot) {
+      final createdAt = DateTime.parse(hotspot['created_at']);
+      return createdAt.isAfter(thirtyMinutesAgo);
+    }).toList();
+
+    if (recentNearbyHotspots.isNotEmpty) {
+      final shouldProceed = await _showNearbyHotspotConfirmation(
+        position,
+        recentNearbyHotspots,
+      );
+
+      if (!shouldProceed) {
+        return null; // User chose not to proceed
+      }
+    }
+
     final insertData = {
       'type_id': int.parse(typeId),
       'description': description.trim().isNotEmpty ? description.trim() : null,
       'location': 'POINT(${position.longitude} ${position.latitude})',
       'time': dateTime.toIso8601String(),
-      'created_by': _userProfile?['id'],
+      'created_by': currentUserId,
       'status': 'approved',
-      'active_status': 'active',
+      'active_status': activeStatus, // Use the passed active status
     };
 
-    // Insert the hotspot - let real-time handle the rest
+    // Insert the hotspot
     final response = await Supabase.instance.client
         .from('hotspot')
         .insert(insertData)
@@ -5523,14 +6108,13 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
 
     print('Crime report added successfully: ${response['id']}');
 
-    // Optional fallback only for UI updates
+    // Optional fallback for UI updates
     await Future.delayed(const Duration(milliseconds: 500));
-    
+
     final hotspotExists = _hotspots.any((h) => h['id'] == response['id']);
-    
+
     if (!hotspotExists) {
       print('Real-time failed, manually adding admin hotspot to UI');
-      
       if (mounted) {
         setState(() {
           final crimeType = response['crime_type'] ?? {};
@@ -5551,12 +6135,264 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
     if (mounted) {
       _showSnackBar('Crime record saved');
     }
-    
+
     return response['id'] as int?;
   } catch (e) {
     _showSnackBar('Failed to save hotspot: ${e.toString()}');
     print('Error details: $e');
     return null;
+  }
+}
+
+
+// Show confirmation dialog for nearby hotspots (Admin version)
+Future<bool> _showNearbyHotspotConfirmation(LatLng position, List<dynamic> nearbyHotspots) async {
+  final isDesktop = _isDesktopScreen();
+  
+  if (isDesktop) {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Nearby Crime Reports Found'),
+          ],
+        ),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'There ${nearbyHotspots.length == 1 ? 'is' : 'are'} ${nearbyHotspots.length} recent crime report${nearbyHotspots.length == 1 ? '' : 's'} within 50 meters of this location:',
+                style: const TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 150),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: nearbyHotspots.take(3).map((hotspot) {
+                      final createdAt = DateTime.parse(hotspot['created_at']);
+                      final timeAgo = _getTimeAgo(createdAt);
+                      final distance = (hotspot['distance_meters'] as double).round();
+                      
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Crime Type: ${hotspot['type_name']}',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                              Text(
+                                'Distance: ${distance}m away',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              Text(
+                                'Created: $timeAgo',
+                                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              if (nearbyHotspots.length > 3)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '... and ${nearbyHotspots.length - 3} more',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                ),
+                child: const Text(
+                  'This might be a duplicate report or misclick. Do you still want to add this crime incident?',
+                  style: TextStyle(fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Add Anyway'),
+          ),
+        ],
+      ),
+    ) ?? false;
+  } else {
+    return await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(16),
+            topRight: Radius.circular(16),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag indicator
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+            
+            // Header
+            const Row(
+              children: [
+                Icon(Icons.warning, color: Colors.orange, size: 28),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Nearby Crime Reports Found',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            
+            // Content
+            Text(
+              'There ${nearbyHotspots.length == 1 ? 'is' : 'are'} ${nearbyHotspots.length} recent crime report${nearbyHotspots.length == 1 ? '' : 's'} within 50 meters:',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 12),
+            
+            Container(
+              constraints: const BoxConstraints(maxHeight: 200),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: nearbyHotspots.take(3).map((hotspot) {
+                    final createdAt = DateTime.parse(hotspot['created_at']);
+                    final timeAgo = _getTimeAgo(createdAt);
+                    final distance = (hotspot['distance_meters'] as double).round();
+                    
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Crime Type: ${hotspot['type_name']}',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 4),
+                            Text('Distance: ${distance}m away'),
+                            Text(
+                              'Created: $timeAgo',
+                              style: const TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+            
+            if (nearbyHotspots.length > 3)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '... and ${nearbyHotspots.length - 3} more',
+                  style: const TextStyle(color: Colors.grey),
+                ),
+              ),
+            
+            const SizedBox(height: 16),
+            
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              ),
+              child: const Text(
+                'This might be a duplicate report or misclick. Do you still want to add this crime incident?',
+                style: TextStyle(fontSize: 13),
+              ),
+            ),
+            
+            const SizedBox(height: 20),
+            
+            // Action buttons
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('Add Anyway'),
+                  ),
+                ),
+              ],
+            ),
+            
+            SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
+          ],
+        ),
+      ),
+    ) ?? false;
+  }
+}
+
+// Helper method to format time ago
+String _getTimeAgo(DateTime dateTime) {
+  final now = DateTime.now();
+  final difference = now.difference(dateTime);
+  
+  if (difference.inMinutes < 1) {
+    return 'Just now';
+  } else if (difference.inMinutes < 60) {
+    return '${difference.inMinutes} minutes ago';
+  } else if (difference.inHours < 24) {
+    return '${difference.inHours} hours ago';
+  } else {
+    return '${difference.inDays} days ago';
   }
 }
 
@@ -5579,11 +6415,7 @@ void _handleHotspotDelete(PostgresChangePayload payload) {
     _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
   });
   
-  // Show a snackbar if the deleted hotspot was selected
-  if (_selectedHotspot != null && _selectedHotspot!['id'] == deletedHotspotId) {
-    _showSnackBar('Crime report deleted');
-    _selectedHotspot = null;
-  }
+
 }
 
 
@@ -5751,9 +6583,16 @@ void _showOnMap(Map<String, dynamic> item) {
         // It's a hotspot
         _selectedHotspot = item;
         _selectedSafeSpot = null;
+        _selectedSavePoint = null; // Clear save point selection
       } else if (item['safe_spot_types'] != null) {
         // It's a safe spot
         _selectedSafeSpot = item;
+        _selectedHotspot = null;
+        _selectedSavePoint = null; // Clear save point selection
+      } else {
+        // It's a save point
+        _selectedSavePoint = item;
+        _selectedSafeSpot = null;
         _selectedHotspot = null;
       }
     });
@@ -5769,14 +6608,23 @@ void _showOnMap(Map<String, dynamic> item) {
           _showHotspotDetails(item);
         } else if (item['safe_spot_types'] != null) {
           // It's a safe spot
-      SafeSpotDetails.showSafeSpotDetails(
-        context: context,
-        safeSpot: item,
-        userProfile: _userProfile,
-        isAdmin: _hasAdminPermissions,
-        onUpdate: () => _loadSafeSpots(),
-        onGetSafeRoute: _getSafeRoute,
-      );
+          SafeSpotDetails.showSafeSpotDetails(
+            context: context,
+            safeSpot: item,
+            userProfile: _userProfile,
+            isAdmin: _hasAdminPermissions,
+            onUpdate: () => _loadSafeSpots(),
+            onGetSafeRoute: _getSafeRoute,
+          );
+        } else {
+          // It's a save point
+          SavePointDetails.showSavePointDetails(
+            context: context,
+            savePoint: item,
+            userProfile: _userProfile,
+            onUpdate: () => _loadSavePoints(), // Ensure _loadSavePoints is defined
+            onGetSafeRoute: _getSafeRoute,
+          );
         }
       }
     });
@@ -5827,31 +6675,23 @@ void _navigateToHotspot(Map<String, dynamic> hotspot) {
 // AUTO ADJUST FROM SIDEBAR TO BOTTOM NAVBAR WHEN SCREEN is MINIMIZED
 @override
 Widget build(BuildContext context) {
-  // REMOVED: No more loading screen - map renders immediately
-  // The map will show immediately even without location/data
-  
-  // Check if it's web or a large desktop screen
-  final bool isDesktop = MediaQuery.of(context).size.width >= 800;
+  final bool isDesktop = _isDesktopScreen(); // Use consistent method
 
   return WillPopScope(
     onWillPop: _handleWillPop,
     child: Scaffold(
-      // Use desktop or mobile layout depending on screen size
       body: isDesktop ? _buildResponsiveDesktopLayout() : _buildCurrentScreen(isDesktop),
-      
-      // Show FAB only if map tab is active
       floatingActionButton: _currentTab == MainTab.map 
           ? _buildFloatingActionButtons() 
           : null,
-
-      // Bottom navigation bar - show on mobile OR when desktop sidebar is hidden and user is logged in
       bottomNavigationBar: _buildResponsiveBottomNav(isDesktop),
     ),
   );
 }
 
-
-
+bool _isDesktopScreen() {
+  return MediaQuery.of(context).size.width >= 800;
+}
 
 // BOTTOM NAV BARS MAIN WIDGETS
 
@@ -5972,7 +6812,7 @@ Widget _buildBottomNavBar() {
             right: 0,
             child: Center(
               child: GestureDetector(
-                onTap: _quickReportCrime,
+                onTap: _showQuickActionDialog, // Updated to show choice dialog
                 child: Container(
                   width: 36,  // <-- adjust freely
                   height: 36,
@@ -6003,8 +6843,266 @@ Widget _buildBottomNavBar() {
   );
 }
 
+void _showQuickActionDialog() {
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 8), // Reduced padding to maximize width
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: MediaQuery.of(context).size.width * 0.92, // Minimum 92% of screen width
+            maxWidth: MediaQuery.of(context).size.width * 0.92, // Maximum 92% of screen width
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.add_location,
+                        color: Colors.blue.shade700,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Quick Action',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close, size: 20),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+                
+                const SizedBox(height: 12),
+                
+                // Info note
+Container(
+  padding: const EdgeInsets.all(10),
+  decoration: BoxDecoration(
+    color: Colors.grey.shade50,
+    borderRadius: BorderRadius.circular(8),
+    border: Border.all(color: Colors.grey.shade200),
+  ),
+  child: Row(
+    children: [
+      Icon(Icons.info_outline, color: Colors.grey.shade600, size: 16),
+      const SizedBox(width: 8),
+      const Expanded(
+        child: Text(
+          'This will automatically fetch your current location. To report from another location, you can pin it on the map.',
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey,
+          ),
+        ),
+      ),
+    ],
+  ),
+),
 
 
+GestureDetector(
+  onTap: () {
+    Navigator.pop(context); // Close dialog first
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const HotlinesScreen()),
+    );
+  },
+  child: Container(
+    margin: const EdgeInsets.only(top: 8),
+    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+    decoration: BoxDecoration(
+      color: Colors.red.shade50,
+      borderRadius: BorderRadius.circular(6),
+      border: Border.all(color: Colors.red.shade100),
+    ),
+    child: Row(
+      children: [
+        Icon(Icons.phone_in_talk, color: Colors.red.shade600, size: 16),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Quick Emergency Hotlines',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.red.shade600,
+            ),
+          ),
+        ),
+        Icon(Icons.arrow_forward_ios, size: 12, color: Colors.red.shade600),
+      ],
+    ),
+  ),
+),
+                
+                const SizedBox(height: 16),
+                
+                // Action buttons
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    // Report Hotspot button
+                    Expanded(
+                      flex: 1,
+                      child: GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _quickReportCrime();
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 8),
+                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade200, width: 1.5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.04),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.shade50,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  Icons.report_problem_rounded,
+                                  color: Colors.orange.shade600,
+                                  size: 24,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Report Incident',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.orange.shade700,
+                                  fontSize: 14,
+                                  letterSpacing: -0.2,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Crime or danger',
+                                style: TextStyle(
+                                  color: Colors.grey.shade600,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    
+                    // Add Safe Spot button
+                    Expanded(
+                      flex: 1,
+                      child: GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _quickAddSafeSpot();
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 8),
+                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade200, width: 1.5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.04),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  Icons.verified_user_rounded,
+                                  color: Colors.green.shade600,
+                                  size: 24,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Add Safe Spot',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.green.shade700,
+                                  fontSize: 14,
+                                  letterSpacing: -0.2,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Mark a safe location',
+                                style: TextStyle(
+                                  color: Colors.grey.shade600,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
 
 // HELPER METHODS FOR 5-TAB STRUCTURE
 int _getCurrentTabIndex() {
@@ -6018,7 +7116,7 @@ int _getCurrentTabIndex() {
       return 3; // Skip index 2 (center button)
     case MainTab.profile:
       return 4;
-    }
+  }
 }
 
 void _handleBottomNavTap(int index) {
@@ -6053,7 +7151,7 @@ void _handleBottomNavTap(int index) {
   }
 }
 
-// QUICK REPORT FUNCTION
+// EXISTING QUICK REPORT FUNCTION (renamed for clarity)
 void _quickReportCrime() async {
   // Show loading indicator
   showDialog(
@@ -6076,12 +7174,60 @@ void _quickReportCrime() async {
       return;
     }
     
-    // Check if user is admin or regular user and show appropriate form
-    if (_isAdmin) {
+    // FIXED: Use consistent screen size check instead of admin status
+    if (_hasAdminPermissions) {
       _showAddHotspotForm(_currentPosition!);
     } else {
       _showReportHotspotForm(_currentPosition!);
     }
+    
+    // Optionally switch to map tab to show the location
+    setState(() {
+      _currentTab = MainTab.map;
+    });
+    
+  } catch (e) {
+    // Close loading dialog if still open
+    if (mounted && Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+    _showSnackBar('Error getting location: ${e.toString()}');
+  }
+}
+
+// NEW QUICK ADD SAFE SPOT FUNCTION
+void _quickAddSafeSpot() async {
+  // Show loading indicator
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => const Center(
+      child: CircularProgressIndicator(),
+    ),
+  );
+  
+  try {
+    // Get current location
+    await _getCurrentLocation();
+    
+    // Close loading dialog
+    if (mounted) Navigator.pop(context);
+    
+    if (_currentPosition == null) {
+      _showSnackBar('Unable to get current location. Please try again.');
+      return;
+    }
+    
+    // Show safe spot form
+    SafeSpotForm.showSafeSpotForm(
+      context: context,
+      position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+      userProfile: _userProfile,
+      onUpdate: () {
+        // Refresh safe spots on map or any other necessary updates
+        _loadSafeSpots(); // You'll need to implement this method if not already present
+      },
+    );
     
     // Optionally switch to map tab to show the location
     setState(() {
@@ -6186,6 +7332,7 @@ if (_currentTab == MainTab.quickAccess)
     onNavigateToSafeSpot: _navigateToSafeSpot,
     onNavigateToHotspot: _navigateToHotspot,
     onRefresh: _loadSafeSpots,
+    
     isSidebarVisible: _isSidebarVisible,
     onClose: () {
       setState(() {
@@ -6247,26 +7394,26 @@ Future<bool> _handleWillPop() async {
   return shouldExit;
 }
 
-//FLOATING ACTION BUTTONS
+//MODERN FLOATING ACTION BUTTONS
 
 Widget _buildFloatingActionButtons() {
   return Column(
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.end,
     children: [
-      // Map Type Selection Container - MINIMIZED
+      // Map Type Selection Container - Original Mini Style
       if (_showMapTypeSelector) ...[
         Container(
-          margin: const EdgeInsets.only(bottom: 7), // Reduced from 8
-          padding: const EdgeInsets.all(7), // Reduced from 8
+          margin: const EdgeInsets.only(bottom: 7),
+          padding: const EdgeInsets.all(7),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(10), // Reduced from 12
+            borderRadius: BorderRadius.circular(10),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.08), // Reduced opacity
-                blurRadius: 4, // Reduced from 8
-                offset: const Offset(0, 1), // Reduced from (0, 2)
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
               ),
             ],
           ),
@@ -6275,15 +7422,15 @@ Widget _buildFloatingActionButtons() {
             children: MapType.values.map((type) {
               final isSelected = type == _currentMapType;
               return GestureDetector(
-              onTap: () {
-                _switchMapType(type);  // Use your new method
-              },
+                onTap: () {
+                  _switchMapType(type);
+                },
                 child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 1), // Reduced from 2
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Reduced padding
+                  margin: const EdgeInsets.symmetric(vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   decoration: BoxDecoration(
-                    color: isSelected ? Colors.blue.shade100 : Colors.transparent,
-                    borderRadius: BorderRadius.circular(7), // Reduced from 8
+                    color: isSelected ? Colors.blue.shade50 : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
                     border: isSelected 
                       ? Border.all(color: Colors.blue.shade300, width: 1)
                       : null,
@@ -6293,14 +7440,14 @@ Widget _buildFloatingActionButtons() {
                     children: [
                       Icon(
                         _getMapTypeIcon(type),
-                        size: 17, // Reduced from 18
+                        size: 16,
                         color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
                       ),
-                      const SizedBox(width: 7), // Reduced from 8
+                      const SizedBox(width: 7),
                       Text(
                         _getMapTypeName(type),
                         style: TextStyle(
-                          fontSize: 11, // Reduced from 12
+                          fontSize: 11,
                           fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                           color: isSelected ? Colors.blue.shade700 : Colors.grey.shade700,
                         ),
@@ -6314,211 +7461,440 @@ Widget _buildFloatingActionButtons() {
         ),
       ],
       
-      // Map Type Toggle Button
-      Tooltip(
-        message: 'Select Map Type',
-        child: FloatingActionButton(
-          heroTag: 'mapType',
-          onPressed: () {
-            setState(() {
-              _showMapTypeSelector = !_showMapTypeSelector;
-            });
-          },
-          backgroundColor: _showMapTypeSelector ? Colors.blue.shade600 : Colors.white,
-          foregroundColor: _showMapTypeSelector ? Colors.white : Colors.grey.shade700,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          mini: true,
-          child: Icon(_getMapTypeIcon(_currentMapType)),
+      // Modern Button Container - Aligned with Location Button
+      Container(
+        width: 48, // Match location button width
+        padding: const EdgeInsets.all(4), // Adjusted for alignment
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 3),
+              spreadRadius: 0,
+            ),
+          ],
         ),
-      ),
-      const SizedBox(height: 4),
-      
-      // Compass button with modern slide feedback
-      Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // Sliding feedback widget
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOutBack,
-            right: _showRotationFeedback ? 48 : 20, // Slide from right to left
-            top: 8,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: _showRotationFeedback ? 1.0 : 0.0,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _isRotationLocked 
-                    ? Colors.orange.shade600.withOpacity(0.95)
-                    : Colors.green.shade600.withOpacity(0.95),
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
-                      blurRadius: 4,
-                      offset: const Offset(-1, 1),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _isRotationLocked ? Icons.lock : Icons.lock_open,
-                      size: 12,
-                      color: Colors.white,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      _isRotationLocked ? 'Rotate Locked' : 'Rotate Unlocked',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Map Type Toggle Button - Match size
+            _buildModernActionButton(
+              icon: _getMapTypeIcon(_currentMapType),
+              isActive: _showMapTypeSelector,
+              onTap: () {
+                setState(() {
+                  _showMapTypeSelector = !_showMapTypeSelector;
+                });
+              },
+              tooltip: 'Map Style',
+              size: 40, // Standard size
+            ),
+
+            const SizedBox(height: 4), // Standard spacing
+
+            // Compass button with modern feedback - Smaller
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Sliding feedback widget
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutBack,
+                  right: _showRotationFeedback ? 48 : 18,
+                  top: 3,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 200),
+                    opacity: _showRotationFeedback ? 1.0 : 0.0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _isRotationLocked 
+                          ? Colors.orange.shade600
+                          : Colors.green.shade600,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.15),
+                            blurRadius: 6,
+                            offset: const Offset(-2, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _isRotationLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
+                            size: 12,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _isRotationLocked ? 'Locked' : 'Unlocked',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                
+                // Compass button
+                Tooltip(
+                  message: _isRotationLocked ? 'Unlock Rotation (Double-tap)' : 'Reset Rotation (Double-tap to lock)',
+                  child: GestureDetector(
+                    onTap: () {
+                      if (!_isRotationLocked) {
+                        _mapController.rotate(0);
+                        setState(() {
+                          _currentMapRotation = 0.0;
+                        });
+                      }
+                      if (_showMapTypeSelector) {
+                        setState(() {
+                          _showMapTypeSelector = false;
+                        });
+                      }
+                    },
+                    onDoubleTap: () {
+                      setState(() {
+                        _isRotationLocked = !_isRotationLocked;
+                        _showRotationFeedback = true;
+                      });
+                      
+                      Timer(const Duration(milliseconds: 1500), () {
+                        if (mounted) {
+                          setState(() {
+                            _showRotationFeedback = false;
+                          });
+                        }
+                      });
+                    },
+                    child: Container(
+                      width: 40, // Match other buttons
+                      height: 40, // Match other buttons
+                      decoration: BoxDecoration(
+                        color: Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: _buildCompass(),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ),
-          
-          // Compass button
-          Tooltip(
-            message: _isRotationLocked ? 'Unlock Rotation (Double-tap)' : 'Reset Rotation (Double-tap to lock)',
-            child: FloatingActionButton(
-              heroTag: 'compass',
-              onPressed: () {
-                // Single tap resets rotation (only when not locked)
-                if (!_isRotationLocked) {
-                  _mapController.rotate(0);
-                  setState(() {
-                    _currentMapRotation = 0.0;
-                  });
-                }
-                // Close map type selector when other buttons are pressed
+
+            const SizedBox(height: 4),
+            
+            // Filter button - Standard size
+            _buildModernActionButton(
+              icon: Icons.tune_rounded,
+              isActive: false,
+              onTap: () {
+                _showHotspotFilterDialog();
                 if (_showMapTypeSelector) {
                   setState(() {
                     _showMapTypeSelector = false;
                   });
                 }
               },
-              backgroundColor: Colors.transparent,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              mini: true,
-              child: GestureDetector(
-                onDoubleTap: () {
-                  // Double tap toggles rotation lock
-                  setState(() {
-                    _isRotationLocked = !_isRotationLocked;
-                    _showRotationFeedback = true;
-                  });
-                  
-                  // Hide feedback after delay
-                  Timer(const Duration(milliseconds: 1500), () {
-                    if (mounted) {
-                      setState(() {
-                        _showRotationFeedback = false;
-                      });
-                    }
-                  });
+              tooltip: 'Filter Hotspots',
+              size: 40,
+            ),
+
+            // Save Points button - Only for logged-in users - Standard size
+            if (_userProfile != null) ...[
+              const SizedBox(height: 4),
+              _buildModernActionButton(
+                icon: Icons.bookmark_rounded,
+                isActive: _showSavePointSelector,
+                onTap: () async {
+                  final result = await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => SavePointScreen(
+                        userProfile: _userProfile,
+                        currentPosition: _currentPosition,
+                        onNavigateToPoint: (point) {
+                          _mapController.move(point, 16.0);
+                          setState(() {
+                            _destination = point;
+                          });
+                        },
+                        onShowOnMap: _showOnMap,
+                        onGetSafeRoute: _getSafeRoute,
+                        onUpdate: () => _loadSavePoints(),
+                      ),
+                    ),
+                  );
+
+                  if (result == true) {
+                    _loadSavePoints();
+                  }
+
+                  if (_showMapTypeSelector) {
+                    setState(() {
+                      _showMapTypeSelector = false;
+                    });
+                  }
                 },
-                child: _buildCompass(),
+                tooltip: 'My Save Points',
+                size: 40,
               ),
-            ),
-          ),
-        ],
-      ),
-      const SizedBox(height: 4),
-      
-      // Filter Crimes button (always visible)
-      Tooltip(
-        message: 'Filter Hotspots',
-        child: FloatingActionButton(
-          heroTag: 'filterHotspots',
-          onPressed: () {
-            _showHotspotFilterDialog();
-            // Close map type selector when other buttons are pressed
-            if (_showMapTypeSelector) {
-              setState(() {
-                _showMapTypeSelector = false;
-              });
-            }
-          },
-          backgroundColor: const Color.fromARGB(255, 107, 109, 109),
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          mini: true,
-          child: const Icon(Icons.filter_alt),
+            ],
+          ],
         ),
       ),
-      const SizedBox(height: 4),
+
+      const SizedBox(height: 12),
       
-      // Clear Directions button (only visible when there's a route)
-      if (_showClearButton)
-        Tooltip(
-          message: 'Clear Route',
-          child: FloatingActionButton(
-            heroTag: 'clearRoute',
-            onPressed: () {
-              _clearDirections();
-              // Close map type selector when other buttons are pressed
-              if (_showMapTypeSelector) {
-                setState(() {
-                  _showMapTypeSelector = false;
-                });
-              }
-            },
-            backgroundColor: Colors.red.shade600,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            mini: true,
-            child: const Icon(
-              Icons.close,
-              color: Colors.white,
+      // My Location button - BIGGER and more prominent
+      Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20), // Larger radius
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.12), // Stronger shadow
+              blurRadius: 24,
+              offset: const Offset(0, 6),
+              spreadRadius: 0,
             ),
-          ),
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+              spreadRadius: 0,
+            ),
+          ],
         ),
-      const SizedBox(height: 4),
-      
-      // My Location button (always visible) - Google Maps style
-Tooltip(
-  message: 'My Location',
-  child: FloatingActionButton(
-    heroTag: 'myLocation',
-    onPressed: () async {
-      setState(() {
-        // Close map type selector when other buttons are pressed
-        if (_showMapTypeSelector) {
-          _showMapTypeSelector = false;
-        }
-      });
-      
-      // Use the new safe location method
-      _moveToCurrentLocation();
-      
-      // Optionally refresh location if it's stale
-      if (_currentPosition == null) {
-        await _getCurrentLocation();
-        // Try moving again after getting fresh location
-        _moveToCurrentLocation();
-      }
-    },
-    // ... rest of your FAB properties
-          backgroundColor: Colors.white,
-          foregroundColor: _locationButtonPressed ? Colors.blue.shade600 : Colors.grey.shade600,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Icon(
-            _locationButtonPressed ? Icons.my_location : Icons.location_searching,
-            color: _locationButtonPressed ? Colors.blue.shade600 : Colors.grey.shade600,
-          ),
-        ),
+        child: _buildModernLocationButton(),
       ),
     ],
   );
 }
 
+// Helper method for creating modern action buttons with size parameter
+Widget _buildModernActionButton({
+  required IconData icon,
+  required bool isActive,
+  required VoidCallback onTap,
+  required String tooltip,
+  double size = 40, // Default size, now customizable
+}) {
+  return Tooltip(
+    message: tooltip,
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blue.shade50 : Colors.transparent,
+          borderRadius: BorderRadius.circular(size * 0.3), // Proportional radius
+          border: isActive 
+            ? Border.all(color: Colors.blue.shade200, width: 1.5)
+            : null,
+        ),
+        child: Icon(
+          icon,
+          color: isActive ? Colors.blue.shade700 : Colors.grey.shade600,
+          size: size * 0.5, // Proportional icon size
+        ),
+      ),
+    ),
+  );
+}
+
+// BIGGER Modern My Location button
+Widget _buildModernLocationButton() {
+  return Tooltip(
+    message: 'My Location',
+    child: GestureDetector(
+      onTap: () async {
+        setState(() {
+          if (_showMapTypeSelector) {
+            _showMapTypeSelector = false;
+          }
+        });
+        
+        _moveToCurrentLocation();
+        
+        if (_currentPosition == null) {
+          await _getCurrentLocation();
+          _moveToCurrentLocation();
+        }
+      },
+      child: Container(
+        width: 56, // Bigger - increased from 48
+        height: 56, // Bigger - increased from 48
+        decoration: BoxDecoration(
+          color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
+          borderRadius: BorderRadius.circular(20), // Larger radius
+          border: _locationButtonPressed 
+            ? null 
+            : Border.all(color: Colors.grey.shade200, width: 1.5),
+        ),
+        child: Icon(
+          _locationButtonPressed ? Icons.my_location_rounded : Icons.location_searching_rounded,
+          color: _locationButtonPressed ? Colors.white : Colors.grey.shade600,
+          size: 28, // Bigger icon - increased from 24
+        ),
+      ),
+    ),
+  );
+}
+
+//COMPASS COMPASS - More Compass-Like Design
+
+Widget _buildCompass() {
+  return Container(
+    width: 40, // Match button container size
+    height: 40,
+    decoration: BoxDecoration(
+      color: Colors.transparent,
+      shape: BoxShape.circle,
+      border: _isRotationLocked 
+        ? Border.all(color: Colors.orange.shade400, width: 2)
+        : Border.all(color: Colors.grey.shade300, width: 1),
+    ),
+    child: Stack(
+      alignment: Alignment.center,
+      children: [
+        // Rotating compass elements (only when not locked)
+        Transform.rotate(
+          angle: _isRotationLocked ? 0 : -_currentMapRotation * (3.14159 / 180),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Compass outer ring
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade300, width: 1),
+                ),
+              ),
+              
+              // Compass inner circle
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.grey.shade50,
+                  border: Border.all(color: Colors.grey.shade200, width: 0.5),
+                ),
+              ),
+              
+              // North needle (red)
+              Positioned(
+                top: 7,
+                child: Container(
+                  width: 2,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: _isRotationLocked ? Colors.orange.shade600 : Colors.red.shade500,
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ),
+              
+              // South needle (white with border)
+              Positioned(
+                bottom: 7,
+                child: Container(
+                  width: 2,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(1),
+                    border: Border.all(
+                      color: _isRotationLocked ? Colors.orange.shade600 : Colors.grey.shade400,
+                      width: 0.5,
+                    ),
+                  ),
+                ),
+              ),
+              
+              // Center dot
+              Container(
+                width: 4,
+                height: 4,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _isRotationLocked ? Colors.orange.shade600 : Colors.grey.shade600,
+                ),
+              ),
+              
+              // Cardinal direction markers (small lines)
+              // North
+              Positioned(
+                top: 3,
+                child: Container(
+                  width: 1,
+                  height: 3,
+                  color: Colors.grey.shade400,
+                ),
+              ),
+              // East
+              Positioned(
+                right: 3,
+                child: Container(
+                  width: 3,
+                  height: 1,
+                  color: Colors.grey.shade400,
+                ),
+              ),
+              // West
+              Positioned(
+                left: 3,
+                child: Container(
+                  width: 3,
+                  height: 1,
+                  color: Colors.grey.shade400,
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        // Modern lock indicator when rotation is locked
+        if (_isRotationLocked)
+          Positioned(
+            bottom: -2,
+            child: Container(
+              padding: const EdgeInsets.all(1.5),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade600,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 2,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.lock_rounded,
+                color: Colors.white,
+                size: 6,
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
 // Helper method to get readable names for map types
 String _getMapTypeName(MapType type) {
   switch (type) {
@@ -6537,80 +7913,8 @@ String _getMapTypeName(MapType type) {
 
 
 
-//COMPASS COMPASS
 
-Widget _buildCompass() {
-  return Container(
-    width: 40,
-    height: 40,
-    decoration: BoxDecoration(
-      color: Colors.white,
-      shape: BoxShape.circle,
-      // Add a visual indicator when rotation is locked
-      border: _isRotationLocked 
-        ? Border.all(color: Colors.red, width: 2)
-        : null,
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.2),
-          blurRadius: 4,
-          offset: const Offset(0, 2),
-        ),
-      ],
-    ),
-    child: Stack(
-      alignment: Alignment.center,
-      children: [
-        // Rotating compass elements (only when not locked)
-        Transform.rotate(
-          angle: _isRotationLocked ? 0 : -_currentMapRotation * (3.14159 / 180),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              // Compass background
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.grey.shade300, width: 1),
-                ),
-              ),
-              // North arrow - change color when locked
-              Icon(
-                Icons.navigation,
-                color: _isRotationLocked ? Colors.red.shade700 : Colors.red,
-                size: 20,
-              ),
-              // Small 'N' indicator
-              Positioned(
-                top: 0,
-                child: Text(
-                  'N',
-                  style: TextStyle(
-                    fontSize: 8,
-                    fontWeight: FontWeight.bold,
-                    color: _isRotationLocked ? Colors.red.shade700 : Colors.red,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        // Lock indicator when rotation is locked (stays fixed)
-       if (_isRotationLocked)
-          Positioned(
-            bottom: 2,
-            child: Icon(
-              Icons.lock,
-              color: Colors.red.shade700,
-              size: 10,
-            ),
-          ),
-      ],
-    ),
-  );
-}
+
 
 
 
@@ -7525,33 +8829,34 @@ Widget _buildMap() {
               maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
               minZoom: 3.0,
               // Platform-specific tap behavior
-              onTap: (tapPosition, latLng) {
-                // FIRST: Check if notification panel is open and close it
-                if (_currentTab == MainTab.notifications) {
-                  setState(() {
-                    _currentTab = MainTab.map; // Close notification panel
-                  });
-                  return; // Don't process other tap behaviors when closing notifications
-                }
-                
-                // THEN: Continue with existing tap behavior
-                FocusScope.of(context).unfocus();
-                
-                // Clear selections when tapping on empty map
-                setState(() {
-                  _selectedHotspot = null;
-                  _selectedSafeSpot = null; // Clear safe spot selection too
-                });
-                
-                // Desktop/Web: Set destination on single tap
-                if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
-                  setState(() {
-                    _destination = latLng;
-                  });
-                  _showLocationOptions(latLng);
-                }
-                // Mobile: Only unfocus (destination set on long press)
-              },
+onTap: (tapPosition, latLng) {
+  // FIRST: Check if notification panel is open and close it
+  if (_currentTab == MainTab.notifications) {
+    setState(() {
+      _currentTab = MainTab.map; // Close notification panel
+    });
+    return; // Don't process other tap behaviors when closing notifications
+  }
+  
+  // THEN: Continue with existing tap behavior
+  FocusScope.of(context).unfocus();
+  
+  // Clear all selections when tapping on empty map
+  setState(() {
+    _selectedHotspot = null;
+    _selectedSafeSpot = null;
+    _selectedSavePoint = null; // Added to clear save point selection
+  });
+  
+  // Desktop/Web: Set destination on single tap
+  if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+    setState(() {
+      _destination = latLng;
+    });
+    _showLocationOptions(latLng);
+  }
+  // Mobile: Only unfocus (destination set on long press)
+},
               // Long press for mobile devices
               onLongPress: (tapPosition, latLng) {
                 // FIRST: Check if notification panel is open and close it
@@ -7930,6 +9235,158 @@ return Marker(
       );
     },
   ),
+
+// Save Points Marker Layer
+if (_userProfile != null)
+  MarkerLayer(
+    key: ValueKey('save_points_${_savePoints.length}_${_currentZoom.round()}'),
+    markers: _savePoints.map((savePoint) {
+      try {
+        // Defensive programming: Validate save point data before rendering
+        if (savePoint['location'] == null || savePoint['location']['coordinates'] == null) {
+          print('⚠️ Skipping save point with invalid location: ${savePoint['id']}');
+          return null;
+        }
+
+        final coords = savePoint['location']['coordinates'];
+        if (coords.length != 2) {
+          print('⚠️ Skipping save point with invalid coordinates length: ${savePoint['id']}');
+          return null;
+        }
+
+        final longitude = coords[0];
+        final latitude = coords[1];
+        if (longitude is! num || latitude is! num) {
+          print('⚠️ Skipping save point with non-numeric coordinates: ${savePoint['id']}');
+          return null;
+        }
+
+        final point = LatLng(latitude.toDouble(), longitude.toDouble());
+        final name = savePoint['name'] ?? 'Save Point';
+        final isSelected = _selectedSavePoint != null && _selectedSavePoint!['id'] == savePoint['id'];
+
+        // Use simple markers when zoomed out
+        final useSimpleMarker = _currentZoom < 13.0;
+
+        // Build marker styling
+        return Marker(
+          key: ValueKey('save_point_${savePoint['id']}_$isSelected_$useSimpleMarker'),
+          point: point,
+          width: useSimpleMarker ? 32 : (isSelected ? 140 : 120),
+          height: useSimpleMarker ? 32 : 40,
+          alignment: Alignment.center,
+          child: Transform.rotate(
+            angle: -_currentMapRotation * pi / 180, // Counteract map rotation
+            alignment: Alignment.center,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                GestureDetector(
+                  onTap: () {
+                    // Update selection state
+                    setState(() {
+                      _destination = point;
+                      _selectedSavePoint = savePoint;
+                      _selectedSafeSpot = null;
+                      _selectedHotspot = null;
+                    });
+                    
+                    // Show save point details
+                    SavePointDetails.showSavePointDetails(
+                      context: context,
+                      savePoint: savePoint,
+                      userProfile: _userProfile,
+                      onUpdate: _loadSavePoints,
+                      onGetSafeRoute: _getSafeRoute,
+                    );
+                  },
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Selection indicator
+                      if (isSelected)
+                        Container(
+                          width: 50,
+                          height: 50,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.blue.withOpacity(0.6),
+                              width: 3,
+                            ),
+                          ),
+                        ),
+                      // Main marker (changed to thumbtack/pin)
+                      Container(
+                        width: useSimpleMarker ? 28 : 32,
+                        height: useSimpleMarker ? 28 : 32,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade600.withOpacity(0.9),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: useSimpleMarker ? 4 : 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          Icons.bookmark, // Changed from bookmark to push_pin
+                          color: Colors.white,
+                          size: useSimpleMarker ? 16 : 18,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Label aligned like hotspots and safe spots
+                if (!useSimpleMarker && _currentZoom >= 14.0)
+                  Positioned(
+                    left: isSelected ? 93 : 78, // Matches hotspot/safe spot alignment
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 300),
+                      opacity: 1.0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade600.withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(8),
+            
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.15),
+                              blurRadius: 3,
+                              offset: const Offset(1, 1),
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          name.length > 15 ? '${name.substring(0, 15)}...' : name,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      } catch (e) {
+        print('❌ Error creating marker for save point ${savePoint['id']}: $e');
+        return null;
+      }
+    }).where((marker) => marker != null).cast<Marker>().toList(),
+  ),
+
             ],
           ),
         ),
@@ -8243,6 +9700,8 @@ IconData _getIconFromString(String iconName) {
   }
 }
 
+
+
 // CURRENT LOCATION - MINIMIZED (unchanged)
 Widget _buildEnhancedCurrentLocationMarker() {
   return Transform.rotate(
@@ -8454,8 +9913,8 @@ try {
 
 
 // DESKTOP VIEW FOR HOTSPOT DETAILS
-if (kIsWeb || MediaQuery.of(context).size.width >= 800) {
-  showDialog(
+if (_isDesktopScreen()) {
+    showDialog(
     context: context,
     barrierColor: Colors.black.withOpacity(0.3),
     builder: (context) => Dialog(
@@ -10321,6 +11780,8 @@ bool get isLargeScreen {
   return mediaQuery.size.width > 600; // Adjust threshold as needed
 }
 
+  get isSelected_ => null;
+
 
 
 // SEARCH BAR 
@@ -10886,11 +12347,8 @@ Widget _buildProfileScreen() {
     );
   }
 
-  final isDesktopOrWeb =
-      Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
+  // FIXED: Use consistent screen size detection
+  final isDesktop = _isDesktopScreen();
 
   void toggleEditMode() {
     setState(() {
@@ -10906,31 +12364,31 @@ Widget _buildProfileScreen() {
     });
   }
 
-Future<void> refreshProfile() async {
-  final user = _authService.currentUser;
-  if (user != null) {
-    final response = await Supabase.instance.client
-        .from('users')
-        .select()
-        .eq('email', user.email as Object)
-        .single();
+  Future<void> refreshProfile() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select()
+          .eq('email', user.email as Object)
+          .single();
 
-    if (mounted) {
-      setState(() {
-        _userProfile = response;
-        _isAdmin = response['role'] == 'admin';
-        _isOfficer = response['role'] == 'officer';
-       _profileScreen = ProfileScreen(
-  _authService, 
-  _userProfile, 
-  _isAdmin,           // Admin-only privileges
-  _hasAdminPermissions // Admin + Officer privileges
-);
-        _profileScreen.initControllers();
-      });
+      if (mounted) {
+        setState(() {
+          _userProfile = response;
+          _isAdmin = response['role'] == 'admin';
+          _isOfficer = response['role'] == 'officer';
+          _profileScreen = ProfileScreen(
+            _authService, 
+            _userProfile, 
+            _isAdmin,           // Admin-only privileges
+            _hasAdminPermissions // Admin + Officer privileges
+          );
+          _profileScreen.initControllers();
+        });
+      }
     }
   }
-}
 
   void handleSuccess() {
     refreshProfile().then((_) {
@@ -10941,7 +12399,7 @@ Future<void> refreshProfile() async {
     });
   }
 
-  if (isDesktopOrWeb) {
+  if (isDesktop) {
     return Stack(
       children: [
         // Show map as background
@@ -10961,7 +12419,7 @@ Future<void> refreshProfile() async {
               width: 600,
               child: Row(
                 children: [
-                  Expanded(child: _buildSearchBar(isWeb: isDesktopOrWeb)),
+                  Expanded(child: _buildSearchBar(isWeb: isDesktop)),
                   const SizedBox(width: 12),
                   Container(
                     width: 45,
@@ -11035,13 +12493,13 @@ Future<void> refreshProfile() async {
       child: _profileScreen.isEditingProfile
           ? _profileScreen.buildEditProfileForm(
               context,
-              isDesktopOrWeb,
+              isDesktop, // FIXED: Use consistent screen size detection
               toggleEditMode,
               onSuccess: handleSuccess,
             )
           : _profileScreen.buildProfileView(
               context,
-              isDesktopOrWeb,
+              isDesktop, // FIXED: Use consistent screen size detection
               toggleEditMode,
             ),
     ),

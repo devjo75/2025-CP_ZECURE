@@ -12,8 +12,9 @@ import 'package:zecure/services/photo_upload_service.dart';
 class ReportHotspotFormDesktop extends StatefulWidget {
   final LatLng position;
   final List<Map<String, dynamic>> crimeTypes;
-  final Future<void> Function(int crimeId, String description, LatLng position, DateTime time, XFile? photo) onSubmit;
+  final Future<bool> Function(int crimeId, String description, LatLng position, DateTime time, XFile? photo) onSubmit;
   final VoidCallback onCancel;
+  final int dailyCount; // Add daily count parameter
 
   const ReportHotspotFormDesktop({
     super.key,
@@ -21,6 +22,7 @@ class ReportHotspotFormDesktop extends StatefulWidget {
     required this.crimeTypes,
     required this.onSubmit,
     required this.onCancel,
+    required this.dailyCount, // Add required parameter
   });
 
   @override
@@ -58,6 +60,25 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
     _dateController.dispose();
     _timeController.dispose();
     super.dispose();
+  }
+
+  // Helper methods for daily counter styling
+  Color _getDailyCounterColor(int count) {
+    if (count >= 5) return Colors.red.withOpacity(0.1);
+    if (count >= 3) return Colors.orange.withOpacity(0.1);
+    return Colors.green.withOpacity(0.1);
+  }
+
+  Color _getDailyCounterBorderColor(int count) {
+    if (count >= 5) return Colors.red.withOpacity(0.3);
+    if (count >= 3) return Colors.orange.withOpacity(0.3);
+    return Colors.green.withOpacity(0.3);
+  }
+
+  Color _getDailyCounterTextColor(int count) {
+    if (count >= 5) return Colors.red.shade700;
+    if (count >= 3) return Colors.orange.shade700;
+    return Colors.green.shade700;
   }
 
   Future<void> _pickDate() async {
@@ -231,13 +252,10 @@ else
     setState(() => _isSubmitting = true);
     try {
       final dateTime = DateTime.parse('${_dateController.text} ${_timeController.text}');
-      await widget.onSubmit(_selectedCrimeId, _descriptionController.text, widget.position, dateTime, _selectedPhoto);
+      final success = await widget.onSubmit(_selectedCrimeId, _descriptionController.text, widget.position, dateTime, _selectedPhoto);
       
-      if (mounted) {
+      if (mounted && success) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Crime reported successfully. Waiting for admin approval.')),
-        );
       }
     } on FormatException {
       if (mounted) {
@@ -259,27 +277,88 @@ else
 @override
 Widget build(BuildContext context) {
   return Container(
-    width: 450, // Wider container
+    width: 450,
     padding: const EdgeInsets.all(24),
     decoration: BoxDecoration(
-      color: Colors.grey.shade50, // Lighter background
+      color: Colors.grey.shade50,
       borderRadius: BorderRadius.circular(12),
     ),
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Title
-        const Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Report an Incident',
-            style: TextStyle(
-              fontSize: 23,
-              fontWeight: FontWeight.w500,
+        // Daily Reports Counter
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          margin: const EdgeInsets.only(bottom: 16),
+          decoration: BoxDecoration(
+            color: _getDailyCounterColor(widget.dailyCount),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: _getDailyCounterBorderColor(widget.dailyCount),
             ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.today,
+                size: 20,
+                color: _getDailyCounterTextColor(widget.dailyCount),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Daily Reports: ${widget.dailyCount}/5',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: _getDailyCounterTextColor(widget.dailyCount),
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        // Header Title
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Colors.orange.withOpacity(0.3),
+            ),
+          ),
+          child: Column(
+            children: [
+              const Icon(
+                Icons.report_problem,
+                size: 32,
+                color: Colors.orange,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Report Crime Incident',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Submit a crime report for admin review',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 20),
+        
         Form(
           key: _formKey,
           child: Column(
@@ -346,7 +425,7 @@ Widget build(BuildContext context) {
                     child: TextFormField(
                       controller: _dateController,
                       decoration: const InputDecoration(
-                        labelText: 'Date',
+                        labelText: 'Date of Incident',
                         border: OutlineInputBorder(),
                       ),
                       readOnly: true,
@@ -358,7 +437,7 @@ Widget build(BuildContext context) {
                     child: TextFormField(
                       controller: _timeController,
                       decoration: const InputDecoration(
-                        labelText: 'Time',
+                        labelText: 'Time of Incident',
                         border: OutlineInputBorder(),
                       ),
                       readOnly: true,
@@ -367,7 +446,54 @@ Widget build(BuildContext context) {
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              
+              // Important notice about false reports
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.red.withOpacity(0.3),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning,
+                      color: Colors.red[600],
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Important Notice',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red[700],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Daily limit: 5 reports. Avoid reporting same location twice. False reports may result in account restrictions.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.red[700],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -381,7 +507,7 @@ Widget build(BuildContext context) {
                             valueColor: AlwaysStoppedAnimation(Colors.white),
                           ),
                         )
-                      : const Text('Submit Report'),
+                      : Text('Submit Report (${5 - widget.dailyCount} remaining)'),
                 ),
               ),
               const SizedBox(height: 12),

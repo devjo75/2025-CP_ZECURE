@@ -15,8 +15,8 @@ Future<void> main() async {
   await dotenv.load(fileName: ".env");
 
   await Supabase.initialize(
-    url: 'https://llfbwjizquepotchzhyy.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsZmJ3aml6cXVlcG90Y2h6aHl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMzMjYwNTgsImV4cCI6MjA2ODkwMjA1OH0.Jg_3jZWASMYKUu3FDOe1AjKRvGQ6sf2SEXz2cBBQ34o',
+    url: dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
   runApp(const ZecureApp());

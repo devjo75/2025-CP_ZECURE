@@ -21,10 +21,7 @@ class SafeSpotEditForm {
     }
 
     // Check if it's desktop/web
-    final isDesktop = kIsWeb || 
-        Theme.of(context).platform == TargetPlatform.windows ||
-        Theme.of(context).platform == TargetPlatform.macOS ||
-        Theme.of(context).platform == TargetPlatform.linux;
+ final isDesktop = MediaQuery.of(context).size.width >= 800;
 
     if (isDesktop) {
       // Show centered dialog for desktop/web

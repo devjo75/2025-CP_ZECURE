@@ -280,389 +280,395 @@ class HotlinesScreen extends StatelessWidget {
     },
   ];
 
-
 @override
 Widget build(BuildContext context) {
-  return Container(
-    decoration: const BoxDecoration(
-      image: DecorationImage(
-        image: AssetImage('assets/images/LIGHT.jpg'),
-        fit: BoxFit.cover,
-      ),
-    ),
-    child: Container(
-      // Colored overlay
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC).withOpacity(0.2),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        
-        // Make AppBar completely transparent
-        appBar: AppBar(
-          backgroundColor: Colors.transparent, // Make background transparent
-          elevation: 0, // Remove shadow/elevation
-          surfaceTintColor: Colors.transparent, // Remove any surface tinting
-          
-          title: const Text(
-            'Emergency Contacts',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 24,
-              letterSpacing: -0.8,
-              color: Color(0xFF1A1D29),
-            ),
-          ),
-          foregroundColor: const Color(0xFF1A1D29),
-          centerTitle: false, // Left align the title
-          leading: IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: const Color(0xFFE5E7EB),
-                  width: 1,
-                ),
-              ),
-              child: const Icon(
-                Icons.arrow_back_ios_rounded,
-                color: Color(0xFF6B7280),
-                size: 18,
-              ),
-            ),
-            onPressed: () => Navigator.pop(context),
-          ),
+  return Scaffold(
+    // Set a background color that matches your design to prevent black flash
+    backgroundColor: const Color(0xFFF8FAFC),
+    
+    body: Container(
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/LIGHT.jpg'),
+          fit: BoxFit.cover,
         ),
-        
-        // Your body content remains the same
-        body: CustomScrollView(
-          slivers: [
-        // Updated Header Section
-SliverToBoxAdapter(
-  child: Container(
-    margin: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-    child: Column(
-      children: [
-        // Main header card
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(28),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                Color.fromARGB(255, 92, 118, 165), // Indigo
-                Color.fromARGB(255, 61, 91, 131), // Purple
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(24),
-
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Contact icon instead of logo
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.2),
-                    width: 1.5,
+      ),
+      child: Container(
+        // Colored overlay
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC).withOpacity(0.2),
+        ),
+        child: NestedScrollView(
+          headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
+            return <Widget>[
+              SliverAppBar(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                surfaceTintColor: Colors.transparent,
+                pinned: false,
+                floating: false,
+                expandedHeight: 0,
+                flexibleSpace: Container(), // Add empty container to ensure proper rendering
+                
+                title: const Text(
+                  'Emergency Contacts',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 24,
+                    letterSpacing: -0.8,
+                    color: Color(0xFF1A1D29),
                   ),
                 ),
-                child: const Icon(
-                 Icons.phone_in_talk,
-                  color: Colors.white,
-                  size: 32,
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Tap to call or send SMS instantly',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: -0.2,
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Hotline Services',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                  letterSpacing: -1,
-                  height: 1.2,
-                ),
-              ),
-              const SizedBox(height: 16),
-              // Stats row
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                foregroundColor: const Color(0xFF1A1D29),
+                centerTitle: false,
+                leading: IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(20),
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.2),
+                        color: const Color(0xFFE5E7EB),
                         width: 1,
                       ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.access_time_rounded,
-                          color: Colors.white.withOpacity(0.9),
-                          size: 14,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '24/7 Available',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.9),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
+                    child: const Icon(
+                      Icons.arrow_back_ios_rounded,
+                      color: Color(0xFF6B7280),
+                      size: 18,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(0.2),
-                        width: 1,
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ];
+          },
+          body: CustomScrollView(
+            slivers: [
+              // Updated Header Section
+              SliverToBoxAdapter(
+                child: Container(
+                  margin: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                  child: Column(
+                    children: [
+                      // Main header card
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(28),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [
+                              Color.fromARGB(255, 92, 118, 165), // Indigo
+                              Color.fromARGB(255, 61, 91, 131), // Purple
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Contact icon instead of logo
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.2),
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: const Icon(
+                               Icons.phone_in_talk,
+                                color: Colors.white,
+                                size: 32,
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            const Text(
+                              'Tap to call or send SMS instantly',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.white70,
+                                fontWeight: FontWeight.w500,
+                                letterSpacing: -0.2,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Hotline Services',
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: -1,
+                                height: 1.2,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            // Stats row
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.2),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.access_time_rounded,
+                                        color: Colors.white.withOpacity(0.9),
+                                        size: 14,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '24/7 Available',
+                                        style: TextStyle(
+                                          color: Colors.white.withOpacity(0.9),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.2),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.verified_rounded,
+                                        color: Colors.white.withOpacity(0.9),
+                                        size: 14,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'Verified',
+                                        style: TextStyle(
+                                          color: Colors.white.withOpacity(0.9),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.verified_rounded,
-                          color: Colors.white.withOpacity(0.9),
-                          size: 14,
+                      
+                      const SizedBox(height: 20),
+                      
+                      // 911 Emergency button (enhanced)
+                      Container(
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.red.shade200.withOpacity(0.4),
+                              blurRadius: 16,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Verified',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.9),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => _makePhoneCall('911'),
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Colors.red.shade500,
+                                    Colors.red.shade600,
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: const Icon(
+                                      Icons.call_rounded,
+                                      color: Colors.white,
+                                      size: 28,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '911',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: -0.5,
+                                          ),
+                                        ),
+                                        Text(
+                                          'Emergency Hotline',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.arrow_forward_ios_rounded,
+                                    color: Colors.white.withOpacity(0.8),
+                                    size: 18,
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 20),
-        
-        // 911 Emergency button (enhanced)
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.red.shade200.withOpacity(0.4),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () => _makePhoneCall('911'),
-              borderRadius: BorderRadius.circular(20),
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.red.shade500,
-                      Colors.red.shade600,
+                      ),
                     ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
                   ),
-                  borderRadius: BorderRadius.circular(20),
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
+              ),
+
+              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+
+              // Enhanced Hotlines List
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final category = hotlines[index];
+                    return Container(
+                      margin: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(
-                        Icons.call_rounded,
                         color: Colors.white,
-                        size: 28,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '911',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          Text(
-                            'Emergency Hotline',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.06),
+                            blurRadius: 20,
+                            offset: const Offset(0, 4),
                           ),
                         ],
                       ),
-                    ),
-                    Icon(
-                      Icons.arrow_forward_ios_rounded,
-                      color: Colors.white.withOpacity(0.8),
-                      size: 18,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    ),
-  ),
-),
-
-        const SliverToBoxAdapter(child: SizedBox(height: 24)),
-
-        // Enhanced Hotlines List
-        SliverList(
-          delegate: SliverChildBuilderDelegate(
-            (context, index) {
-              final category = hotlines[index];
-              return Container(
-                margin: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
-                      blurRadius: 20,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Theme(
-                  data: Theme.of(context).copyWith(
-                    dividerColor: Colors.transparent,
-                  ),
-                  child: ExpansionTile(
-                    tilePadding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
-                    ),
-                    childrenPadding: const EdgeInsets.only(bottom: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    collapsedShape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    iconColor: Colors.grey[400],
-                    collapsedIconColor: Colors.grey[400],
-                    title: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                _getCategoryColor(category['category']).withOpacity(0.1),
-                                _getCategoryColor(category['category']).withOpacity(0.05),
-                              ],
-                            ),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: _getCategoryColor(category['category']).withOpacity(0.2),
-                              width: 1,
-                            ),
-                          ),
-                          child: Icon(
-                            _getCategoryIcon(category['category']),
-                            color: _getCategoryColor(category['category']),
-                            size: 22,
-                          ),
+                      child: Theme(
+                        data: Theme.of(context).copyWith(
+                          dividerColor: Colors.transparent,
                         ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        child: ExpansionTile(
+                          tilePadding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                          childrenPadding: const EdgeInsets.only(bottom: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          collapsedShape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          iconColor: Colors.grey[400],
+                          collapsedIconColor: Colors.grey[400],
+                          title: Row(
                             children: [
-                              Text(
-                                category['category'],
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 16,
-                                  letterSpacing: -0.3,
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      _getCategoryColor(category['category']).withOpacity(0.1),
+                                      _getCategoryColor(category['category']).withOpacity(0.05),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: _getCategoryColor(category['category']).withOpacity(0.2),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Icon(
+                                  _getCategoryIcon(category['category']),
+                                  color: _getCategoryColor(category['category']),
+                                  size: 22,
                                 ),
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                _getCategoryDescription(category['category']),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey[600],
-                                  fontWeight: FontWeight.w500,
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      category['category'],
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 16,
+                                        letterSpacing: -0.3,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _getCategoryDescription(category['category']),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
                           ),
+                          children: _buildCategoryContent(category),
                         ),
-                      ],
-                    ),
-                    children: _buildCategoryContent(category),
-                  ),
+                      ),
+                    );
+                  },
+                  childCount: hotlines.length,
                 ),
-              );
-            },
-            childCount: hotlines.length,
+              ),
+
+              const SliverToBoxAdapter(child: SizedBox(height: 32)),
+            ],
           ),
         ),
-
-        const SliverToBoxAdapter(child: SizedBox(height: 32)),
-      ],
-    ),
-     ),
       ),
+    ),
   );
 }
 

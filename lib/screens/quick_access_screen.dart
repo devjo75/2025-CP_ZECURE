@@ -205,23 +205,39 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
           ),
         ],
       ),
-      body: widget.currentPosition == null
-          ? const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Getting your location...'),
-                ],
+      body: GestureDetector(
+        onHorizontalDragUpdate: (details) {
+          // Detect swipe direction
+          if (details.delta.dx > 5 && !_showingSafeSpots) {
+            // Left-to-right swipe: switch to Safe Spot tab
+            setState(() {
+              _showingSafeSpots = true;
+            });
+          } else if (details.delta.dx < -5 && _showingSafeSpots) {
+            // Right-to-left swipe: switch to Hotspot tab
+            setState(() {
+              _showingSafeSpots = false;
+            });
+          }
+        },
+        child: widget.currentPosition == null
+            ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Getting your location...'),
+                  ],
+                ),
+              )
+            : RefreshIndicator(
+                onRefresh: () async {
+                  widget.onRefresh();
+                },
+                child: _showingSafeSpots ? _buildSafeSpotsList() : _buildHotspotsList(),
               ),
-            )
-          : RefreshIndicator(
-              onRefresh: () async {
-                widget.onRefresh();
-              },
-              child: _showingSafeSpots ? _buildSafeSpotsList() : _buildHotspotsList(),
-            ),
+      ),
     );
   }
 
