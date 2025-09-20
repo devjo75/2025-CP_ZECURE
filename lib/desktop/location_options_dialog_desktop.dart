@@ -11,7 +11,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
   final VoidCallback onShareLocation;
   final VoidCallback onReportHotspot;
   final VoidCallback onAddHotspot;
-  final VoidCallback onAddSafeSpot; // Add this parameter
+  final VoidCallback onAddSafeSpot;
+  final VoidCallback onCreateSavePoint; 
 
   const LocationOptionsDialogDesktop({
     super.key,
@@ -25,7 +26,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
     required this.onShareLocation,
     required this.onReportHotspot,
     required this.onAddHotspot,
-    required this.onAddSafeSpot, // Add this parameter
+    required this.onAddSafeSpot,
+    required this.onCreateSavePoint, 
   });
 
   @override
@@ -92,12 +94,23 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                 // Add the safe spot option here
                 if (userProfile != null)
                   ListTile(
-                    leading: const Icon(Icons.safety_check, color: Colors.blue),
+                    leading: const Icon(Icons.security, color: Colors.blue),
                     title: const Text('Add Safe Spot'),
                     subtitle: const Text('Mark this as a safe location'),
                     onTap: () {
                       Navigator.pop(context);
                       onAddSafeSpot();
+                    },
+                  ),
+                // Add the save point option here
+                if (userProfile != null)
+                  ListTile(
+                    leading: const Icon(Icons.bookmark_add, color: Colors.purple),
+                    title: const Text('Save This Location'),
+                    subtitle: const Text('Add to your personal save points'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      onCreateSavePoint();
                     },
                   ),
 

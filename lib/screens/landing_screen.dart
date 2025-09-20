@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:zecure/screens/auth/login_screen.dart';
+import 'package:zecure/auth/login_screen.dart';
 import 'package:zecure/screens/map_screen.dart';
 import 'dart:async';
 

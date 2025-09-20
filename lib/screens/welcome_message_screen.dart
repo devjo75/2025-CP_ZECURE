@@ -154,7 +154,7 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
       case UserType.admin:
         headerColor =  Color.fromARGB(255, 61, 91, 131);
         headerIcon = Icons.admin_panel_settings_rounded;
-        title = "Welcome back, Admin\n${widget.userName ?? ''}!";
+        title = "Welcome back, Admin!";
         break;
       case UserType.officer:
         headerColor = Colors.indigo.shade600;

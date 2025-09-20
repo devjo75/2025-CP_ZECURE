@@ -109,6 +109,17 @@ class DesktopSidebar extends StatelessWidget {
                   isActive: currentIndex == 1,
                   onTap: () => onTap(1),
                 ),
+
+                const SizedBox(height: 4),
+              // Add Save Points navigation item
+              _buildModernNavItem(
+                index: 4,
+                icon: Icons.bookmark_rounded,
+                title: 'Save Points',
+                subtitle: 'Saved locations',
+                isActive: currentIndex == 4,
+                onTap: () => onTap(4),
+              ),
                 const SizedBox(height: 4),
                 _buildModernNavItem(
                   index: 2,
@@ -169,6 +180,17 @@ class DesktopSidebar extends StatelessWidget {
           isActive: currentIndex == 1,
           onTap: () => onTap(1),
         ),
+
+      const SizedBox(height: 8),
+      // Add Save Points mini navigation item
+      _buildMiniNavItem(
+        index: 4,
+        icon: Icons.bookmark_rounded,
+        title: 'Save Points',
+        isActive: currentIndex == 4,
+        onTap: () => onTap(4),
+      ),
+      
         const SizedBox(height: 8),
         _buildMiniNavItem(
           index: 2,

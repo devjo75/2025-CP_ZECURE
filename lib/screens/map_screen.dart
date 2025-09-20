@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
@@ -19,28 +21,29 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/desktop/hotlines_desktop.dart';
 import 'package:zecure/desktop/quick_access_desktop.dart';
 import 'package:zecure/main.dart';
-import 'package:zecure/screens/add_save_point.dart';
-import 'package:zecure/screens/auth/register_screen.dart';
-import 'package:zecure/screens/quick_access_screen.dart';
-import 'package:zecure/screens/save_point.dart';
-import 'package:zecure/screens/save_point_details.dart';
+import 'package:zecure/savepoint/add_save_point.dart';
+import 'package:zecure/auth/register_screen.dart';
+import 'package:zecure/quick_access/quick_access_screen.dart';
+import 'package:zecure/savepoint/save_point.dart';
+import 'package:zecure/savepoint/save_point_details.dart';
 import 'package:zecure/screens/welcome_message_first_timer.dart';
 import 'package:zecure/screens/welcome_message_screen.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
 import 'package:zecure/screens/profile_screen.dart';
-import 'package:zecure/screens/auth/login_screen.dart';
+import 'package:zecure/auth/login_screen.dart';
 import 'package:zecure/desktop/report_hotspot_form_desktop.dart' show ReportHotspotFormDesktop;
 import 'package:zecure/desktop/hotspot_filter_dialog_desktop.dart';
 import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
+import 'package:zecure/desktop/save_point_desktop.dart';
 import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
-import 'package:zecure/services/auth_service.dart';
-import 'package:zecure/services/safe_spot_details.dart';
-import 'package:zecure/services/safe_spot_form.dart';
-import 'package:zecure/services/safe_spot_service.dart';
-import 'package:zecure/services/save_point_service.dart';
+import 'package:zecure/auth/auth_service.dart';
+import 'package:zecure/safespot/safe_spot_details.dart';
+import 'package:zecure/safespot/safe_spot_form.dart';
+import 'package:zecure/safespot/safe_spot_service.dart';
+import 'package:zecure/savepoint/save_point_service.dart';
 
 
 
@@ -59,7 +62,7 @@ class MapScreen extends StatefulWidget {
   
 }
 
-enum MainTab { map, quickAccess, notifications, profile }
+enum MainTab { map, quickAccess, notifications, profile, savePoints }
 enum TravelMode { walking, driving, cycling }
 enum MapType { standard, satellite, terrain, topographic, dark }
 
@@ -141,6 +144,7 @@ Timer? _deferredLoadTimer;
   bool _isLoading = true;
   final List<LatLng> _polylinePoints = [];
   bool _locationButtonPressed = false;
+  LatLng? _tempPinnedLocation;
 
 
   // ADD: ROUTE TRACKING
@@ -187,7 +191,6 @@ late ProfileScreen _profileScreen;
   List<Map<String, dynamic>> _hotspots = [];
   Map<String, dynamic>? _selectedHotspot;
   RealtimeChannel? _hotspotsChannel;
-
 
   
 
@@ -1205,7 +1208,7 @@ void _showWelcomeModal() async {
     try {
       final response = await Supabase.instance.client
           .from('users')
-          .select('first_name, role, created_at')
+          .select('first_name, role, has_seen_welcome')
           .eq('id', user.id)
           .single();
       
@@ -1213,15 +1216,23 @@ void _showWelcomeModal() async {
       final isAdmin = role == 'admin';
       final isOfficer = role == 'officer';
       final firstName = response['first_name'];
-      final createdAt = DateTime.parse(response['created_at']);
-      final isNewUser = DateTime.now().difference(createdAt).inMinutes < 5;
+      final hasSeenWelcome = response['has_seen_welcome'] ?? false;
       
-      if (isNewUser) {
+      if (!hasSeenWelcome) {
+        // Show first-time welcome and mark as seen
         showFirstTimeWelcomeModal(
           context,
           userName: firstName,
         );
+        
+        // Mark as seen in database
+        await Supabase.instance.client
+            .from('users')
+            .update({'has_seen_welcome': true})
+            .eq('id', user.id);
+            
       } else {
+        // Show regular welcome
         UserType userType;
         if (isAdmin) {
           userType = UserType.admin;
@@ -1697,13 +1708,14 @@ Future<void> _loadUserProfile() async {
 }
 
 
-
 void _setupRealtimeSubscription() {
   _hotspotsChannel?.unsubscribe();
   _hotspotsChannelConnected = false;
 
+  final channelName = 'hotspots_realtime_${DateTime.now().millisecondsSinceEpoch}';
+  
   _hotspotsChannel = Supabase.instance.client
-      .channel('hotspots_realtime_${DateTime.now().millisecondsSinceEpoch}') // Unique channel name
+      .channel(channelName)
       .onPostgresChanges(
         event: PostgresChangeEvent.insert,
         schema: 'public',
@@ -1723,26 +1735,28 @@ void _setupRealtimeSubscription() {
         callback: _handleHotspotDelete,
       )
       .subscribe((status, error) {
-        print('Hotspots channel status: $status, error: $error');
+        print('=== REALTIME STATUS: $status ===');
+        if (error != null) print('Error: $error');
         
         if (status == 'SUBSCRIBED') {
-          print('Successfully connected to hotspots channel');
+          print('✅ Successfully connected to hotspots channel: $channelName');
           setState(() => _hotspotsChannelConnected = true);
         } else if (status == 'CHANNEL_ERROR' || status == 'CLOSED') {
-          print('Error with hotspots channel: $error');
+          print('❌ Error with hotspots channel: $error');
           setState(() => _hotspotsChannelConnected = false);
           
           // Attempt to reconnect after delay
           _reconnectionTimer?.cancel();
-          _reconnectionTimer = Timer(const Duration(seconds: 3), () {
+          _reconnectionTimer = Timer(const Duration(seconds: 5), () {
             if (mounted) {
-              print('Attempting to reconnect hotspots channel...');
+              print('🔄 Attempting to reconnect hotspots channel...');
               _setupRealtimeSubscription();
             }
           });
         }
       });
 }
+
 
 void _handleHotspotInsert(PostgresChangePayload payload) async {
   if (!mounted) return;
@@ -1793,38 +1807,49 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
   }
 }
 
-// ==== FIX 2: Fixed _handleHotspotUpdate for proper user-side color updates ====
 void _handleHotspotUpdate(PostgresChangePayload payload) async {
   if (!mounted) return;
   
+  print('=== HOTSPOT UPDATE RECEIVED ===');
+  print('Updated record: ${payload.newRecord}');
+  
   try {
-    // Get the previous hotspot data
+    // Add a small delay to ensure database transaction is committed
+    await Future.delayed(const Duration(milliseconds: 200));
+    
+    // Get the previous hotspot data for comparison
     final previousHotspot = _hotspots.firstWhere(
       (h) => h['id'] == payload.newRecord['id'],
       orElse: () => {},
     );
 
-    // Fetch the updated hotspot data WITH proper crime_type structure
+    // Fetch the COMPLETE updated hotspot data with all relations
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
           *,
-          crime_type: type_id (id, name, level, category, description)
+          crime_type: type_id (id, name, level, category, description),
+          created_by_profile: created_by (id, name, email),
+          reported_by_profile: reported_by (id, name, email)
         ''')
         .eq('id', payload.newRecord['id'])
         .single();
+
+    print('Fetched complete hotspot data: ${response['id']} - ${response['crime_type']?['name']}');
 
     if (mounted) {
       setState(() {
         final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
         
-        // Check if non-admin/officer user should see this hotspot
+        // Determine if non-admin users should see this hotspot
         final shouldShowForNonAdminOfficer = _shouldNonAdminOfficerSeeHotspot(response);
+        
+        print('Hotspot index: $index, Should show for non-admin: $shouldShowForNonAdminOfficer, Has admin permissions: $_hasAdminPermissions');
         
         if (index != -1) {
           // Hotspot exists in current list
           if (_hasAdminPermissions || shouldShowForNonAdminOfficer) {
-            // Update the existing hotspot with proper crime_type structure
+            // Update the existing hotspot with complete data structure
             final crimeType = response['crime_type'] ?? {};
             _hotspots[index] = {
               ...response,
@@ -1836,9 +1861,11 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
                 'description': crimeType['description'],
               }
             };
+            print('Updated existing hotspot at index $index');
           } else {
-            // Non-admin/officer user should no longer see this hotspot (e.g., it was rejected)
+            // Non-admin user should no longer see this hotspot
             _hotspots.removeAt(index);
+            print('Removed hotspot from non-admin view');
           }
         } else {
           // Hotspot doesn't exist in current list
@@ -1855,41 +1882,23 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
                 'description': crimeType['description'],
               }
             });
+            print('Added new hotspot to list');
           }
         }
       });
 
-      // Only show messages if status actually changed
-      final previousStatus = previousHotspot['status'] ?? 'approved';
-      final newStatus = response['status'] ?? 'approved';
-      final previousActiveStatus = previousHotspot['active_status'] ?? 'active';
-      final newActiveStatus = response['active_status'] ?? 'active';
-      final crimeType = response['crime_type']?['name'] ?? 'Unknown';
-
-      if (newStatus != previousStatus) {
-        if (newStatus == 'approved') {
-          _showSnackBar('Crime report approved: $crimeType');
-        } else if (newStatus == 'rejected') {
-          _showSnackBar('Crime report rejected: $crimeType');
-        }
-      }
-      
-      // Show message for active status changes
-      if (newActiveStatus != previousActiveStatus) {
-        if (newActiveStatus == 'active') {
-          _showSnackBar('Crime Report activated: $crimeType');
-        } else {
-          _showSnackBar('Crime Report deactivated: $crimeType');
-        }
-      }
+      // Show appropriate status change messages
+      _handleStatusChangeMessages(previousHotspot, response);
     }
   } catch (e) {
-    print('Error fetching updated crime: $e');
-    // Try to at least update with basic info if full fetch fails
+    print('Error in _handleHotspotUpdate: $e');
+    
+    // Fallback: Try to update with basic payload data
     if (mounted) {
       setState(() {
         final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
         if (index != -1) {
+          // Merge the new data while preserving existing crime_type if fetch failed
           _hotspots[index] = {
             ..._hotspots[index],
             ...payload.newRecord,
@@ -1901,9 +1910,50 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
               'description': null
             }
           };
+          print('Fallback update applied');
         }
       });
     }
+    
+    // Force a full reload as a last resort
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (mounted) {
+      print('Forcing full reload due to update error');
+      await _loadHotspots();
+    }
+  }
+}
+
+void _handleStatusChangeMessages(Map<String, dynamic> previousHotspot, Map<String, dynamic> newHotspot) {
+  final previousStatus = previousHotspot['status'] ?? 'approved';
+  final newStatus = newHotspot['status'] ?? 'approved';
+  final previousActiveStatus = previousHotspot['active_status'] ?? 'active';
+  final newActiveStatus = newHotspot['active_status'] ?? 'active';
+  final crimeType = newHotspot['crime_type']?['name'] ?? 'Unknown';
+
+  // Status change messages
+  if (newStatus != previousStatus) {
+    if (newStatus == 'approved') {
+      _showSnackBar('Crime report approved: $crimeType');
+    } else if (newStatus == 'rejected') {
+      _showSnackBar('Crime report rejected: $crimeType');
+    }
+  }
+  
+  // Active status change messages
+  if (newActiveStatus != previousActiveStatus) {
+    if (newActiveStatus == 'active') {
+      _showSnackBar('Crime report activated: $crimeType');
+    } else {
+      _showSnackBar('Crime report deactivated: $crimeType');
+    }
+  }
+  
+  // Crime type change (this was missing!)
+  final previousCrimeType = previousHotspot['crime_type']?['name'];
+  final newCrimeType = newHotspot['crime_type']?['name'];
+  if (previousCrimeType != null && newCrimeType != null && previousCrimeType != newCrimeType) {
+    _showSnackBar('Crime type changed: $previousCrimeType → $newCrimeType');
   }
 }
 
@@ -2360,15 +2410,20 @@ void _startLiveLocation() {
         
         // Only update if the position has actually changed significantly
         if (_currentPosition == null || 
-            _calculateDistance(_currentPosition!, newPosition) > 3) { // 3 meter threshold
+            _calculateDistance(_currentPosition!, newPosition) > 10) { // Increased to 10m to reduce API calls
+          
+          final oldPosition = _currentPosition;
           setState(() {
             _currentPosition = newPosition;
             _isLoading = false;
           });
           
-          // Update route progress if we have an active route
-          if (_hasActiveRoute && _destination != null) {
-            _updateRouteProgress();
+          // CRITICAL: Update route if we have an active route and moved significantly
+          if (_hasActiveRoute && _destination != null && oldPosition != null) {
+            // Only update route if we've moved more than 20 meters to avoid excessive API calls
+            if (_calculateDistance(oldPosition, newPosition) > 20) {
+              _updateRouteProgress();
+            }
           }
         }
       }
@@ -2378,7 +2433,6 @@ void _startLiveLocation() {
         setState(() {
           _isLoading = false;
         });
-        // Only show error if it's not a timeout - filter out timeout messages
         if (!error.toString().contains('TimeoutException') && 
             !error.toString().contains('Time limit reached')) {
           _showSnackBar('Location error: ${error.toString()}');
@@ -2387,24 +2441,26 @@ void _startLiveLocation() {
     },
   );
   
-  // START proximity monitoring
   _startProximityMonitoring();
 }
 
 void _clearDirections() {
-  _routeUpdateTimer?.cancel(); // Stop route updates
+  _routeUpdateTimer?.cancel();
   setState(() {
-    _routePoints.clear(); // Clear route points instead of polyline points
+    _routePoints.clear();
     _distance = 0;
     _duration = '';
     _destination = null;
-    _hasActiveRoute = false; // Clear active route flag
+    _hasActiveRoute = false;
+    _routeWasCalculatedAsSafe = false; // RESET THE FLAG
+    _tempPinnedLocation = null;
   });
 }
 
 void _startRouteUpdates() {
   _routeUpdateTimer?.cancel();
-  _routeUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+  // Reduced from 10 seconds to 5 seconds for more responsive route following
+  _routeUpdateTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
     if (_hasActiveRoute && _destination != null && _currentPosition != null) {
       _updateRouteProgress();
     } else {
@@ -2417,44 +2473,82 @@ Future<void> _updateRouteProgress() async {
   if (_currentPosition == null || _destination == null || !_hasActiveRoute) return;
   
   try {
-    // Calculate remaining distance and time to destination
-    final response = await http.get(
-      Uri.parse(
-        'https://router.project-osrm.org/route/v1/driving/'
-        '${_currentPosition!.longitude},${_currentPosition!.latitude};'
-        '${_destination!.longitude},${_destination!.latitude}?overview=false',
-      ),
-      headers: {'User-Agent': 'YourAppName/1.0'},
-    ).timeout(const Duration(seconds: 5));
+    // CRITICAL FIX: Check if this is a safe route vs regular route
+    final isUsingSafeRoute = _routeWasCalculatedAsSafe; // Add this flag
     
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
+    List<LatLng> newRoute;
+    
+    if (isUsingSafeRoute) {
+      // For safe routes: Recalculate with safety considerations
+      newRoute = await _recalculateSafeRoute(_currentPosition!, _destination!);
+    } else {
+      // For regular routes: Use standard recalculation
+      newRoute = await _getRouteFromAPI(_currentPosition!, _destination!);
+    }
+    
+    // Calculate remaining distance and time using the new safe route
+    final distance = _calculateRouteDistance(newRoute);
+    final duration = _estimateRouteDuration(distance);
+    
+    if (mounted) {
+      setState(() {
+        _routePoints = newRoute;
+        _distance = distance / 1000;
+        _duration = _formatDuration(duration);
+      });
       
-      if (data['routes'] != null && (data['routes'] as List).isNotEmpty) {
-        final route = data['routes'][0];
-        final distance = _safeParseDouble(route['distance']) ?? 0.0;
-        
-        if (mounted) {
-          setState(() {
-          });
-          
-          // If we're very close to destination (less than 50 meters), consider arrived
-          if (distance < 50) {
-            _showSnackBar('You have arrived at your destination!');
-            _clearDirections();
-          }
-        }
+      // Check if arrived (less than 50 meters)
+      if (distance < 50) {
+        _showSnackBar('You have arrived at your destination!');
+        _clearDirections();
       }
     }
   } catch (e) {
-    // Silently handle errors in background updates
     print('Error updating route progress: $e');
+    // Don't update route if there's an error - keep the existing safe route
   }
 }
+
+// NEW: Flag to track if current route was calculated for safety
+bool _routeWasCalculatedAsSafe = false;
+
+// NEW: Recalculate safe route from current position
+Future<List<LatLng>> _recalculateSafeRoute(LatLng start, LatLng destination) async {
+  try {
+    // First check if the direct route from current position is already safe
+    final directRoute = await _getRouteFromAPI(start, destination);
+    final unsafeSegments = _findUnsafeSegments(directRoute);
+    
+    // If direct route is safe now, use it
+    if (unsafeSegments.isEmpty) {
+      print('Direct route from current position is now safe');
+      return directRoute;
+    }
+    
+    // If still unsafe, apply safety strategies from current position
+    print('Recalculating safe route from current position: ${unsafeSegments.length} unsafe segments');
+    return await _findBestSafeRoute(start, destination, unsafeSegments);
+    
+  } catch (e) {
+    print('Error recalculating safe route: $e');
+    // Fallback: try to get any route
+    return await _getRouteFromAPI(start, destination);
+  }
+}
+
 
 Future<void> _getDirections(LatLng destination) async {
   if (_currentPosition == null) return;
   
+  // NOW set the destination when user explicitly chooses to navigate
+  setState(() {
+    _destination = destination;
+    _destinationFromSearch = false;
+    _routeWasCalculatedAsSafe = false; // CLEAR THE FLAG for regular routes
+    _tempPinnedLocation = null;
+  });
+  
+  // Rest of your existing _getDirections code remains the same...
   try {
     final response = await http.get(
       Uri.parse(
@@ -2503,9 +2597,8 @@ Future<void> _getDirections(LatLng destination) async {
         setState(() {
           _distance = distance / 1000;
           _duration = _formatDuration(duration);
-          _routePoints = routePoints; // Use _routePoints instead of _polylinePoints
-          _destination = destination;
-          _hasActiveRoute = true; // Set active route flag
+          _routePoints = routePoints;
+          _hasActiveRoute = true;
         });
         
         _mapController.fitCamera(
@@ -2515,7 +2608,6 @@ Future<void> _getDirections(LatLng destination) async {
           ),
         );
         
-        // Start real-time route updates
         _startRouteUpdates();
       }
     } else {
@@ -3148,9 +3240,22 @@ void _showLocationOptions(LatLng position) async {
           onGetDirections: () => _getDirections(position),
           onGetSafeRoute: () => _getSafeRoute(position),
           onShareLocation: () => _shareLocation(position),
-          onReportHotspot: () => _showReportHotspotForm(position), // Updated method call
+          onReportHotspot: () => _showReportHotspotForm(position),
           onAddHotspot: () => _showAddHotspotForm(position),
           onAddSafeSpot: () => _navigateToSafeSpotForm(position),
+          // Add this callback for save points
+          onCreateSavePoint: () {
+            AddSavePointScreen.showAddSavePointForm(
+              context: context,
+              userProfile: _userProfile,
+              initialLocation: position,
+              onUpdate: () {
+                print('onUpdate: Reloading save points...');
+                _loadSavePoints(); // Reload save points to update _savePoints
+                setState(() {}); // Ensure the UI rebuilds
+              },
+            );
+          },
         );
       },
     );
@@ -3185,7 +3290,10 @@ void _showLocationOptions(LatLng position) async {
                 leading: const Icon(Icons.directions),
                 title: const Text('Get Regular Route'),
                 onTap: () {
-                  Navigator.pop(context);
+                Navigator.pop(context);
+                  setState(() {
+                    _tempPinnedLocation = null; // Clear temp pin
+                  });
                   _getDirections(position);
                 },
               ),
@@ -3194,8 +3302,11 @@ void _showLocationOptions(LatLng position) async {
                 title: const Text('Get Safe Route'),
                 subtitle: const Text('Avoids reported hotspots'),
                 onTap: () {
-                  Navigator.pop(context);
-                  _getSafeRoute(position);
+                Navigator.pop(context);
+                setState(() {
+                  _tempPinnedLocation = null; // Clear temp pin
+                });
+                _getSafeRoute(position);
                 },
               ),
 
@@ -3220,7 +3331,10 @@ void _showLocationOptions(LatLng position) async {
                       enabled: canReport,
                       onTap: canReport ? () {
                         Navigator.pop(context);
-                        _showReportHotspotForm(position); // Updated method call
+                        setState(() {
+                          _tempPinnedLocation = null; // Clear temp pin
+                        });
+                        _showReportHotspotForm(position);
                       } : null,
                     );
                   },
@@ -3231,8 +3345,11 @@ void _showLocationOptions(LatLng position) async {
                   title: const Text('Add Crime Incident'),
                   subtitle: const Text('Immediately published'),
                   onTap: () {
-                    Navigator.pop(context);
-                    _showAddHotspotForm(position);
+                  Navigator.pop(context);
+                  setState(() {
+                    _tempPinnedLocation = null; // Clear temp pin
+                  });
+                  _showAddHotspotForm(position);
                   },
                 ),
 
@@ -3242,8 +3359,11 @@ void _showLocationOptions(LatLng position) async {
                   title: const Text('Add Safe Spot'),
                   subtitle: const Text('Mark this as a safe location'),
                   onTap: () {
-                    Navigator.pop(context);
-                    _navigateToSafeSpotForm(position);
+                  Navigator.pop(context);
+                  setState(() {
+                    _tempPinnedLocation = null; // Clear temp pin
+                  });
+                  _navigateToSafeSpotForm(position);
                   },
                 ),
                 
@@ -3254,7 +3374,10 @@ if (_userProfile != null)
     title: const Text('Save This Location'),
     subtitle: const Text('Bookmark for quick navigation'),
     onTap: () {
-      Navigator.pop(context); // Close the menu
+    Navigator.pop(context);
+    setState(() {
+      _tempPinnedLocation = null; // Clear temp pin
+    });
       AddSavePointScreen.showAddSavePointForm(
         context: context,
         userProfile: _userProfile,
@@ -3268,11 +3391,18 @@ if (_userProfile != null)
     },
   ),
 
-              ListTile(
-                leading: const Icon(Icons.share),
-                title: const Text('Share Location'),
-                onTap: () => _shareLocation(position),
-              ),
+ListTile(
+  leading: const Icon(Icons.share),
+  title: const Text('Share Location'),
+  onTap: () {
+    Navigator.pop(context);
+    setState(() {
+      _tempPinnedLocation = null; // Clear temp pin
+    });
+    _shareLocation(position);
+  },
+),
+
               if (_distance > 0)
                 Padding(
                   padding: const EdgeInsets.all(8.0),
@@ -3291,6 +3421,11 @@ if (_userProfile != null)
 }
 
 void _navigateToSafeSpotForm(LatLng position) {
+
+    setState(() {
+    _tempPinnedLocation = null; // Clear temp pin
+  });
+  
   if (_userProfile == null) {
     _showSnackBar('Please log in to add safe spots');
     return;
@@ -3342,100 +3477,10 @@ List<LatLng> _findUnsafeSegments(List<LatLng> route) {
   return unsafeSegments;
 }
 
-List<LatLng> _generateAlternativeWaypoints(List<LatLng> unsafePoints) {
-  final waypoints = <LatLng>[];
-  const offset = 0.003; // Reduced from 0.005 to create closer alternatives
-  
-  // Group nearby unsafe points
-  final groupedPoints = _groupNearbyPoints(unsafePoints, 150.0); // Reduced from 200m
-  
-  for (final pointGroup in groupedPoints) {
-    final centerLat = pointGroup.map((p) => p.latitude).reduce((a, b) => a + b) / pointGroup.length;
-    final centerLng = pointGroup.map((p) => p.longitude).reduce((a, b) => a + b) / pointGroup.length;
-    final center = LatLng(centerLat, centerLng);
-    
-    // Only add ONE strategic waypoint per unsafe area, not four
-    // Choose the waypoint that's most likely to create a reasonable detour
-    final strategicWaypoint = _findBestAvoidancePoint(center, offset);
-    if (strategicWaypoint != null) {
-      waypoints.add(strategicWaypoint);
-    }
-  }
-  
-  return waypoints;
-}
 
-LatLng? _findBestAvoidancePoint(LatLng center, double offset) {
-  // Calculate direction from current position to destination
-  if (_currentPosition == null || _destination == null) return null;
-  
-  final toDestinationLat = _destination!.latitude - _currentPosition!.latitude;
-  final toDestinationLng = _destination!.longitude - _currentPosition!.longitude;
-  
-  // Create waypoint perpendicular to the main route direction
-  final perpLat = -toDestinationLng * (offset / 2); // Perpendicular direction
-  final perpLng = toDestinationLat * (offset / 2);
-  
-  // Try both sides and pick the one farther from hotspots
-  final option1 = LatLng(center.latitude + perpLat, center.longitude + perpLng);
-  final option2 = LatLng(center.latitude - perpLat, center.longitude - perpLng);
-  
-  // Check which option is safer
-  final option1Distance = _getMinDistanceToHotspots(option1);
-  final option2Distance = _getMinDistanceToHotspots(option2);
-  
-  return option1Distance > option2Distance ? option1 : option2;
-}
 
 // Helper to get minimum distance to any active hotspot
-double _getMinDistanceToHotspots(LatLng point) {
-  final activeApprovedHotspots = _hotspots.where((hotspot) {
-    final status = hotspot['status'] ?? 'approved';
-    final activeStatus = hotspot['active_status'] ?? 'active';
-    return status == 'approved' && activeStatus == 'active';
-  }).toList();
-  
-  double minDistance = double.infinity;
-  for (final hotspot in activeApprovedHotspots) {
-    final coords = hotspot['location']['coordinates'];
-    final hotspotLatLng = LatLng(coords[1], coords[0]);
-    final distance = _calculateDistance(point, hotspotLatLng);
-    if (distance < minDistance) {
-      minDistance = distance;
-    }
-  }
-  return minDistance;
-}
 
-List<List<LatLng>> _groupNearbyPoints(List<LatLng> points, double distanceThreshold) {
-  final groups = <List<LatLng>>[];
-  final processedPoints = <bool>[];
-  
-  // Initialize all points as unprocessed
-  for (int i = 0; i < points.length; i++) {
-    processedPoints.add(false);
-  }
-  
-  for (int i = 0; i < points.length; i++) {
-    if (processedPoints[i]) continue;
-    
-    final group = <LatLng>[points[i]];
-    processedPoints[i] = true;
-    
-    // Find all nearby points and add them to the same group
-    for (int j = i + 1; j < points.length; j++) {
-      if (!processedPoints[j] && 
-          _calculateDistance(points[i], points[j]) < distanceThreshold) {
-        group.add(points[j]);
-        processedPoints[j] = true;
-      }
-    }
-    
-    groups.add(group);
-  }
-  
-  return groups;
-}
 
 Future<List<LatLng>> _getRouteWithWaypoints(
   LatLng start, 
@@ -3682,13 +3727,16 @@ Future<List<LatLng>> _getRouteFromAPIFallback(LatLng start, LatLng end) async {
 Future<void> _getSafeRoute(LatLng destination) async {
   if (_currentPosition == null) return;
   
-  // Switch to map tab first
+  // NOW set the destination when user explicitly chooses to navigate
   setState(() {
+    _destination = destination;
     _currentTab = MainTab.map;
-    _selectedHotspot = null; // Clear hotspot selection
+    _selectedHotspot = null;
+    _routeWasCalculatedAsSafe = true; // SET THE FLAG
+    _tempPinnedLocation = null;
   });
   
-  // Move map to show both current position and destination
+  // Rest of your existing _getSafeRoute code remains the same...
   _mapController.fitCamera(
     CameraFit.bounds(
       bounds: LatLngBounds(_currentPosition!, destination),
@@ -3699,7 +3747,6 @@ Future<void> _getSafeRoute(LatLng destination) async {
   _showSnackBar('Calculating safest route...');
 
   try {
-    // Get regular route first
     final regularRoute = await _getRouteFromAPI(_currentPosition!, destination);
     final unsafeSegments = _findUnsafeSegments(regularRoute);
     
@@ -3709,18 +3756,16 @@ Future<void> _getSafeRoute(LatLng destination) async {
       finalRoute = regularRoute;
       _showSnackBar('Route is already safe!');
     } else {
-      // Try multiple strategies for finding safe route
       finalRoute = await _findBestSafeRoute(_currentPosition!, destination, unsafeSegments);
       
-      // Verify the final route is actually safer
       final newUnsafeSegments = _findUnsafeSegments(finalRoute);
       if (newUnsafeSegments.isEmpty) {
-        _showSnackBar('Safe route found! ');
+        _showSnackBar('Safe route found!');
       } else if (newUnsafeSegments.length < unsafeSegments.length) {
-        _showSnackBar('Safer route found! ');
+        _showSnackBar('Safer route found!');
       } else {
         _showSnackBar('Could not find safer route - using regular route.');
-        finalRoute = regularRoute; // Use original route if no improvement
+        finalRoute = regularRoute;
       }
     }
     
@@ -3731,7 +3776,6 @@ Future<void> _getSafeRoute(LatLng destination) async {
       _routePoints = finalRoute;
       _distance = distance / 1000;
       _duration = _formatDuration(duration);
-      _destination = destination;
       _hasActiveRoute = true;
     });
     
@@ -3744,9 +3788,8 @@ Future<void> _getSafeRoute(LatLng destination) async {
     
     _startRouteUpdates();
   } catch (e) {
-    print('Safe route error: $e'); // Debug logging
+    print('Safe route error: $e');
     _showSnackBar('Error calculating safe route: ${e.toString()}');
-    // Fallback to regular directions if safe route fails
     try {
       _getDirections(destination);
     } catch (fallbackError) {
@@ -3755,89 +3798,320 @@ Future<void> _getSafeRoute(LatLng destination) async {
   }
 }
 
+// Enhanced safe routing with multiple strategies to find alternative routes
+// that avoid hotspots even when the free API doesn't provide them directly
+
+// 1. ENHANCED: Multiple waypoint strategies for better hotspot avoidance
 Future<List<LatLng>> _findBestSafeRoute(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
-  // Strategy 1: Try minimal waypoints first
-  try {
-    final minimalWaypoints = _generateAlternativeWaypoints(unsafeSegments);
-    if (minimalWaypoints.length <= 2) { // Only use if we have few waypoints
-      final route = await _getRouteWithWaypoints(start, destination, minimalWaypoints);
-      final stillUnsafeSegments = _findUnsafeSegments(route);
-      if (stillUnsafeSegments.isEmpty || stillUnsafeSegments.length < unsafeSegments.length * 0.5) {
-        return route;
+  print('Finding safe route: ${unsafeSegments.length} unsafe segments detected');
+  
+  // Strategy 1: Try multiple alternative routes with different approaches
+  final strategies = [
+    () => _tryPerpendicularDetourStrategy(start, destination, unsafeSegments),
+    () => _tryRadialAvoidanceStrategy(start, destination, unsafeSegments),
+    () => _trySegmentBySegmentAvoidance(start, destination, unsafeSegments),
+    () => _tryWideDetourStrategy(start, destination, unsafeSegments),
+  ];
+  
+  for (final strategy in strategies) {
+    try {
+      final route = await strategy();
+      if (route.isNotEmpty) {
+        final newUnsafeSegments = _findUnsafeSegments(route);
+        print('Strategy result: ${newUnsafeSegments.length} remaining unsafe segments');
+        
+        // Accept route if it's significantly safer (50% reduction or better)
+        if (newUnsafeSegments.length <= unsafeSegments.length * 0.5) {
+          return route;
+        }
       }
+    } catch (e) {
+      print('Strategy failed: $e');
+      continue;
     }
-  } catch (e) {
-    print('Minimal waypoints strategy failed: $e');
   }
   
-  // Strategy 2: Direct intermediate points
-  try {
-    final intermediatePoints = await _findSafeIntermediatePoints(start, destination);
-    if (intermediatePoints.length <= 1) { // Prefer single intermediate point
-      final route = await _getRouteWithWaypoints(start, destination, intermediatePoints);
-      final stillUnsafeSegments = _findUnsafeSegments(route);
-      if (stillUnsafeSegments.length < unsafeSegments.length) {
-        return route;
-      }
-    }
-  } catch (e) {
-    print('Intermediate points strategy failed: $e');
-  }
-  
-  // Strategy 3: If all else fails, use regular route with warning
+  // If all strategies fail, return the original route with warning
+  print('All safe route strategies failed, using original route');
   return await _getRouteFromAPI(start, destination);
 }
 
-Future<List<LatLng>> _findSafeIntermediatePoints(LatLng start, LatLng destination) async {
-  final intermediatePoints = <LatLng>[];
+// 2. NEW: Perpendicular detour strategy - creates waypoints perpendicular to hotspot clusters
+Future<List<LatLng>> _tryPerpendicularDetourStrategy(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  final hotspotClusters = _clusterHotspots(unsafeSegments);
+  final waypoints = <LatLng>[];
   
-  // Get active approved hotspots
-  final activeApprovedHotspots = _hotspots.where((hotspot) {
-    final status = hotspot['status'] ?? 'approved';
-    final activeStatus = hotspot['active_status'] ?? 'active';
-    return status == 'approved' && activeStatus == 'active';
-  }).toList();
-  
-  // Create a grid of potential waypoints between start and destination
-  final latDiff = destination.latitude - start.latitude;
-  final lngDiff = destination.longitude - start.longitude;
-  
-  // Create waypoints at 1/3 and 2/3 of the way
-  for (double fraction in [0.33, 0.67]) {
-    final baseLat = start.latitude + (latDiff * fraction);
-    final baseLng = start.longitude + (lngDiff * fraction);
+  for (final cluster in hotspotClusters) {
+    final clusterCenter = _getClusterCenter(cluster);
     
-    // Try points in different directions from the base point
-    final offsets = [
-      [0.01, 0.01],   // Northeast
-      [0.01, -0.01],  // Northwest  
-      [-0.01, 0.01],  // Southeast
-      [-0.01, -0.01], // Southwest
-    ];
+    // Calculate perpendicular directions to the main route
+    final mainRouteDirection = _calculateBearing(start, destination);
+    final perpendicularDirection1 = (mainRouteDirection + 90) % 360;
+    final perpendicularDirection2 = (mainRouteDirection - 90) % 360;
     
-    for (final offset in offsets) {
-      final candidatePoint = LatLng(baseLat + offset[0], baseLng + offset[1]);
+    // Try both perpendicular directions at different distances
+    final distances = [500.0, 800.0, 1200.0]; // meters
+    
+    for (final distance in distances) {
+      final waypoint1 = _calculateDestination(clusterCenter, perpendicularDirection1, distance);
+      final waypoint2 = _calculateDestination(clusterCenter, perpendicularDirection2, distance);
       
-      // Check if this point is far enough from all hotspots
-      bool isSafe = true;
-      for (final hotspot in activeApprovedHotspots) {
-        final coords = hotspot['location']['coordinates'];
-        final hotspotLatLng = LatLng(coords[1], coords[0]);
-        if (_calculateDistance(candidatePoint, hotspotLatLng) < 300.0) { // 300m buffer
-          isSafe = false;
-          break;
-        }
-      }
+      // Choose the waypoint that's safer
+      final safety1 = _evaluateWaypointSafety(waypoint1);
+      final safety2 = _evaluateWaypointSafety(waypoint2);
       
-      if (isSafe) {
-        intermediatePoints.add(candidatePoint);
-        break; // Found a safe point for this fraction, move to next
+      if (safety1 > safety2 && safety1 > 200) { // Minimum 200m from hotspots
+        waypoints.add(waypoint1);
+        break;
+      } else if (safety2 > 200) {
+        waypoints.add(waypoint2);
+        break;
       }
     }
   }
   
-  return intermediatePoints;
+  if (waypoints.isNotEmpty) {
+    return await _getRouteWithWaypoints(start, destination, waypoints.take(2).toList());
+  }
+  
+  throw Exception('No safe perpendicular route found');
 }
+
+// 3. NEW: Radial avoidance strategy - creates waypoints in a radial pattern around hotspots
+Future<List<LatLng>> _tryRadialAvoidanceStrategy(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  final hotspotClusters = _clusterHotspots(unsafeSegments);
+  final waypoints = <LatLng>[];
+  
+  for (final cluster in hotspotClusters) {
+    final clusterCenter = _getClusterCenter(cluster);
+    
+    // Try 8 directions around the hotspot cluster (every 45 degrees)
+    final directions = [0, 45, 90, 135, 180, 225, 270, 315];
+    final avoidanceDistance = 600.0; // meters
+    
+    LatLng? bestWaypoint;
+    double bestSafety = 0;
+    
+    for (final direction in directions) {
+      final candidate = _calculateDestination(clusterCenter, direction.toDouble(), avoidanceDistance);
+      final safety = _evaluateWaypointSafety(candidate);
+      
+      if (safety > bestSafety) {
+        bestSafety = safety;
+        bestWaypoint = candidate;
+      }
+    }
+    
+    if (bestWaypoint != null && bestSafety > 250) { // Minimum 250m safety margin
+      waypoints.add(bestWaypoint);
+    }
+  }
+  
+  if (waypoints.isNotEmpty) {
+    return await _getRouteWithWaypoints(start, destination, waypoints.take(2).toList());
+  }
+  
+  throw Exception('No safe radial route found');
+}
+
+// 4. NEW: Segment-by-segment avoidance - targets specific unsafe route segments
+Future<List<LatLng>> _trySegmentBySegmentAvoidance(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  // Get the original route to analyze segments
+  final originalRoute = await _getRouteFromAPI(start, destination);
+  final waypoints = <LatLng>[];
+  
+  // Find the most problematic segments (those passing closest to hotspots)
+  final problematicSegments = <Map<String, dynamic>>[];
+  
+  for (int i = 0; i < originalRoute.length - 1; i++) {
+    final segmentStart = originalRoute[i];
+    final segmentEnd = originalRoute[i + 1];
+    final segmentMidpoint = LatLng(
+      (segmentStart.latitude + segmentEnd.latitude) / 2,
+      (segmentStart.longitude + segmentEnd.longitude) / 2,
+    );
+    
+    // Check if this segment is near any hotspots
+    double minDistanceToHotspot = double.infinity;
+    for (final hotspot in _hotspots.where((h) => 
+        h['status'] == 'approved' && h['active_status'] == 'active')) {
+      final coords = hotspot['location']['coordinates'];
+      final hotspotLatLng = LatLng(coords[1], coords[0]);
+      final distance = _calculateDistance(segmentMidpoint, hotspotLatLng);
+      if (distance < minDistanceToHotspot) {
+        minDistanceToHotspot = distance;
+      }
+    }
+    
+    if (minDistanceToHotspot < 200) { // Segment is too close to hotspots
+      problematicSegments.add({
+        'index': i,
+        'midpoint': segmentMidpoint,
+        'danger_level': 200 - minDistanceToHotspot,
+      });
+    }
+  }
+  
+  // Sort by danger level and create waypoints to avoid the worst segments
+  problematicSegments.sort((a, b) => 
+      (b['danger_level'] as double).compareTo(a['danger_level'] as double));
+  
+  for (final segment in problematicSegments.take(3)) { // Max 3 segments
+    final midpoint = segment['midpoint'] as LatLng;
+    
+    // Create waypoint offset from the problematic segment
+    final offsetDistance = 400.0;
+    final offsetDirections = [45, 135, 225, 315]; // Diagonal offsets
+    
+    for (final direction in offsetDirections) {
+      final waypoint = _calculateDestination(midpoint, direction.toDouble(), offsetDistance);
+      final safety = _evaluateWaypointSafety(waypoint);
+      
+      if (safety > 200) {
+        waypoints.add(waypoint);
+        break;
+      }
+    }
+  }
+  
+  if (waypoints.isNotEmpty) {
+    return await _getRouteWithWaypoints(start, destination, waypoints);
+  }
+  
+  throw Exception('No segment-based safe route found');
+}
+
+// 5. NEW: Wide detour strategy - creates a wider arc around hotspot areas
+Future<List<LatLng>> _tryWideDetourStrategy(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  // Calculate the main route bearing
+  final mainBearing = _calculateBearing(start, destination);
+  final routeDistance = _calculateDistance(start, destination);
+  
+  // Create waypoints that form a wide arc around the problematic area
+  final waypoints = <LatLng>[];
+  
+  // Create intermediate points along a curved path
+  final numWaypoints = routeDistance > 5000 ? 3 : 2; // More waypoints for longer routes
+  
+  for (int i = 1; i <= numWaypoints; i++) {
+    final fraction = i / (numWaypoints + 1.0);
+    
+    // Base position along direct route
+    final baseLat = start.latitude + (destination.latitude - start.latitude) * fraction;
+    final baseLng = start.longitude + (destination.longitude - start.longitude) * fraction;
+    final basePoint = LatLng(baseLat, baseLng);
+    
+    // Offset perpendicular to main route to create arc
+    final perpBearing = (mainBearing + 90) % 360;
+    final arcOffset = 1000.0; // 1km offset for wide detour
+    
+    final waypoint1 = _calculateDestination(basePoint, perpBearing, arcOffset);
+    final waypoint2 = _calculateDestination(basePoint, (perpBearing + 180) % 360, arcOffset);
+    
+    // Choose safer side of the arc
+    final safety1 = _evaluateWaypointSafety(waypoint1);
+    final safety2 = _evaluateWaypointSafety(waypoint2);
+    
+    if (safety1 > safety2 && safety1 > 300) {
+      waypoints.add(waypoint1);
+    } else if (safety2 > 300) {
+      waypoints.add(waypoint2);
+    }
+  }
+  
+  if (waypoints.isNotEmpty) {
+    return await _getRouteWithWaypoints(start, destination, waypoints);
+  }
+  
+  throw Exception('No wide detour route found');
+}
+
+// 6. HELPER: Cluster nearby hotspots to treat them as single obstacles
+List<List<LatLng>> _clusterHotspots(List<LatLng> unsafeSegments) {
+  final clusters = <List<LatLng>>[];
+  final processed = List<bool>.filled(unsafeSegments.length, false);
+  
+  for (int i = 0; i < unsafeSegments.length; i++) {
+    if (processed[i]) continue;
+    
+    final cluster = <LatLng>[unsafeSegments[i]];
+    processed[i] = true;
+    
+    // Find nearby points within 300m
+    for (int j = i + 1; j < unsafeSegments.length; j++) {
+      if (!processed[j] && 
+          _calculateDistance(unsafeSegments[i], unsafeSegments[j]) < 300) {
+        cluster.add(unsafeSegments[j]);
+        processed[j] = true;
+      }
+    }
+    
+    clusters.add(cluster);
+  }
+  
+  return clusters;
+}
+
+// 7. HELPER: Get center point of a hotspot cluster
+LatLng _getClusterCenter(List<LatLng> cluster) {
+  final avgLat = cluster.map((p) => p.latitude).reduce((a, b) => a + b) / cluster.length;
+  final avgLng = cluster.map((p) => p.longitude).reduce((a, b) => a + b) / cluster.length;
+  return LatLng(avgLat, avgLng);
+}
+
+// 8. HELPER: Calculate bearing between two points (in degrees)
+double _calculateBearing(LatLng start, LatLng end) {
+  final lat1Rad = start.latitude * pi / 180;
+  final lat2Rad = end.latitude * pi / 180;
+  final deltaLngRad = (end.longitude - start.longitude) * pi / 180;
+  
+  final x = sin(deltaLngRad) * cos(lat2Rad);
+  final y = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(deltaLngRad);
+  
+  final bearingRad = atan2(x, y);
+  final bearingDeg = bearingRad * 180 / pi;
+  
+  return (bearingDeg + 360) % 360; // Normalize to 0-360
+}
+
+// 9. HELPER: Calculate destination point from bearing and distance
+LatLng _calculateDestination(LatLng start, double bearing, double distance) {
+  const double earthRadius = 6371000; // meters
+  final bearingRad = bearing * pi / 180;
+  final lat1Rad = start.latitude * pi / 180;
+  final lng1Rad = start.longitude * pi / 180;
+  
+  final lat2Rad = asin(sin(lat1Rad) * cos(distance / earthRadius) + 
+                      cos(lat1Rad) * sin(distance / earthRadius) * cos(bearingRad));
+  
+  final lng2Rad = lng1Rad + atan2(sin(bearingRad) * sin(distance / earthRadius) * cos(lat1Rad),
+                                 cos(distance / earthRadius) - sin(lat1Rad) * sin(lat2Rad));
+  
+  return LatLng(lat2Rad * 180 / pi, lng2Rad * 180 / pi);
+}
+
+// 10. HELPER: Evaluate how safe a waypoint is (returns minimum distance to any active hotspot)
+double _evaluateWaypointSafety(LatLng waypoint) {
+  double minDistance = double.infinity;
+  
+  final activeHotspots = _hotspots.where((hotspot) {
+    final status = hotspot['status'] ?? 'approved';
+    final activeStatus = hotspot['active_status'] ?? 'active';
+    return status == 'approved' && activeStatus == 'active';
+  });
+  
+  for (final hotspot in activeHotspots) {
+    final coords = hotspot['location']['coordinates'];
+    final hotspotLatLng = LatLng(coords[1], coords[0]);
+    final distance = _calculateDistance(waypoint, hotspotLatLng);
+    if (distance < minDistance) {
+      minDistance = distance;
+    }
+  }
+  
+  return minDistance;
+}
+
 
 // Helper to calculate total distance of a route in meters
 double _calculateRouteDistance(List<LatLng> route) {
@@ -4075,7 +4349,9 @@ Widget _buildFloatingDurationWidget() {
 ////ADD HOTSPOT FOR ADMIN
 void _showAddHotspotForm(LatLng position) async {
   final isDesktop = _isDesktopScreen();
-
+    setState(() {
+    _tempPinnedLocation = null; // Clear temp pin
+  });
   try {
     final crimeTypesResponse = await Supabase.instance.client
         .from('crime_type')
@@ -4737,6 +5013,9 @@ void _showAddHotspotForm(LatLng position) async {
 
 void _showReportHotspotForm(LatLng position) async {
   // First check if user can still report today
+  setState(() {
+    _tempPinnedLocation = null; // Clear temp pin
+  });
   final dailyCount = await _getDailyReportCount();
   
   if (dailyCount >= 5) {
@@ -4760,44 +5039,17 @@ void _showReportHotspotForm(LatLng position) async {
     final now = DateTime.now();
 
     if (_isDesktopScreen()) {
-      // Desktop dialog view
+      // FIXED: Desktop dialog view - Remove the problematic structure
       if (!mounted) return;
       await showDialog(
         context: context,
         builder: (context) => Dialog(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Add daily limit indicator
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(8),
-                    topRight: Radius.circular(8),
-                  ),
-                ),
-                child: Text(
-                  'Daily Reports: $dailyCount/5',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-              Expanded(
-            child: ReportHotspotFormDesktop(
-                      position: position,
-                      crimeTypes: crimeTypes,
-                      onSubmit: _reportHotspot, // Make sure this returns bool now
-                      onCancel: () => Navigator.of(context).pop(),
-                      dailyCount: dailyCount, // Pass the daily count
-                    ),
-              ),
-            ],
+          child: ReportHotspotFormDesktop(
+            position: position,
+            crimeTypes: crimeTypes,
+            onSubmit: _reportHotspot,
+            onCancel: () => Navigator.of(context).pop(),
+            dailyCount: dailyCount,
           ),
         ),
       );
@@ -6843,277 +7095,259 @@ Widget _buildBottomNavBar() {
   );
 }
 
+
 void _showQuickActionDialog() {
   showDialog(
     context: context,
     builder: (BuildContext context) {
       return Dialog(
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
         ),
-        insetPadding: const EdgeInsets.symmetric(horizontal: 8), // Reduced padding to maximize width
-        child: ConstrainedBox(
+        insetPadding: const EdgeInsets.all(16),
+        child: Container(
+          width: double.infinity,
           constraints: BoxConstraints(
-            minWidth: MediaQuery.of(context).size.width * 0.92, // Minimum 92% of screen width
-            maxWidth: MediaQuery.of(context).size.width * 0.92, // Maximum 92% of screen width
+            maxWidth: 400, // Limit width for larger screens
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
           ),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.add_location,
-                        color: Colors.blue.shade700,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Text(
-                        'Quick Action',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close, size: 20),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 12),
-                
-                // Info note
-Container(
-  padding: const EdgeInsets.all(10),
-  decoration: BoxDecoration(
-    color: Colors.grey.shade50,
-    borderRadius: BorderRadius.circular(8),
-    border: Border.all(color: Colors.grey.shade200),
-  ),
-  child: Row(
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50, // Lightened background
+            borderRadius: BorderRadius.circular(20),
+          ),
+          padding: const EdgeInsets.all(20),
+         child: SingleChildScrollView(
+  child: Column(
+    mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(Icons.info_outline, color: Colors.grey.shade600, size: 16),
-      const SizedBox(width: 8),
-      const Expanded(
-        child: Text(
-          'This will automatically fetch your current location. To report from another location, you can pin it on the map.',
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey,
-          ),
-        ),
-      ),
-    ],
-  ),
-),
-
-
-GestureDetector(
-  onTap: () {
-    Navigator.pop(context); // Close dialog first
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const HotlinesScreen()),
-    );
-  },
-  child: Container(
-    margin: const EdgeInsets.only(top: 8),
-    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-    decoration: BoxDecoration(
-      color: Colors.red.shade50,
-      borderRadius: BorderRadius.circular(6),
-      border: Border.all(color: Colors.red.shade100),
-    ),
-    child: Row(
-      children: [
-        Icon(Icons.phone_in_talk, color: Colors.red.shade600, size: 16),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            'Quick Emergency Hotlines',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Colors.red.shade600,
+      // Header with close button
+      Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              Icons.bolt_rounded,
+              color: Colors.blue.shade600,
+              size: 24,
             ),
           ),
-        ),
-        Icon(Icons.arrow_forward_ios, size: 12, color: Colors.red.shade600),
-      ],
-    ),
-  ),
-),
-                
-                const SizedBox(height: 16),
-                
-                // Action buttons
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Report Hotspot button
-                    Expanded(
-                      flex: 1,
-                      child: GestureDetector(
-                        onTap: () {
-                          Navigator.pop(context);
-                          _quickReportCrime();
-                        },
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.grey.shade200, width: 1.5),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.04),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.shade50,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Icon(
-                                  Icons.report_problem_rounded,
-                                  color: Colors.orange.shade600,
-                                  size: 24,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Report Incident',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.orange.shade700,
-                                  fontSize: 14,
-                                  letterSpacing: -0.2,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Crime or danger',
-                                style: TextStyle(
-                                  color: Colors.grey.shade600,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    
-                    // Add Safe Spot button
-                    Expanded(
-                      flex: 1,
-                      child: GestureDetector(
-                        onTap: () {
-                          Navigator.pop(context);
-                          _quickAddSafeSpot();
-                        },
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.grey.shade200, width: 1.5),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.04),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.shade50,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Icon(
-                                  Icons.verified_user_rounded,
-                                  color: Colors.green.shade600,
-                                  size: 24,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Add Safe Spot',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.green.shade700,
-                                  fontSize: 14,
-                                  letterSpacing: -0.2,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Mark a safe location',
-                                style: TextStyle(
-                                  color: Colors.grey.shade600,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Quick Actions',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    height: 1.2,
+                  ),
+                ),
+                Text(
+                  'Choose an action to perform',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey,
+                    height: 1.2,
+                  ),
                 ),
               ],
             ),
           ),
+          IconButton(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.close_rounded, size: 22),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.grey.shade100,
+              foregroundColor: Colors.grey.shade600,
+            ),
+          ),
+        ],
+      ),
+      
+      const SizedBox(height: 20),
+      
+      // Location info banner
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.blue.shade100),
         ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.location_on_rounded,
+              color: Colors.blue.shade600,
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Actions will use your current location automatically',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.blue,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      
+      const SizedBox(height: 20),
+      
+      // Action buttons - Vertical layout
+      Column(
+        children: [
+          _buildVerticalActionButton(
+            icon: Icons.report_problem_rounded,
+            iconColor: Colors.orange.shade600,
+            backgroundColor: Colors.orange.shade50,
+            borderColor: Colors.orange.shade100,
+            title: 'Report Incident',
+            subtitle: 'Report crime or dangerous situation',
+            onTap: () {
+              Navigator.pop(context);
+              _quickReportCrime();
+            },
+          ),
+          const SizedBox(height: 12),
+          _buildVerticalActionButton(
+            icon: Icons.verified_user_rounded,
+            iconColor: Colors.green.shade600,
+            backgroundColor: Colors.green.shade50,
+            borderColor: Colors.green.shade100,
+            title: 'Add Safe Spot',
+            subtitle: 'Mark a location as safe for the community',
+            onTap: () {
+              Navigator.pop(context);
+              _quickAddSafeSpot();
+            },
+          ),
+          const SizedBox(height: 12),
+          _buildVerticalActionButton(
+            icon: Icons.bookmark_add_rounded,
+            iconColor: Colors.blue.shade600,
+            backgroundColor: Colors.blue.shade50,
+            borderColor: Colors.blue.shade100,
+            title: 'Save Point',
+            subtitle: 'Bookmark this location for quick access',
+            onTap: () {
+              Navigator.pop(context);
+              _quickAddSavePoint();
+            },
+          ),
+        ],
+      ),
+            ],
+          ),
+        ),
+      ),
       );
     },
   );
 }
 
+
+Widget _buildVerticalActionButton({
+  required IconData icon,
+  required Color iconColor,
+  required Color backgroundColor,
+  required Color borderColor,
+  required String title,
+  required String subtitle,
+  required VoidCallback onTap,
+}) {
+  return GestureDetector(
+    onTap: onTap,
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: backgroundColor,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              icon,
+              color: iconColor,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: iconColor,
+                    fontSize: 16,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            Icons.arrow_forward_ios_rounded,
+            size: 16,
+            color: Colors.grey.shade400,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 // HELPER METHODS FOR 5-TAB STRUCTURE
 int _getCurrentTabIndex() {
-  // Map your existing 4-tab enum to 5-tab structure
+  // Map your existing 5-tab enum to bottom navigation structure
   switch (_currentTab) {
     case MainTab.map:
       return 0;
     case MainTab.quickAccess:
       return 1;
+    case MainTab.savePoints:
+      return 2; // This will be the center button or third tab
     case MainTab.notifications:
-      return 3; // Skip index 2 (center button)
+      return 3;
     case MainTab.profile:
       return 4;
   }
@@ -7151,7 +7385,7 @@ void _handleBottomNavTap(int index) {
   }
 }
 
-// EXISTING QUICK REPORT FUNCTION (renamed for clarity)
+//  QUICK REPORT FUNCTION 
 void _quickReportCrime() async {
   // Show loading indicator
   showDialog(
@@ -7195,7 +7429,7 @@ void _quickReportCrime() async {
   }
 }
 
-// NEW QUICK ADD SAFE SPOT FUNCTION
+// QUICK ADD SAFE SPOT FUNCTION
 void _quickAddSafeSpot() async {
   // Show loading indicator
   showDialog(
@@ -7243,7 +7477,58 @@ void _quickAddSafeSpot() async {
   }
 }
 
-
+// QUICK ADD SAVE POINT FUNCTION
+void _quickAddSavePoint() async {
+  // Show loading indicator
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => const Center(
+      child: CircularProgressIndicator(),
+    ),
+  );
+  
+  try {
+    // Get current location
+    await _getCurrentLocation();
+    
+    // Close loading dialog
+    if (mounted) Navigator.pop(context);
+    
+    if (_currentPosition == null) {
+      _showSnackBar('Unable to get current location. Please try again.');
+      return;
+    }
+    
+    if (_userProfile == null) {
+      _showSnackBar('Please log in to save points.');
+      return;
+    }
+    
+    // Show save point form using the existing AddSavePointScreen
+    AddSavePointScreen.showAddSavePointForm(
+      context: context,
+      userProfile: _userProfile,
+      initialLocation: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+      onUpdate: () {
+        // Refresh save points on map
+        _loadSavePoints();
+      },
+    );
+    
+    // Optionally switch to map tab to show the location
+    setState(() {
+      _currentTab = MainTab.map;
+    });
+    
+  } catch (e) {
+    // Close loading dialog if still open
+    if (mounted && Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+    _showSnackBar('Error getting location: ${e.toString()}');
+  }
+}
 
 
 Widget? _buildResponsiveBottomNav(bool isDesktop) {
@@ -7289,7 +7574,9 @@ Widget _buildResponsiveDesktopLayout() {
         ],
       ),
       // Modified backdrop overlay - excludes sidebar area
-      if (_currentTab == MainTab.notifications || _currentTab == MainTab.quickAccess)
+      if (_currentTab == MainTab.notifications || 
+          _currentTab == MainTab.quickAccess ||
+          _currentTab == MainTab.savePoints)  // Add SavePoints here
         Positioned(
           left: _isSidebarVisible ? 285 : 64, // Start after sidebar
           top: 0,
@@ -7318,28 +7605,59 @@ Widget _buildResponsiveDesktopLayout() {
       ),
       if (_currentTab == MainTab.notifications)
         _buildFloatingNotificationPanel(),
-if (_currentTab == MainTab.quickAccess)
-  QuickAccessDesktopScreen(
-    safeSpots: _safeSpots,
-    hotspots: _hotspots,
-    currentPosition: _currentPosition,
-    userProfile: _userProfile,
-    isAdmin: _hasAdminPermissions,
-    onGetDirections: _getDirections,
-    onGetSafeRoute: _getSafeRoute,
-    onShareLocation: _shareLocation,
-    onShowOnMap: _showOnMap,
-    onNavigateToSafeSpot: _navigateToSafeSpot,
-    onNavigateToHotspot: _navigateToHotspot,
-    onRefresh: _loadSafeSpots,
-    
-    isSidebarVisible: _isSidebarVisible,
-    onClose: () {
-      setState(() {
-        _currentTab = MainTab.map;
-      });
-    },
-  ),
+      if (_currentTab == MainTab.quickAccess)
+        QuickAccessDesktopScreen(
+          safeSpots: _safeSpots,
+          hotspots: _hotspots,
+          currentPosition: _currentPosition,
+          userProfile: _userProfile,
+          isAdmin: _hasAdminPermissions,
+          onGetDirections: _getDirections,
+          onGetSafeRoute: _getSafeRoute,
+          onShareLocation: _shareLocation,
+          onShowOnMap: _showOnMap,
+          onNavigateToSafeSpot: _navigateToSafeSpot,
+          onNavigateToHotspot: _navigateToHotspot,
+          onRefresh: _loadSafeSpots,
+          isSidebarVisible: _isSidebarVisible,
+          onClose: () {
+            setState(() {
+              _currentTab = MainTab.map;
+            });
+          },
+        ),
+      // Add SavePoints desktop screen
+      if (_currentTab == MainTab.savePoints)
+        SavePointDesktopScreen(
+          userProfile: _userProfile,
+          currentPosition: _currentPosition,
+          onNavigateToPoint: (point) {
+            _mapController.move(point, 16.0);
+            setState(() {
+              _destination = point;
+              _currentTab = MainTab.map; // Switch back to map
+            });
+          },
+          onShowOnMap: (savePoint) {
+            _showOnMap(savePoint);
+            setState(() {
+              _currentTab = MainTab.map; // Switch back to map
+            });
+          },
+          onGetSafeRoute: (point) {
+            _getSafeRoute(point);
+            setState(() {
+              _currentTab = MainTab.map; // Switch back to map
+            });
+          },
+          onUpdate: () => _loadSavePoints(),
+          isSidebarVisible: _isSidebarVisible,
+          onClose: () {
+            setState(() {
+              _currentTab = MainTab.map;
+            });
+          },
+        ),
     ],
   );
 }
@@ -7354,7 +7672,7 @@ Future<bool> _handleWillPop() async {
     // Let the profile screen handle the back button
     return true;
   }
-  
+
   // If not on map tab, switch to map tab
   if (_currentTab != MainTab.map) {
     setState(() {
@@ -7362,41 +7680,70 @@ Future<bool> _handleWillPop() async {
     });
     return false;
   }
-  
+
   // Check if we can pop (has previous routes)
   final canPop = Navigator.of(context).canPop();
-  
+
   // If we can pop, pop the route (this will handle the landing page case)
   if (canPop) {
     Navigator.of(context).pop();
     return false;
   }
-  
-  // If this is the root route, show exit confirmation
+
+  // If this is the root route, show styled exit confirmation
   final shouldExit = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Exit App?'),
-      content: const Text('Do you want to exit the application?'),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      title: Text(
+        'Exit App',
+        style: GoogleFonts.poppins(
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      content: Text(
+        'Are you sure you want to exit Zecure?',
+        style: GoogleFonts.poppins(),
+      ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('No'),
+          onPressed: () => Navigator.of(context).pop(false),
+          child: Text(
+            'Cancel',
+            style: GoogleFonts.poppins(
+              color: Colors.grey.shade600,
+            ),
+          ),
         ),
-        TextButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Exit App', style: TextStyle(color: Colors.red)),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue.shade600,
+            foregroundColor: Colors.white,
+          ),
+          child: Text(
+            'Exit',
+            style: GoogleFonts.poppins(),
+          ),
         ),
       ],
     ),
   ) ?? false;
-  
+
   return shouldExit;
 }
+
 
 //MODERN FLOATING ACTION BUTTONS
 
 Widget _buildFloatingActionButtons() {
+
+  final screenWidth = MediaQuery.of(context).size.width;
+  final isDesktop = screenWidth >= 800;
+
+
   return Column(
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.end,
@@ -7610,7 +7957,7 @@ Widget _buildFloatingActionButtons() {
             ),
 
             // Save Points button - Only for logged-in users - Standard size
-            if (_userProfile != null) ...[
+            if (_userProfile != null && !isDesktop) ...[
               const SizedBox(height: 4),
               _buildModernActionButton(
                 icon: Icons.bookmark_rounded,
@@ -8824,62 +9171,63 @@ Widget _buildMap() {
           child: FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: _currentPosition ?? const LatLng(14.5995, 120.9842),
+              initialCenter: _currentPosition ?? const LatLng(6.9214, 122.0790),
               initialZoom: 15.0,
               maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
               minZoom: 3.0,
-              // Platform-specific tap behavior
+
+//ONE TAP FOR DESKTOP
 onTap: (tapPosition, latLng) {
-  // FIRST: Check if notification panel is open and close it
   if (_currentTab == MainTab.notifications) {
     setState(() {
-      _currentTab = MainTab.map; // Close notification panel
+      _currentTab = MainTab.map;
     });
-    return; // Don't process other tap behaviors when closing notifications
+    return;
   }
-  
-  // THEN: Continue with existing tap behavior
+
   FocusScope.of(context).unfocus();
-  
-  // Clear all selections when tapping on empty map
+
   setState(() {
     _selectedHotspot = null;
     _selectedSafeSpot = null;
-    _selectedSavePoint = null; // Added to clear save point selection
+    _selectedSavePoint = null;
+    _destinationFromSearch = false;
+    // Only set temp pin for desktop/web on tap
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+      _tempPinnedLocation = latLng;
+      // Clear _destination unless there's an active route
+      if (!_hasActiveRoute) {
+        _destination = null;
+      }
+    }
   });
-  
-  // Desktop/Web: Set destination on single tap
-  if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
-    setState(() {
-      _destination = latLng;
-    });
-    _showLocationOptions(latLng);
-  }
-  // Mobile: Only unfocus (destination set on long press)
 },
-              // Long press for mobile devices
-              onLongPress: (tapPosition, latLng) {
-                // FIRST: Check if notification panel is open and close it
-                if (_currentTab == MainTab.notifications) {
-                  setState(() {
-                    _currentTab = MainTab.map; // Close notification panel
-                  });
-                  return; // Don't process other behaviors when closing notifications
-                }
-                
-                // THEN: Continue with existing long press behavior
-                // Only provide haptic feedback on mobile
-                if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-                  HapticFeedback.mediumImpact();
-                }
-                
-                setState(() {
-                  _destination = latLng;
-                  _selectedHotspot = null;
-                  _selectedSafeSpot = null; // Clear selections
-                });
-                _showLocationOptions(latLng);
-              },
+
+//LONG PRESS FOR MOBILE
+onLongPress: (tapPosition, latLng) {
+  if (_currentTab == MainTab.notifications) {
+    setState(() {
+      _currentTab = MainTab.map;
+    });
+    return;
+  }
+
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    HapticFeedback.mediumImpact();
+  }
+
+  setState(() {
+    _tempPinnedLocation = latLng; // Set temp pin for all platforms on long press
+    _selectedHotspot = null;
+    _selectedSafeSpot = null;
+    _destinationFromSearch = false;
+    // Clear _destination unless there's an active route
+    if (!_hasActiveRoute) {
+      _destination = null;
+    }
+  });
+},
+
               onMapEvent: (MapEvent mapEvent) {
                 final maxZoom = _getMaxZoomForMapType(_currentMapType);
                 if (mapEvent is MapEventMove && mapEvent.camera.zoom > maxZoom) {
@@ -8962,24 +9310,36 @@ onTap: (tapPosition, latLng) {
               ],
 
               // Enhanced Main markers layer (current position and destination) - MINIMIZED
-              MarkerLayer(
-                markers: [
-                  if (_currentPosition != null)
-                    Marker(
-                      point: _currentPosition!,
-                      width: 50, // Reduced from 60
-                      height: 50, // Reduced from 60
-                      child: _buildEnhancedCurrentLocationMarker(),
-                    ),
-                  if (_destination != null)
-                    Marker(
-                      point: _destination!,
-                      width: 40, // Reduced from 50
-                      height: 40, // Reduced from 50
-                      child: _buildEnhancedDestinationMarker(),
-                    ),
-                ],
-              ),
+           MarkerLayer(
+  markers: [
+    if (_currentPosition != null)
+      Marker(
+        point: _currentPosition!,
+        width: 50,
+        height: 50,
+        child: _buildEnhancedCurrentLocationMarker(),
+      ),
+    
+    // Temporary pin marker with options button
+    if (_tempPinnedLocation != null && _tempPinnedLocation != _destination)
+      Marker(
+        point: _tempPinnedLocation!,
+        width: 120, // Same width as searched destination to accommodate button
+        height: 40,
+        child: _buildTempPinMarker(),
+      ),
+    
+    if (_destination != null)
+      Marker(
+        point: _destination!,
+        width: _destinationFromSearch ? 120 : 40,
+        height: 40,
+        child: _destinationFromSearch 
+            ? _buildSearchDestinationMarker()
+            : _buildEnhancedDestinationMarker(),
+      ),
+  ],
+),
               
 // FIXED: Hotspots layer with stable markers and labels
 Consumer<HotspotFilterService>(
@@ -9414,6 +9774,15 @@ if (_userProfile != null)
   );
 }
 
+get isSelected_ => null;
+
+bool get isLargeScreen {
+  final mediaQuery = MediaQuery.of(context);
+  return mediaQuery.size.width > 600; 
+}
+
+
+
 // HOTSPOT MARKER - Fixed to keep marker stable like safe spots
 Widget _buildStableHotspotMarker({
   required Map<String, dynamic> hotspot,
@@ -9783,6 +10152,190 @@ Widget _buildEnhancedDestinationMarker() {
           Icons.location_pin,
           color: Colors.red, // Bright red for visibility
           size: 28, // Reduced from 35
+        ),
+      ],
+    ),
+  );
+}
+
+// New method to build temporary pin marker with options button
+Widget _buildTempPinMarker() {
+  return Transform.rotate(
+    angle: -_currentMapRotation * pi / 180,
+    alignment: Alignment.center,
+    child: Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        // Main temporary pin (grey version)
+        const Stack(
+          alignment: Alignment.center,
+          children: [
+            Icon(
+              Icons.location_pin,
+              color: Colors.white,
+              size: 32,
+            ),
+            Icon(
+              Icons.location_pin,
+              color: Colors.blue,
+              size: 28,
+            ),
+          ],
+        ),
+
+        // "Options" button (same style as searched destination)
+        Positioned(
+          left: 70,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () {
+                if (_tempPinnedLocation != null) {
+                  _showLocationOptions(_tempPinnedLocation!);
+                }
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white.withOpacity(0.9),
+                      Colors.grey.shade200,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.black.withOpacity(0.1),
+                    width: 1,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.touch_app,
+                      color: Colors.black87,
+                      size: 12,
+                    ),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'Options',
+                      style: TextStyle(
+                        color: Colors.black87,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// New method to build destination marker with button for search selections
+Widget _buildSearchDestinationMarker() {
+  return Transform.rotate(
+    angle: -_currentMapRotation * pi / 180,
+    alignment: Alignment.center,
+    child: Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        // Main destination pin
+        const Stack(
+          alignment: Alignment.center,
+          children: [
+            Icon(
+              Icons.location_pin,
+              color: Colors.white,
+              size: 32,
+            ),
+            Icon(
+              Icons.location_pin,
+              color: Colors.blue,
+              size: 28,
+            ),
+          ],
+        ),
+
+        // Lighter "Options" button
+        Positioned(
+          left: 70, // slightly closer
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () {
+                if (_destination != null) {
+                  _showLocationOptions(_destination!);
+                }
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white.withOpacity(0.9),
+                      Colors.grey.shade200,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.black.withOpacity(0.1),
+                    width: 1,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.touch_app,
+                      color: Colors.black87,
+                      size: 12,
+                    ),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'Options',
+                      style: TextStyle(
+                        color: Colors.black87,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ],
     ),
@@ -11690,30 +12243,53 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
   try {
     final updateData = {
       'type_id': typeId,
-      'description': description,
+      'description': description.trim().isNotEmpty ? description.trim() : null,
       'time': dateTime.toIso8601String(),
       if (activeStatus != null) 'active_status': activeStatus,
       'updated_at': DateTime.now().toIso8601String(),
-      'last_updated_by': _userProfile?['id'], // Add last_updated_by
+      'last_updated_by': _userProfile?['id'],
     };
+
+    print('=== UPDATING HOTSPOT $id ===');
+    print('Update data: $updateData');
 
     final response = await Supabase.instance.client
         .from('hotspot')
         .update(updateData)
         .eq('id', id)
-        .select('''*, crime_type: type_id (id, name, level, category)''')
+        .select('''
+          *,
+          crime_type: type_id (id, name, level, category, description)
+        ''')
         .single();
 
-    if (mounted) {
-      await _loadHotspots();
-    }
+    print('✅ Hotspot updated successfully: ${response['id']}');
+    
+    // Add a small delay to ensure real-time triggers properly
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    // Fallback: If real-time doesn't update within 2 seconds, force reload
+    Timer(const Duration(seconds: 2), () async {
+      if (mounted) {
+        final currentHotspot = _hotspots.firstWhere(
+          (h) => h['id'] == id,
+          orElse: () => {},
+        );
+        
+        // Check if the update was applied (compare type_id)
+        if (currentHotspot.isNotEmpty && currentHotspot['type_id'] != typeId) {
+          print('🔄 Real-time update didn\'t apply, forcing reload...');
+          await _loadHotspots();
+        }
+      }
+    });
 
     return response;
   } catch (e) {
+    print('❌ Update error: $e');
     if (mounted) {
       _showSnackBar('Failed to update hotspot: ${e.toString()}');
     }
-    print('Update error details: $e');
     rethrow;
   }
 }
@@ -11775,12 +12351,6 @@ Future<void> _deleteHotspot(int id) async {
   }
 }
 
-bool get isLargeScreen {
-  final mediaQuery = MediaQuery.of(context);
-  return mediaQuery.size.width > 600; // Adjust threshold as needed
-}
-
-  get isSelected_ => null;
 
 
 
@@ -11967,7 +12537,7 @@ Widget _buildProximityAlert() {
   final distance = (closestHotspot['distance'] as double).round();
   final level = crimeType['level'] ?? 'unknown';
   
-  // Your existing color/icon logic...
+
   Color alertColor;
   IconData alertIcon;
   Color textColor = Colors.white;
@@ -12097,7 +12667,7 @@ Widget _buildProximityAlert() {
   );
 }
 
-// The floating animation wrapper - FIXED VERSION
+// PROXIMITY ALERT FLOATING
 Widget _buildAnimatedProximityAlert() {
   if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
     return const SizedBox.shrink();
@@ -12123,7 +12693,7 @@ Widget _buildAnimatedProximityAlert() {
 }
 
 
-// Updated _buildCurrentScreen method
+// BUILD CURRENT SCREEN
 Widget _buildCurrentScreen(bool isDesktop) {
   switch (_currentTab) {
     case MainTab.map:
@@ -12255,7 +12825,6 @@ Widget _buildCurrentScreen(bool isDesktop) {
                     ),
                   ),
                 ),
-                // REMOVED QuickAccessDesktopScreen from here - it's already rendered in _buildResponsiveDesktopLayout
               ],
             )
 : QuickAccessScreen(
@@ -12333,8 +12902,83 @@ Widget _buildCurrentScreen(bool isDesktop) {
           : _buildNotificationsScreen();
     case MainTab.profile:
       return _buildProfileScreen();
+
+       case MainTab.savePoints:
+      return isDesktop
+          ? Stack(
+              children: [
+                _buildMap(),
+                if (_isLoading && _currentPosition == null)
+                  const Center(child: CircularProgressIndicator()),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 16,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    child: Center(
+                      child: Container(
+                        width: 600,
+                        child: Row(
+                          children: [
+                            Expanded(child: _buildSearchBar(isWeb: isDesktop)),
+                            const SizedBox(width: 12),
+                            Container(
+                              width: 45,
+                              height: 45,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.08),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: IconButton(
+                                iconSize: 22,
+                                padding: EdgeInsets.zero,
+                                icon: Icon(
+                                  _userProfile == null ? Icons.login : Icons.logout,
+                                  color: Colors.grey.shade700,
+                                ),
+                                onPressed: _userProfile == null
+                                    ? () {
+                                        Navigator.pushReplacement(
+                                          context,
+                                          MaterialPageRoute(builder: (context) => const LoginScreen()),
+                                        );
+                                      }
+                                    : _showLogoutConfirmation,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                // SavePointDesktopScreen is rendered in _buildResponsiveDesktopLayout
+              ],
+            )
+          : SavePointScreen(
+              userProfile: _userProfile,
+              currentPosition: _currentPosition,
+              onNavigateToPoint: (point) {
+                _mapController.move(point, 16.0);
+                setState(() {
+                  _destination = point;
+                  _currentTab = MainTab.map; // Switch back to map
+                });
+              },
+              onShowOnMap: _showOnMap,
+              onGetSafeRoute: _getSafeRoute,
+              onUpdate: () => _loadSavePoints(),
+            );
   }
 }
+  
 
 
 
@@ -12509,55 +13153,96 @@ Widget _buildProfileScreen() {
 
 
 Future<List<LocationSuggestion>> _searchLocations(String query) async {
-  if (query.isEmpty || query.length < 2) return []; // Minimum 2 characters
+  if (query.isEmpty || query.length < 2) return [];
   
   try {
-    // Add timeout and better error handling
-    final response = await http.get(
-      Uri.parse('https://nominatim.openstreetmap.org/search?format=json&q=${Uri.encodeComponent(query)}&limit=10&countrycodes=ph'), // Add country code for better results
-      headers: {
-        'User-Agent': 'YourAppName/1.0 (contact@yourapp.com)', // Required by Nominatim
-      },
-    ).timeout(
-      const Duration(seconds: 10), // Add timeout
-      onTimeout: () => throw TimeoutException('Search request timed out', const Duration(seconds: 10)),
-    );
+    // Enhanced query processing with local knowledge
+    final processedQueries = _processQueryWithLocalKnowledge(query);
     
-    if (response.statusCode == 200) {
-      final List<dynamic> data = json.decode(response.body);
+    // Zamboanga City bounding box coordinates
+    final boundingBox = '121.9,6.8,122.3,7.0'; // left,bottom,right,top
+    
+    List<LocationSuggestion> allResults = [];
+    final Set<String> seenLocations = {}; // Avoid duplicates
+    
+    final headers = {
+      'User-Agent': 'ZamboangaLocationApp/1.0 (zamboanga@app.com)',
+      'Accept': 'application/json',
+      'Accept-Language': 'en,tl',
+    };
+    
+    // Search with multiple processed queries
+    for (final searchQuery in processedQueries) {
+      print('Searching for: $searchQuery'); // Debug log
       
-      if (data.isEmpty) {
-        return [];
-      }
+      final uri = Uri.parse('https://nominatim.openstreetmap.org/search')
+          .replace(queryParameters: {
+        'format': 'json',
+        'q': searchQuery,
+        'limit': '8',
+        'countrycodes': 'ph',
+        'bounded': searchQuery.contains('Zamboanga') ? '0' : '1',
+        'viewbox': boundingBox,
+        'addressdetails': '1',
+        'dedupe': '1',
+        'extratags': '1',
+      });
       
-      return data.map((item) {
-        try {
-          return LocationSuggestion(
-            displayName: item['display_name']?.toString() ?? 'Unknown location',
-            lat: double.tryParse(item['lat']?.toString() ?? '0') ?? 0.0,
-            lon: double.tryParse(item['lon']?.toString() ?? '0') ?? 0.0,
-          );
-        } catch (e) {
-          print('Error parsing location item: $e');
-          return null;
+      try {
+        final response = await http.get(uri, headers: headers)
+            .timeout(const Duration(seconds: 6));
+        
+        if (response.statusCode == 200) {
+          final List<dynamic> data = json.decode(response.body);
+          
+          for (final item in data) {
+            try {
+              final suggestion = LocationSuggestion.fromJson(item);
+              final key = '${suggestion.lat.toStringAsFixed(6)},${suggestion.lon.toStringAsFixed(6)}';
+              
+              if (!seenLocations.contains(key)) {
+                seenLocations.add(key);
+                allResults.add(suggestion);
+              }
+            } catch (e) {
+              print('Error parsing location item: $e');
+            }
+          }
         }
-      }).where((item) => item != null).cast<LocationSuggestion>().toList();
-    } else {
-      print('Search API returned status: ${response.statusCode}');
-      throw HttpException('Search service temporarily unavailable (${response.statusCode})');
+      } catch (e) {
+        print('Error with query "$searchQuery": $e');
+        continue; // Try next query
+      }
     }
-  } on TimeoutException catch (e) {
-    print('Search timeout: $e');
-    if (mounted) {
-      _showSnackBar('Search timeout - please try again');
-    }
-    return [];
-  } on SocketException catch (e) {
-    print('Network error during search: $e');
-    if (mounted) {
-      _showSnackBar('Network error - check your connection');
-    }
-    return [];
+    
+    if (allResults.isEmpty) return [];
+    
+    // Enhanced sorting with local preference
+    allResults.sort((a, b) {
+      // Check if either matches the original query closely
+      final aMatches = _matchesOriginalQuery(a.displayName, query);
+      final bMatches = _matchesOriginalQuery(b.displayName, query);
+      
+      if (aMatches && !bMatches) return -1;
+      if (!aMatches && bMatches) return 1;
+      
+      // Check if either is an establishment
+      final aIsEst = LocationSuggestion._isEstablishment({}, a.displayName);
+      final bIsEst = LocationSuggestion._isEstablishment({}, b.displayName);
+      
+      if (aIsEst && !bIsEst) return -1;
+      if (!aIsEst && bIsEst) return 1;
+      
+      // Then prioritize Zamboanga locations
+      if (a.isInZamboanga && !b.isInZamboanga) return -1;
+      if (!a.isInZamboanga && b.isInZamboanga) return 1;
+      
+      // Finally by relevance
+      return a.displayName.length.compareTo(b.displayName.length);
+    });
+    
+    return allResults.take(15).toList();
+    
   } catch (e) {
     print('Search error: $e');
     if (mounted) {
@@ -12567,16 +13252,117 @@ Future<List<LocationSuggestion>> _searchLocations(String query) async {
   }
 }
 
+// Local knowledge system for Zamboanga City
+List<String> _processQueryWithLocalKnowledge(String query) {
+  final lowerQuery = query.toLowerCase().trim();
+  final List<String> searchQueries = [];
+  
+  // Zamboanga City specific mappings
+  final Map<String, List<String>> localKnowledge = {
+    // Universities and Schools
+    'wmsu': ['Western Mindanao State University', 'Western Mindanao State University Zamboanga'],
+    'western mindanao': ['Western Mindanao State University'],
+    'ateneo': ['Ateneo de Zamboanga University', 'Ateneo de Zamboanga'],
+    'liceo': ['Liceo de Cagayan University Zamboanga', 'Liceo Zamboanga'],
+    'clsu': ['Claret School of Zamboanga'],
+    'notre dame': ['Notre Dame of Zamboanga University'],
+    
+    // Barangays
+    'putik': ['Putik Zamboanga City', 'Barangay Putik', 'Putik Barangay Zamboanga'],
+    'tetuan': ['Tetuan Zamboanga City', 'Barangay Tetuan'],
+    'tugbungan': ['Tugbungan Zamboanga City', 'Barangay Tugbungan'],
+    'sta catalina': ['Santa Catalina Zamboanga', 'Barangay Santa Catalina'],
+    'santa catalina': ['Santa Catalina Zamboanga', 'Barangay Santa Catalina'],
+    'tumaga': ['Tumaga Zamboanga City', 'Barangay Tumaga'],
+    'campo islam': ['Campo Islam Zamboanga', 'Barangay Campo Islam'],
+    'rio hondo': ['Rio Hondo Zamboanga', 'Barangay Rio Hondo'],
+    'la paz': ['La Paz Zamboanga City', 'Barangay La Paz'],
+    'divisoria': ['Divisoria Zamboanga City', 'Barangay Divisoria'],
+    
+    // Schools
+    'putik elementary': ['Putik Elementary School Zamboanga', 'Putik Elementary Zamboanga City'],
+    'don pablo lorenzo': ['Don Pablo Lorenzo Memorial High School'],
+    'zamboanga city high': ['Zamboanga City High School'],
+    
+    // Hospitals
+    'zamboanga medical': ['Zamboanga Medical Center', 'Zamboanga Medical Center Hospital'],
+    'brent hospital': ['Brent Hospital Zamboanga'],
+    'veterans memorial': ['Veterans Memorial Medical Center Zamboanga'],
+    
+    // Shopping Centers
+    'kcc mall': ['KCC Mall of Zamboanga', 'KCC Mall Zamboanga City'],
+    'southway mall': ['Southway Square Mall Zamboanga'],
+    'mindpro': ['Mindpro Citimall Zamboanga'],
+    
+    // Areas/Districts
+    'downtown': ['Downtown Zamboanga City'],
+    'canelar': ['Canelar Zamboanga City', 'Barangay Canelar'],
+    'pasonanca': ['Pasonanca Zamboanga City'],
+    'guiwan': ['Guiwan Zamboanga City', 'Barangay Guiwan'],
+    
+    // Transportation
+    'port': ['Port of Zamboanga', 'Zamboanga Port'],
+    'airport': ['Zamboanga Airport', 'Zamboanga International Airport'],
+  };
+  
+  // Check for exact matches first
+  if (localKnowledge.containsKey(lowerQuery)) {
+    searchQueries.addAll(localKnowledge[lowerQuery]!);
+  }
+  
+  // Check for partial matches
+  for (final key in localKnowledge.keys) {
+    if (lowerQuery.contains(key) || key.contains(lowerQuery)) {
+      searchQueries.addAll(localKnowledge[key]!);
+    }
+  }
+  
+  // Add original query variations
+  if (!query.toLowerCase().contains('zamboanga')) {
+    searchQueries.addAll([
+      '$query Zamboanga City',
+      '$query, Zamboanga City, Philippines',
+      'Barangay $query Zamboanga', // Try as barangay
+    ]);
+  }
+  
+  // Always include the original query
+  searchQueries.insert(0, query);
+  
+  // Remove duplicates while preserving order
+  final seen = <String>{};
+  return searchQueries.where((q) => seen.add(q.toLowerCase())).toList();
+}
+
+// Helper to check if result closely matches original query
+bool _matchesOriginalQuery(String displayName, String originalQuery) {
+  final lowerDisplay = displayName.toLowerCase();
+  final lowerQuery = originalQuery.toLowerCase();
+  
+  // Check for key terms from original query
+  final queryWords = lowerQuery.split(RegExp(r'\s+'));
+  final matchingWords = queryWords.where((word) => 
+      word.length > 2 && lowerDisplay.contains(word)).length;
+  
+  return matchingWords >= (queryWords.length * 0.6); // 60% word match
+}
+
+bool _destinationFromSearch = false;
+
+// Updated _onSuggestionSelected method
 void _onSuggestionSelected(LocationSuggestion suggestion) {
   final newPosition = LatLng(suggestion.lat, suggestion.lon);
   if (mounted) {
     setState(() {
       _currentTab = MainTab.map;
-      _destination = newPosition;
+      _destination = newPosition; // Sets red marker for search result
+      _destinationFromSearch = true;
+      _selectedHotspot = null;
+      _selectedSafeSpot = null;
+      _selectedSavePoint = null;
     });
-    _mapController.move(newPosition, 15.0);
+    _mapController.move(newPosition, 16.0);
     _searchController.text = suggestion.displayName;
-    _showLocationOptions(newPosition);
   }
 }
 
@@ -12603,18 +13389,155 @@ class LocationSuggestion {
   final String displayName;
   final double lat;
   final double lon;
+  final String? originalDisplayName;
+  final bool isInZamboanga;
 
   LocationSuggestion({
     required this.displayName,
     required this.lat,
     required this.lon,
+    this.originalDisplayName,
+    this.isInZamboanga = false,
   });
 
   factory LocationSuggestion.fromJson(Map<String, dynamic> json) {
+    final displayName = json['display_name']?.toString() ?? 'Unknown location';
+    final lat = double.tryParse(json['lat']?.toString() ?? '0') ?? 0.0;
+    final lon = double.tryParse(json['lon']?.toString() ?? '0') ?? 0.0;
+    
+    // Check if coordinates are within Zamboanga City bounds
+    final isInZamboanga = _isInZamboangaCity(lat, lon);
+    
+    // Smart formatting: only enhance if it's a basic address, preserve establishments
+    String formattedName = displayName;
+    final address = json['address'] as Map<String, dynamic>?;
+    
+    // Check if this is likely an establishment/POI vs just an address
+    final isEstablishment = _isEstablishment(json, displayName);
+    
+    if (!isEstablishment && address != null && isInZamboanga) {
+      // Only format basic addresses, not establishments
+      final List<String> nameParts = [];
+      
+      // For basic addresses, prioritize local components
+      if (address['house_number'] != null && address['road'] != null) {
+        nameParts.add('${address['house_number']} ${address['road']}');
+      } else if (address['road'] != null) {
+        nameParts.add(address['road'].toString());
+      }
+      
+      if (address['suburb'] != null) {
+        nameParts.add(address['suburb'].toString());
+      } else if (address['neighbourhood'] != null) {
+        nameParts.add(address['neighbourhood'].toString());
+      }
+      
+      if (nameParts.isNotEmpty) {
+        formattedName = nameParts.join(', ') + ', Zamboanga City';
+      }
+    } else if (isInZamboanga && !displayName.toLowerCase().contains('zamboanga')) {
+      // For establishments, just add Zamboanga context if missing
+      final parts = displayName.split(',');
+      if (parts.length > 2) {
+        // Keep the establishment name and main location, add Zamboanga context
+        formattedName = '${parts[0]}, ${parts[1]}, Zamboanga City';
+      } else {
+        formattedName = '$displayName, Zamboanga City';
+      }
+    }
+    
     return LocationSuggestion(
-      displayName: json['display_name']?.toString() ?? 'Unknown location',
-      lat: double.tryParse(json['lat']?.toString() ?? '0') ?? 0.0,
-      lon: double.tryParse(json['lon']?.toString() ?? '0') ?? 0.0,
+      displayName: formattedName,
+      lat: lat,
+      lon: lon,
+      originalDisplayName: displayName,
+      isInZamboanga: isInZamboanga,
     );
+  }
+  
+  // Helper to detect if this is an establishment/POI vs basic address
+  static bool _isEstablishment(Map<String, dynamic> json, String displayName) {
+    // Check OSM tags that indicate establishments
+    final tags = json['extratags'] as Map<String, dynamic>?;
+    if (tags != null) {
+      if (tags.containsKey('amenity') || 
+          tags.containsKey('shop') || 
+          tags.containsKey('office') ||
+          tags.containsKey('tourism') ||
+          tags.containsKey('leisure') ||
+          tags.containsKey('name')) {
+        return true;
+      }
+    }
+    
+    // Check display name for establishment keywords
+    final lowerDisplayName = displayName.toLowerCase();
+    final establishmentKeywords = [
+      // Educational institutions
+      'university', 'college', 'school', 'academy', 'institute', 'campus',
+      'elementary', 'high school', 'secondary',
+      'western mindanao', 'wmsu', 'ateneo', 'liceo', 'notre dame', 'claret',
+      'zamboanga city high', 'don pablo lorenzo',
+      
+      // Medical facilities
+      'hospital', 'clinic', 'medical center', 'health center', 'pharmacy',
+      'zamboanga medical', 'brent hospital', 'veterans memorial',
+      
+      // Commercial establishments
+      'mall', 'market', 'plaza', 'shopping', 'store', 'shop', 'supermarket',
+      'kcc mall', 'southway', 'mindpro', 'citimall',
+      
+      // Religious places
+      'church', 'mosque', 'temple', 'cathedral', 'chapel',
+      
+      // Transportation
+      'airport', 'port', 'terminal', 'station',
+      
+      // Hospitality
+      'hotel', 'resort', 'inn', 'lodge', 'restaurant', 'cafe',
+      
+      // Government and services
+      'city hall', 'municipal', 'barangay hall', 'office', 'building', 'tower',
+      'bank', 'atm',
+      
+      // Entertainment and recreation
+      'park', 'plaza', 'gym', 'sports', 'recreation', 'theater', 'cinema',
+      
+      // Gas stations and utilities
+      'gas station', 'petron', 'shell', 'caltex',
+    ];
+    
+    return establishmentKeywords.any((keyword) => 
+        lowerDisplayName.contains(keyword));
+  }
+  
+  // Helper function to check if coordinates are within Zamboanga City
+  static bool _isInZamboangaCity(double lat, double lon) {
+    // Zamboanga City approximate boundaries
+    const double minLat = 6.8;
+    const double maxLat = 7.0;
+    const double minLon = 121.9;
+    const double maxLon = 122.3;
+    
+    return lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon;
+  }
+  
+  @override
+  String toString() {
+    return 'LocationSuggestion{displayName: $displayName, lat: $lat, lon: $lon, isInZamboanga: $isInZamboanga}';
+  }
+  
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is LocationSuggestion &&
+        other.displayName == displayName &&
+        other.lat == lat &&
+        other.lon == lon;
+  }
+  
+  @override
+  int get hashCode {
+    return displayName.hashCode ^ lat.hashCode ^ lon.hashCode;
   }
 }

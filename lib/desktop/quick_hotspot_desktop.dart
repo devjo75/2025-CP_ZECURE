@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Add this for Clipboard
 import 'package:latlong2/latlong.dart';
-import 'package:zecure/services/quick_hotspot_services.dart';
+import 'package:zecure/quick_access/quick_hotspot_services.dart';
 
 class HotspotQuickAccessDesktopWidgets {
   static String? get tempFilter => null;
