@@ -192,7 +192,7 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                       buildFilterToggle(
                         context,
                         'Property',
-                        FontAwesomeIcons.bagShopping,
+                        FontAwesomeIcons.key,
                         const Color.fromARGB(255, 139, 96, 96),
                         filterService.showProperty,
                         (value) => filterService.toggleProperty(),

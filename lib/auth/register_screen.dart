@@ -79,7 +79,7 @@ bool _canResendOTP = false;
       parent: _slideController,
       curve: Curves.easeOutBack,
     ));
-
+    _contactNumberController.text = '+63';
     _fadeController.forward();
     _slideController.forward();
   }
@@ -487,32 +487,32 @@ Widget _buildRegistrationTypeSelector() {
     final authService = AuthService(Supabase.instance.client);
     
     if (_registrationType == 'simple') {
-          await authService.signUpWithEmail(
-            email: _emailController.text.trim(),
-            password: _passwordController.text.trim(),
-            username: _usernameController.text.trim(),
-            firstName: _firstNameController.text.trim(),
-            lastName: _lastNameController.text.trim(),
-            middleName: _middleNameController.text.trim().isEmpty 
-                ? null 
-                : _middleNameController.text.trim(),
-            extName: _extNameController.text.trim().isEmpty 
-                ? null 
-                : _extNameController.text.trim(),
-            bday: _selectedDate,
-            gender: _selectedGender,
-            contactNumber: _contactNumberController.text.trim().isEmpty
-                ? null
-                : _contactNumberController.text.trim(),
-          );
+      await authService.signUpWithEmail(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+        username: _usernameController.text.trim(),
+        firstName: _firstNameController.text.trim(),
+        lastName: _lastNameController.text.trim(),
+        middleName: _middleNameController.text.trim().isEmpty 
+            ? null 
+            : _middleNameController.text.trim(),
+        extName: _extNameController.text.trim().isEmpty 
+            ? null 
+            : _extNameController.text.trim(),
+        bday: _selectedDate,
+        gender: _selectedGender,
+        contactNumber: _contactNumberController.text.trim().isEmpty
+            ? null
+            : _contactNumberController.text.trim(),
+      );
 
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const MapScreen()),
-            );
-          }
-        } else {
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const MapScreen()),
+        );
+      }
+    } else {
       // Updated verified registration with OTP
       await authService.signUpWithOTP(
         email: _emailController.text.trim(),
@@ -541,7 +541,12 @@ Widget _buildRegistrationTypeSelector() {
         _startResendTimer();
       }
     }
+  } on AuthException catch (e) {
+    // Handle specific AuthException errors with proper messages
+    _showErrorSnackBar(e.message);
   } catch (error) {
+    // Handle any other unexpected errors
+    print('Registration error: $error'); // For debugging
     _showErrorSnackBar('Registration failed. Please try again.');
   } finally {
     if (mounted) setState(() => _isLoading = false);
@@ -818,12 +823,16 @@ void _showErrorSnackBar(String message) {
     VoidCallback? onTap,
     String? Function(String?)? validator,
     Widget? suffixIcon,
+    TextInputType? keyboardType, // Add this
+    void Function(String)? onChanged, // Add this
   }) {
     return TextFormField(
       controller: controller,
       obscureText: isPassword,
       readOnly: readOnly,
       onTap: onTap,
+      keyboardType: keyboardType, // Add this
+      onChanged: onChanged, // Add this
       decoration: InputDecoration(
         labelText: label,
         labelStyle: GoogleFonts.poppins(
@@ -1300,19 +1309,43 @@ Widget _buildHeader(bool isWeb) {
             _buildSectionTitle('Contact Information'),
             const SizedBox(height: 14),
             
-            _buildInputField(
-              controller: _contactNumberController,
-              label: 'Contact Number (Optional)',
-              icon: Icons.phone_rounded,
-              validator: (value) {
-                if (value != null && value.isNotEmpty) {
-                  if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
-                    return 'Please enter a valid phone number';
-                  }
+          _buildInputField(
+            controller: _contactNumberController,
+            label: 'Contact Number (Optional)',
+            icon: Icons.phone_rounded,
+            keyboardType: TextInputType.number,
+            onChanged: (value) {
+              // Ensure it always starts with +63
+              if (!value.startsWith('+63')) {
+                _contactNumberController.text = '+63';
+                _contactNumberController.selection = TextSelection.fromPosition(
+                  TextPosition(offset: _contactNumberController.text.length),
+                );
+              }
+              
+              // Limit to +63 + 10 digits (13 characters total)
+              if (value.length > 13) {
+                _contactNumberController.text = value.substring(0, 13);
+                _contactNumberController.selection = TextSelection.fromPosition(
+                  TextPosition(offset: _contactNumberController.text.length),
+                );
+              }
+            },
+            validator: (value) {
+              if (value != null && value.isNotEmpty && value != '+63') {
+                // Check if it starts with +63 and has exactly 13 characters
+                if (!value.startsWith('+63') || value.length != 13) {
+                  return 'Must be in format +63xxxxxxxxxx (11 digits total)';
                 }
-                return null;
-              },
-            ),
+                // Check if the remaining 10 characters are all digits
+                String digits = value.substring(3);
+                if (!RegExp(r'^\d{10}$').hasMatch(digits)) {
+                  return 'Please enter valid digits after +63';
+                }
+              }
+              return null;
+            },
+          ),
             
             const SizedBox(height: 20),
             

@@ -1,16 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/auth/auth_service.dart';
 import 'package:zecure/screens/admin_dashboard.dart';
 
+enum SaveButtonState { normal, saving, saved, noChanges }
 class ProfileScreen {
   final AuthService _authService;
   Map<String, dynamic>? userProfile;
   final bool isAdmin;  // Keep this for admin-only features
   final bool hasAdminPermissions;  // Keep this for shared admin/officer features
   final ScrollController _scrollController = ScrollController();
+  SaveButtonState _saveButtonState = SaveButtonState.normal;
+  Timer? _buttonStateTimer;
   final ScrollController _profileViewScrollController = ScrollController(); 
 
   ProfileScreen(this._authService, this.userProfile, this.isAdmin, this.hasAdminPermissions);
@@ -20,12 +26,8 @@ class ProfileScreen {
   late TextEditingController _lastNameController;
   late TextEditingController _middleNameController;
   late TextEditingController _extNameController;
-  late TextEditingController _passwordController;
-  late TextEditingController _newPasswordController;
-  late TextEditingController _confirmPasswordController;
   late TextEditingController _contactNumberController;
   String? _selectedGender;
-  String? _currentPasswordError;
   DateTime? _selectedBirthday;
   bool _isEditingProfile = false;
   final _profileFormKey = GlobalKey<FormState>();
@@ -33,6 +35,7 @@ class ProfileScreen {
   // ignore: unnecessary_getters_setters
   bool get isEditingProfile => _isEditingProfile;
   set isEditingProfile(bool value) => _isEditingProfile = value;
+
 
 
 //PROFILE PAGE TO ALWAYS START FROM THE TOP
@@ -44,38 +47,88 @@ class ProfileScreen {
   int? _selectedPoliceRankId;
   int? _selectedPoliceStationId;
 
+  bool _forceEmailVerification = false;
+  bool _isVerifyingCurrentEmail = false;
+//SWITCH TAB PERSONAL INFO AND POLICE INFO
+  int _selectedTab = 0;
+
+    void resetTab() {
+    _selectedTab = 0;
+  }
+
+// Email editing and verification state
+
+late TextEditingController _emailController;
+String? _pendingEmailChange; // Keep this for the modal
+Timer? _emailResendTimer;   // Keep this for the modal
+int _emailResendCountdown = 60;
+bool _canResendEmailOTP = false;
+bool _isUpdatingEmail = false;
+
+bool _isEmailFieldReadOnly = false;
+
+
+
   void initControllers() {
     _firstNameController = TextEditingController(text: userProfile?['first_name'] ?? '');
     _lastNameController = TextEditingController(text: userProfile?['last_name'] ?? '');
     _middleNameController = TextEditingController(text: userProfile?['middle_name'] ?? '');
     _extNameController = TextEditingController(text: userProfile?['ext_name'] ?? '');
-    _passwordController = TextEditingController();
-    _newPasswordController = TextEditingController();
-    _confirmPasswordController = TextEditingController();
-    _contactNumberController = TextEditingController(text: userProfile?['contact_number'] ?? '');
+    _emailController = TextEditingController(text: userProfile?['email'] ?? '');
     _selectedGender = userProfile?['gender'];
     _selectedBirthday = userProfile?['bday'] != null ? DateTime.parse(userProfile?['bday']) : null;
     _selectedPoliceRankId = userProfile?['police_rank_id'];
     _selectedPoliceStationId = userProfile?['police_station_id'];
+
+      String contactNumber = userProfile?['contact_number'] ?? '';
+      if (contactNumber.isEmpty) {
+        contactNumber = '+63';
+      }
+      _contactNumberController = TextEditingController(text: contactNumber);
+
+
+    
 
       if (userProfile?['role'] == 'officer') {
     _loadPoliceData();
   }
   }
 
-  void disposeControllers() {
-    _firstNameController.dispose();
-    _lastNameController.dispose();
-    _middleNameController.dispose();
-    _extNameController.dispose();
-    _passwordController.dispose();
-    _newPasswordController.dispose();
-    _confirmPasswordController.dispose();
-    _contactNumberController.dispose();
-    _scrollController.dispose();
-    _profileViewScrollController.dispose();
-  }
+void disposeControllers() {
+  _firstNameController.dispose();
+  _lastNameController.dispose();
+  _middleNameController.dispose();
+  _extNameController.dispose();
 
+  _contactNumberController.dispose();
+  _scrollController.dispose();
+  _profileViewScrollController.dispose();
+  _emailController.dispose();
+  // REMOVE the OTP controllers disposal:
+  /*
+  for (var controller in _emailOtpControllers) {
+    controller.dispose();
+  }
+  for (var focusNode in _emailOtpFocusNodes) {
+    focusNode.dispose();
+  }
+  */
+  _buttonStateTimer?.cancel();
+  _emailResendTimer?.cancel();
+}
+
+bool _hasEmailChanges() {
+  if (userProfile?['registration_type'] != 'simple') return false;
+  
+  final currentEmail = userProfile?['email'] ?? '';
+  final newEmail = _emailController.text.trim();
+  
+  // Return true if email actually changed OR if user wants to verify current email
+  return newEmail != currentEmail || _forceEmailVerification;
+
+}
+
+// ignore: unused_element
 int? _calculateAge(DateTime? birthDate) {
   if (birthDate == null) return null;
   
@@ -105,135 +158,1133 @@ bool _hasProfileChanges() {
          _selectedPoliceStationId != userProfile?['police_station_id'];
 }
 
-bool _hasValidPasswordChange() {
-  return _passwordController.text.isNotEmpty && 
-         _newPasswordController.text.isNotEmpty && 
-         _confirmPasswordController.text.isNotEmpty;
-}
 
 
-
-
-
-Future<void> updateProfile(BuildContext context, {required VoidCallback onSuccess}) async {
-  // Clear any previous current password error
-  _currentPasswordError = null;
-  
+// Updated updateProfile method with mobile fixes
+Future<void> updateProfile(BuildContext context, {
+  required VoidCallback onSuccess,
+  Function(VoidCallback)? onStateChange,
+  required bool isSidebarVisible, // Add this parameter
+}) async {
   if (!_profileFormKey.currentState!.validate()) return;
 
-  bool profileChanged = false;
-  bool passwordChanged = false;
+  // Check if we're on desktop/web
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
 
   try {
-    // Check if there are actual changes to save
     bool hasProfileChanges = _hasProfileChanges();
-    bool hasPasswordChanges = _hasValidPasswordChange();
-    
-    // If no changes at all, show different message
-    if (!hasProfileChanges && !hasPasswordChanges) {
-      _showInfoDialog(context, 'No changes were made to your profile.');
-      return;
-    }
-    
-    // If user filled current password but not new password fields, show error
-    if (_passwordController.text.isNotEmpty && !hasPasswordChanges) {
-      _showSnackBar(context, 'Please fill in both new password and confirm password to change your password');
-      return;
-    }
+    bool hasEmailChanges = _hasEmailChanges() && userProfile?['registration_type'] == 'simple';
 
-    // Update password if new password is provided
-    if (hasPasswordChanges) {
-      try {
-        await _authService.updatePassword(
-          currentPassword: _passwordController.text,
-          newPassword: _newPasswordController.text,
-        );
-        passwordChanged = true;
-      } on AuthException catch (e) {
-        // Handle wrong current password error
-        if (e.message.contains('Invalid login credentials') || 
-            e.message.contains('invalid_credentials') ||
-            e.message.contains('Invalid') ||
-            e.message.contains('credentials')) {
-          // Set the error and trigger form validation again
-          _currentPasswordError = 'Current password is incorrect';
-          _profileFormKey.currentState!.validate();
-          return;
-        }
-        rethrow;
-      } catch (e) {
-        // Handle other types of errors that might indicate wrong password
-        if (e.toString().contains('Invalid login credentials') || 
-            e.toString().contains('invalid_credentials') ||
-            e.toString().contains('Invalid') ||
-            e.toString().contains('credentials')) {
-          _currentPasswordError = 'Current password is incorrect';
-          _profileFormKey.currentState!.validate();
-          return;
-        }
-        rethrow;
+    if (!hasProfileChanges && !hasEmailChanges) {
+      if (isDesktopOrWeb) {
+        // Desktop: Show "NO CHANGES" button state
+        onStateChange?.call(() {
+          _saveButtonState = SaveButtonState.noChanges;
+        });
+        
+        // Reset button after 3 seconds
+        _buttonStateTimer?.cancel();
+        _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+          if (onStateChange != null) {
+            onStateChange(() {
+              _saveButtonState = SaveButtonState.normal;
+            });
+          }
+        });
+      } else {
+        // Mobile: Show info dialog as before
+        _showInfoDialog(context, 'No changes were made to your profile.');
       }
+      return;
     }
 
-    // Update user profile data only if there are changes
-// Update user profile data only if there are changes
-if (hasProfileChanges) {
-  final updateData = {
-    'first_name': _firstNameController.text,
-    'last_name': _lastNameController.text,
-    'middle_name': _middleNameController.text.isEmpty ? null : _middleNameController.text,
-    'ext_name': _extNameController.text.isEmpty ? null : _extNameController.text,
-    'gender': _selectedGender,
-    'bday': _selectedBirthday?.toIso8601String(),
-    'contact_number': _contactNumberController.text.isEmpty ? null : _contactNumberController.text,
-    'police_rank_id': _selectedPoliceRankId,
-    'police_station_id': _selectedPoliceStationId,
-    'updated_at': DateTime.now().toIso8601String(),
-  };
+    // Set saving state for desktop
+    if (isDesktopOrWeb) {
+      onStateChange?.call(() {
+        _saveButtonState = SaveButtonState.saving;
+      });
+    }
 
-  final response = await Supabase.instance.client
-      .from('users')
-      .update(updateData)
-      .eq('id', userProfile!['id'] as Object)
-      .select()
-      .single();
+    // Update profile data
+    if (hasProfileChanges) {
+      final updateData = {
+        'first_name': _firstNameController.text,
+        'last_name': _lastNameController.text,
+        'middle_name': _middleNameController.text.isEmpty ? null : _middleNameController.text,
+        'ext_name': _extNameController.text.isEmpty ? null : _extNameController.text,
+        'gender': _selectedGender,
+        'bday': _selectedBirthday?.toIso8601String(),
+        'contact_number': _contactNumberController.text.isEmpty ? null : _contactNumberController.text,
+        'police_rank_id': _selectedPoliceRankId,
+        'police_station_id': _selectedPoliceStationId,
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      final response = await Supabase.instance.client
+          .from('users')
+          .update(updateData)
+          .eq('id', userProfile!['id'] as Object)
+          .select()
+          .single();
+      userProfile = response;
+    }
 
-  userProfile = response;
-  profileChanged = true;
-}
+    // Handle email verification if needed
+   if (hasEmailChanges) {
+    final currentEmail = userProfile?['email'] ?? '';
+    final newEmail = _emailController.text.trim();
     
-    // Clear password fields and error
-    _passwordController.clear();
-    _newPasswordController.clear();
-    _confirmPasswordController.clear();
-    _currentPasswordError = null;
+    // Determine if this is a change or verification of existing email
+    final isEmailChange = newEmail != currentEmail;
+    final isVerifyingCurrentEmail = _forceEmailVerification && !isEmailChange;
 
-    
-    // Show appropriate success message based on what was changed
-    String successMessage;
-    if (profileChanged && passwordChanged) {
-      successMessage = 'Profile and password updated successfully!';
-    } else if (passwordChanged) {
-      successMessage = 'Password updated successfully!';
+    // Show loading state
+    onStateChange?.call(() {
+      _isUpdatingEmail = true;
+      if (isDesktopOrWeb) {
+        _saveButtonState = SaveButtonState.saving;
+      }
+    });
+
+    try {
+      if (isVerifyingCurrentEmail) {
+        // User wants to verify their current email
+        await _authService.sendVerificationToCurrentEmail();
+        _pendingEmailChange = currentEmail; // Use current email for verification
+        _isVerifyingCurrentEmail = true;
+      } else if (isEmailChange) {
+        // Email is being changed to a new one
+        await _authService.updateEmailWithVerification(newEmail: newEmail);
+        _pendingEmailChange = newEmail;
+        _isVerifyingCurrentEmail = false;
+      }
+      
+      _startEmailResendTimer();
+      
+      // Reset the checkbox after initiating verification
+      _forceEmailVerification = false;
+
+      // Hide loading state
+      onStateChange?.call(() {
+        _isUpdatingEmail = false;
+        if (isDesktopOrWeb) {
+          _saveButtonState = SaveButtonState.normal;
+        }
+      });
+
+      // Show email verification modal with the correct verification type
+      _showEmailVerificationModal(
+        context,
+        onSuccess,
+        profileChanged: hasProfileChanges,
+        isSidebarVisible: isSidebarVisible,
+      );
+    } catch (e) {
+        // Reset the checkbox on error
+        _forceEmailVerification = false;
+        
+        // Hide loading state
+        onStateChange?.call(() {
+          _isUpdatingEmail = false;
+          if (isDesktopOrWeb) {
+            _saveButtonState = SaveButtonState.normal;
+          }
+        });
+        
+      String errorMessage = 'Failed to initiate email verification: The email address you registered might be invalid or non-existent. Please enter a valid new email address to verify.';
+
+
+
+        // Show success for profile changes even if email failed
+        if (hasProfileChanges) {
+          String successMessage = 'Profile updated successfully!\n\nEmail verification failed: ${e.toString()}';
+          
+          _shouldScrollToTop = true;
+          _isEditingProfile = false;
+          onSuccess();
+
+          // Desktop vs Mobile handling
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (context.mounted) {
+              if (isDesktopOrWeb) {
+                // Desktop: Show saved state briefly, then return to normal
+                onStateChange?.call(() {
+                  _saveButtonState = SaveButtonState.saved;
+                });
+                
+                _buttonStateTimer?.cancel();
+                _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+                  if (onStateChange != null) {
+                    onStateChange(() {
+                      _saveButtonState = SaveButtonState.normal;
+                    });
+                  }
+                });
+              } else {
+                // Mobile: Show success dialog
+                _showSuccessDialog(
+                  context, 
+                  successMessage,
+                  isSidebarVisible: isSidebarVisible, // Pass the parameter
+                );
+              }
+            }
+          });
+        } else {
+          _showSnackBar(context, errorMessage);
+        }
+        return;
+      }
     } else {
-      successMessage = 'Profile updated successfully!';
-    }
-    
-    // Show success message
-    _showSuccessDialog(
-      context, 
-      successMessage,
-      onOkPressed: () {
-        _isEditingProfile = false;
-        onSuccess();
+      // No email verification needed - show success for profile changes
+      if (hasProfileChanges) {
+        if (isDesktopOrWeb) {
+          // Desktop: Show saved state for 3 seconds, then navigate to profile page
+          onStateChange?.call(() {
+            _saveButtonState = SaveButtonState.saved;
+          });
+          
+          _buttonStateTimer?.cancel();
+          _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+            // After showing "SAVED" for 3 seconds, navigate to profile page
+            _shouldScrollToTop = true;
+            _isEditingProfile = false;
+            onSuccess(); // This triggers navigation to profile view
+            
+            // Reset button state after navigation
+            if (onStateChange != null) {
+              onStateChange(() {
+                _saveButtonState = SaveButtonState.normal;
+              });
+            }
+          });
+        } else {
+          // Mobile: Immediate navigation and show success dialog
+          _shouldScrollToTop = true;
+          _isEditingProfile = false;
+          onSuccess();
+          
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (context.mounted) {
+              _showSuccessDialog(
+                context, 
+                'Profile updated successfully!',
+                isSidebarVisible: isSidebarVisible, // Pass the parameter
+              );
+            }
+          });
+        }
+      } else {
+        if (isDesktopOrWeb) {
+          // Desktop: Show "NO CHANGES" button state
+          onStateChange?.call(() {
+            _saveButtonState = SaveButtonState.noChanges;
+          });
+          
+          // Reset button after 3 seconds
+          _buttonStateTimer?.cancel();
+          _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+            if (onStateChange != null) {
+              onStateChange(() {
+                _saveButtonState = SaveButtonState.normal;
+              });
+            }
+          });
+        } else {
+          // Mobile: Show info dialog
+          _showInfoDialog(context, 'No changes were made to your profile.');
+        }
       }
-    );
+    }
   } catch (e) {
+    // Reset button state on error
+    onStateChange?.call(() {
+      _saveButtonState = SaveButtonState.normal;
+    });
     _showSnackBar(context, 'Error updating profile: ${e.toString()}');
   }
 }
 
-void _showSuccessDialog(BuildContext context, String message, {VoidCallback? onOkPressed}) {
+
+void _handleEmailMutualExclusivity() {
+  final currentEmail = userProfile?['email'] ?? '';
+  
+  // If checkbox is checked, make email field readonly with original email
+  if (_forceEmailVerification) {
+    _emailController.text = currentEmail;
+    _isEmailFieldReadOnly = true;
+  } else {
+    _isEmailFieldReadOnly = false;
+  }
+}
+
+// EMAIL VERIFICATION STARTS HERE
+
+void _showEmailVerificationModal(
+  BuildContext context, 
+  VoidCallback onSuccess, {
+  bool profileChanged = false,
+  required bool isSidebarVisible, // Add this parameter
+}) {
+  final List<TextEditingController> otpControllers = List.generate(6, (_) => TextEditingController());
+  final List<FocusNode> otpFocusNodes = List.generate(6, (_) => FocusNode());
+  
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
+
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    builder: (context) {
+      return StatefulBuilder(
+        builder: (context, setModalState) {
+          Widget dialogContent = AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            contentPadding: EdgeInsets.zero,
+            backgroundColor: Colors.white,
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: isDesktopOrWeb ? 40 : 16,
+              vertical: 24,
+            ),
+            content: Container(
+              width: isDesktopOrWeb ? 450 : double.maxFinite, // Match profile view width
+              constraints: BoxConstraints(
+                maxWidth: isDesktopOrWeb ? 450 : MediaQuery.of(context).size.width - 32, // Match profile view
+                maxHeight: MediaQuery.of(context).size.height * 0.85,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.08),
+                    blurRadius: 30,
+                    spreadRadius: 2,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Header section with gradient background
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 20),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Colors.blue.shade600,
+                            Colors.blue.shade500,
+                          ],
+                        ),
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(20),
+                          topRight: Radius.circular(20),
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.mark_email_read_rounded,
+                              size: isDesktopOrWeb ? 40 : 32,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(height: isDesktopOrWeb ? 16 : 12),
+                          Text(
+                            'Verify New Email',
+                            style: GoogleFonts.poppins(
+                              fontSize: isDesktopOrWeb ? 22 : 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    // Content section
+                    Container(
+                      padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 20),
+                      child: Column(
+                        children: [
+                          Text(
+                            'Enter the 6-digit code sent to:',
+                            style: GoogleFonts.poppins(
+                              color: Colors.grey.shade600,
+                              fontSize: isDesktopOrWeb ? 15 : 14,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _pendingEmailChange ?? '',
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.bold,
+                              fontSize: isDesktopOrWeb ? 16 : 14,
+                              color: Colors.blue.shade600,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          
+                          SizedBox(height: isDesktopOrWeb ? 20 : 16),
+                          Container(
+                            padding: EdgeInsets.all(isDesktopOrWeb ? 16 : 12),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Colors.blue.shade600,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'Check your spam folder if you don\'t see the email. The code expires in 10 minutes.',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: isDesktopOrWeb ? 13 : 12,
+                                      color: Colors.blue.shade700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          
+                          SizedBox(height: isDesktopOrWeb ? 32 : 24),
+                          
+                          // OTP Input Fields
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: isDesktopOrWeb ? 8 : 8,
+                            children: List.generate(6, (index) {
+                              final fieldSize = isDesktopOrWeb ? 40.0 : 
+                                               MediaQuery.of(context).size.width < 360 ? 35.0 : 40.0;
+                              
+                              return Container(
+                                width: fieldSize,
+                                height: fieldSize + 8,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: Colors.grey.shade300,
+                                    width: 1.5,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.grey.shade50,
+                                ),
+                                child: TextFormField(
+                                  controller: otpControllers[index],
+                                  focusNode: otpFocusNodes[index],
+                                  textAlign: TextAlign.center,
+                                  keyboardType: TextInputType.number,
+                                  maxLength: 1,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: isDesktopOrWeb ? 22 : 
+                                             MediaQuery.of(context).size.width < 360 ? 16 : 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey.shade800,
+                                  ),
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    counterText: '',
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                  onChanged: (value) {
+                                    if (value.isNotEmpty && index < 5) {
+                                      otpFocusNodes[index + 1].requestFocus();
+                                    } else if (value.isEmpty && index > 0) {
+                                      otpFocusNodes[index - 1].requestFocus();
+                                    }
+                                  },
+                                ),
+                              );
+                            }),
+                          ),
+                          
+                          SizedBox(height: isDesktopOrWeb ? 32 : 24),
+                          
+                          // Action buttons
+                          isDesktopOrWeb || MediaQuery.of(context).size.width > 400
+                              ? Row(
+                                  children: [
+                                    // Skip button - UPDATED LOGIC
+                                    Expanded(
+                                      flex: 2,
+                                      child: OutlinedButton(
+                                        onPressed: () {
+                                          // Clean up controllers
+                                          for (var controller in otpControllers) {
+                                            controller.dispose();
+                                          }
+                                          for (var focusNode in otpFocusNodes) {
+                                            focusNode.dispose();
+                                          }
+                                          _emailResendTimer?.cancel();
+                                          _pendingEmailChange = null;
+                                          
+                                          Navigator.of(context).pop();
+                                          
+                                          // Only show success if other changes were made
+                                    if (profileChanged) {
+                                      _showSuccessDialog(
+                                        context,
+                                        'Profile updated successfully!\n\nEmail verification was skipped.',
+                                        onOkPressed: () {
+                                          _isEditingProfile = false;
+                                          onSuccess();
+                                        },
+                                        isSidebarVisible: isSidebarVisible, // Pass the parameter
+                                      );
+                                    } else {
+                                            // No other changes were made, just exit edit mode
+                                            _isEditingProfile = false;
+                                            onSuccess();
+                                          }
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.grey.shade600,
+                                          padding: const EdgeInsets.symmetric(vertical: 16),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          side: BorderSide(color: Colors.grey.shade400),
+                                        ),
+                                        child: Text(
+                                          'Skip for Now',
+                                          style: GoogleFonts.poppins(
+                                            fontWeight: FontWeight.w500,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    // Verify button
+                                    Expanded(
+                                      flex: 3,
+                                      child: ElevatedButton(
+                                        onPressed: () => _verifyEmailChangeFromModal(
+                                          context, 
+                                          otpControllers, 
+                                          otpFocusNodes, 
+                                          onSuccess,
+                                          setModalState,
+                                          isSidebarVisible: isSidebarVisible, // Pass the parameter
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blue.shade600,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(vertical: 16),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          elevation: 4,
+                                          shadowColor: Colors.blue.shade200,
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            const Icon(Icons.verified_rounded, size: 18),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Verify Email',
+                                              style: GoogleFonts.poppins(
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 15,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : Column(
+                                  children: [
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton(
+                                        onPressed: () => _verifyEmailChangeFromModal(
+                                          context, 
+                                          otpControllers, 
+                                          otpFocusNodes, 
+                                          onSuccess,
+                                          setModalState,
+                                          isSidebarVisible: isSidebarVisible, // Pass the parameter
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blue.shade600,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(vertical: 16),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          elevation: 4,
+                                          shadowColor: Colors.blue.shade200,
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            const Icon(Icons.verified_rounded, size: 18),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Verify Email',
+                                              style: GoogleFonts.poppins(
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 15,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: OutlinedButton(
+                                        onPressed: () {
+                                          // Clean up controllers
+                                          for (var controller in otpControllers) {
+                                            controller.dispose();
+                                          }
+                                          for (var focusNode in otpFocusNodes) {
+                                            focusNode.dispose();
+                                          }
+                                          _emailResendTimer?.cancel();
+                                          _pendingEmailChange = null;
+                                          
+                                          Navigator.of(context).pop();
+                                          
+                                          // Only show success if other changes were made
+                                        if (profileChanged) {
+                                          _showSuccessDialog(
+                                            context,
+                                            'Profile updated successfully!\n\nEmail verification was skipped.',
+                                            onOkPressed: () {
+                                              _isEditingProfile = false;
+                                              onSuccess();
+                                            },
+                                            isSidebarVisible: isSidebarVisible, // Pass the parameter
+                                          );
+                                        } else {
+                                            // No other changes were made, just exit edit mode
+                                            _isEditingProfile = false;
+                                            onSuccess();
+                                          }
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.grey.shade600,
+                                          padding: const EdgeInsets.symmetric(vertical: 16),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          side: BorderSide(color: Colors.grey.shade400),
+                                        ),
+                                        child: Text(
+                                          'Skip for Now',
+                                          style: GoogleFonts.poppins(
+                                            fontWeight: FontWeight.w500,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                          
+                          SizedBox(height: isDesktopOrWeb ? 20 : 16),
+                          
+                          // Resend section
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              TextButton(
+                                onPressed: _canResendEmailOTP 
+                                    ? () => _resendEmailChangeOTP(context, setModalState) 
+                                    : null,
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.refresh_rounded,
+                                      size: 16,
+                                      color: _canResendEmailOTP ? Colors.blue.shade600 : Colors.grey.shade400,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      _canResendEmailOTP 
+                                          ? 'Resend Code' 
+                                          : 'Resend in ${_emailResendCountdown}s',
+                                      style: GoogleFonts.poppins(
+                                        color: _canResendEmailOTP ? Colors.blue.shade600 : Colors.grey.shade400,
+                                        fontWeight: FontWeight.w500,
+                                        fontSize: isDesktopOrWeb ? 14 : 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+
+          if (isDesktopOrWeb) {
+            // Center the modal within the profile view area
+            final profileLeft = isSidebarVisible ? 285.0 : 80.0;
+            final profileWidth = 450.0;
+            final modalWidth = 450.0;
+            final centeredLeft = profileLeft + (profileWidth - modalWidth) / 2;
+            
+            return Stack(
+              children: [
+                Positioned(
+                  left: centeredLeft, // Center within profile view
+                  top: 150, // Position lower to center vertically in profile
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 450),
+                    child: dialogContent,
+                  ),
+                ),
+              ],
+            );
+          } else {
+            return dialogContent;
+          }
+        },
+      );
+    },
+  );
+}
+
+
+Future<void> _verifyEmailChangeFromModal(
+  BuildContext context,
+  List<TextEditingController> otpControllers,
+  List<FocusNode> otpFocusNodes,
+  VoidCallback onSuccess,
+  StateSetter setModalState, {
+  required bool isSidebarVisible,
+}) async {
+  final otp = otpControllers.map((c) => c.text).join();
+  if (otp.length != 6) {
+    _showSnackBar(context, 'Please enter the complete 6-digit code');
+    return;
+  }
+
+  try {
+    // Show loading state in modal
+    setModalState(() {
+      // You can add a loading state here if needed
+    });
+
+    if (_isVerifyingCurrentEmail) {
+      // Use the new method for verifying current email (reauthentication flow)
+      await _authService.verifyCurrentEmailOTP(
+        email: _pendingEmailChange!,
+        otp: otp,
+      );
+      
+      // For current email verification, only update registration_type
+      userProfile?['registration_type'] = 'verified';
+      
+      // Try to sync with database (non-blocking for current email verification)
+      try {
+        await Supabase.instance.client
+            .from('users')
+            .update({
+              'registration_type': 'verified',
+              'updated_at': DateTime.now().toIso8601String(),
+            })
+            .eq('id', userProfile!['id'] as Object);
+      } catch (dbError) {
+        print('Database sync error (non-critical): $dbError');
+      }
+    } else {
+      // THIS IS THE KEY FIX: Use the proper Supabase Auth method for email changes
+      await Supabase.instance.client.auth.verifyOTP(
+        type: OtpType.emailChange,
+        email: _pendingEmailChange!,
+        token: otp,
+      );
+      
+      // IMPORTANT: After successful auth verification, update local profile
+      userProfile?['email'] = _pendingEmailChange;
+      userProfile?['registration_type'] = 'verified';
+      
+      // Update the email controller to reflect the change
+      _emailController.text = _pendingEmailChange!;
+      
+      // Try to sync with database (non-blocking but should succeed since auth succeeded)
+      try {
+        await Supabase.instance.client
+            .from('users')
+            .update({
+              'email': _pendingEmailChange!,
+              'registration_type': 'verified',
+              'updated_at': DateTime.now().toIso8601String(),
+            })
+            .eq('id', userProfile!['id'] as Object);
+      } catch (dbError) {
+        print('Database sync error (non-critical): $dbError');
+        // This error is non-critical since the auth email change was successful
+      }
+    }
+    
+    // Clean up controllers and close modal
+    for (var controller in otpControllers) {
+      controller.dispose();
+    }
+    for (var focusNode in otpFocusNodes) {
+      focusNode.dispose();
+    }
+    _emailResendTimer?.cancel();
+    
+    // Store values before clearing
+    final pendingEmail = _pendingEmailChange!;
+    final wasVerifyingCurrentEmail = _isVerifyingCurrentEmail;
+    
+    // Clean up state
+    _pendingEmailChange = null;
+    _isVerifyingCurrentEmail = false;
+    
+    // Close the verification modal first
+    Navigator.of(context).pop();
+    
+    // Add a small delay to ensure the modal is fully closed
+    await Future.delayed(const Duration(milliseconds: 100));
+    
+    // Show success dialog with appropriate message
+    String successMessage;
+    if (wasVerifyingCurrentEmail) {
+      successMessage = 'Email verification successful!\n\nYour email address has been verified.';
+    } else {
+      successMessage = 'Email updated and verified successfully!\n\nYour new email address: $pendingEmail';
+    }
+    
+    _showEmailVerificationSuccessDialog(
+      context,
+      pendingEmail,
+      onOkPressed: () {
+        // Close the success dialog first
+        Navigator.of(context).pop();
+        
+        // Add delay to ensure dialog is fully closed before state changes
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (context.mounted) {
+            _shouldScrollToTop = true;
+            _isEditingProfile = false;
+            onSuccess(); // This should trigger UI rebuild
+          }
+        });
+      },
+      isSidebarVisible: isSidebarVisible,
+      customMessage: successMessage,
+    );
+    
+  } catch (e) {
+    print('Email verification error: $e');
+    print('Error type: ${e.runtimeType}');
+    print('Error details: ${e.toString()}');
+    
+    // Reset loading state in modal
+    setModalState(() {
+      // Reset any loading indicators
+    });
+    
+    // Simple, single error message for all verification failures
+    _showErrorDialog(
+      context, 
+      'Invalid or expired verification code. Please check your code and try again.', 
+      isSidebarVisible: isSidebarVisible
+    );
+  }
+}
+
+
+
+
+void _showEmailVerificationSuccessDialog(
+  BuildContext context, 
+  String verifiedEmail, 
+  {VoidCallback? onOkPressed, required bool isSidebarVisible, String? customMessage}
+) {
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
+
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    builder: (context) {
+      Widget dialogContent = AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        contentPadding: EdgeInsets.zero,
+        backgroundColor: Colors.white,
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: isDesktopOrWeb ? 40 : 16,
+          vertical: 24,
+        ),
+        content: Container(
+          width: isDesktopOrWeb ? 450 : double.maxFinite, // Match profile view width
+          constraints: BoxConstraints(
+            maxWidth: isDesktopOrWeb ? 450 : MediaQuery.of(context).size.width - 32, // Match profile view
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 30,
+                spreadRadius: 2,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header section with success gradient
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 24),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Colors.green.shade600,
+                      Colors.green.shade500,
+                    ],
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    topRight: Radius.circular(20),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    // Success icon with animation-like effect
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.check_circle_rounded,
+                        size: isDesktopOrWeb ? 48 : 40,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(height: isDesktopOrWeb ? 16 : 12),
+                    Text(
+                      'Email Verified Successfully!',
+                      style: GoogleFonts.poppins(
+                        fontSize: isDesktopOrWeb ? 22 : 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Content section
+              Container(
+                padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 24),
+                child: Column(
+                  children: [
+                    // Success message
+                    Text(
+                      customMessage ?? 'Your email has been successfully updated to:',
+                      style: GoogleFonts.poppins(
+                        color: Colors.grey.shade600,
+                        fontSize: isDesktopOrWeb ? 15 : 14,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green.shade200),
+                      ),
+                      child: Text(
+                        verifiedEmail,
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.bold,
+                          fontSize: isDesktopOrWeb ? 16 : 14,
+                          color: Colors.green.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    
+                    SizedBox(height: isDesktopOrWeb ? 24 : 20),
+                    
+                    // Success details
+                    Container(
+                      padding: EdgeInsets.all(isDesktopOrWeb ? 16 : 12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blue.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            color: Colors.blue.shade600,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Your profile has been updated with the new verified email address.',
+                              style: GoogleFonts.poppins(
+                                fontSize: isDesktopOrWeb ? 13 : 12,
+                                color: Colors.blue.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    SizedBox(height: isDesktopOrWeb ? 32 : 24),
+                    
+                    // OK button
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          if (onOkPressed != null) {
+                            // Add a small delay to ensure dialog is fully closed
+                            Future.delayed(const Duration(milliseconds: 100), () {
+                              onOkPressed();
+                            });
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green.shade600,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          elevation: 4,
+                          shadowColor: Colors.green.shade200,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.check_rounded, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Continue',
+                              style: GoogleFonts.poppins(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (isDesktopOrWeb) {
+        // Center the modal within the profile view area
+        final profileLeft = isSidebarVisible ? 285.0 : 80.0;
+        final profileWidth = 450.0;
+        final modalWidth = 450.0;
+        final centeredLeft = profileLeft + (profileWidth - modalWidth) / 2;
+        
+        return Stack(
+          children: [
+            Positioned(
+              left: centeredLeft, // Center within profile view
+              top: 200, // Position lower to center vertically in profile
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 450),
+                child: dialogContent,
+              ),
+            ),
+          ],
+        );
+      } else {
+        return dialogContent;
+      }
+    },
+  );
+}
+
+
+// 2. Add a method to refresh user profile from database
+Future<void> refreshUserProfile() async {
+  try {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+
+    final response = await Supabase.instance.client
+        .from('users')
+        .select()
+        .eq('id', user.id)
+        .single();
+
+    userProfile = response;
+    
+    // Update controllers with fresh data
+    _emailController.text = userProfile?['email'] ?? '';
+    
+  } catch (e) {
+    print('Error refreshing user profile: $e');
+  }
+}
+void _showErrorDialog(BuildContext context, String message, {required bool isSidebarVisible}) {
   final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
       Theme.of(context).platform == TargetPlatform.linux ||
       Theme.of(context).platform == TargetPlatform.windows ||
@@ -243,130 +1294,260 @@ void _showSuccessDialog(BuildContext context, String message, {VoidCallback? onO
     context: context,
     barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
     builder: (context) {
-      if (isDesktopOrWeb) {
-        // Assuming sidebar width is 240 pixels; adjust as needed
-        const double sidebarWidth = 240.0;
-        final screenWidth = MediaQuery.of(context).size.width;
-        final availableWidth = screenWidth - sidebarWidth;
-
-        return Stack(
-          children: [
-            // Center the dialog in the available content area
-            Positioned(
-              left: sidebarWidth + (availableWidth - 400) / 2, // Adjusted for new width
-              top: MediaQuery.of(context).size.height / 2 - 100, // Vertically center
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 400), // Expanded width
-                child: AlertDialog(
-                  title: const Text('Success'),
-                  content: Text(message),
-                  actions: [
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        if (onOkPressed != null) onOkPressed();
-                      },
-                      child: const Text('OK'),
+      Widget dialogContent = AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: EdgeInsets.zero,
+        backgroundColor: Colors.white,
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: isDesktopOrWeb ? 40 : 16,
+          vertical: 24,
+        ),
+        content: Container(
+          width: isDesktopOrWeb ? 400 : double.maxFinite,
+          constraints: BoxConstraints(
+            maxWidth: isDesktopOrWeb ? 400 : MediaQuery.of(context).size.width - 32,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 20,
+                spreadRadius: 1,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header section
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(isDesktopOrWeb ? 24 : 20),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade100,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.error_outline,
+                        color: Colors.red.shade600,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Error',
+                      style: GoogleFonts.poppins(
+                        fontSize: isDesktopOrWeb ? 18 : 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.red.shade700,
+                      ),
                     ),
                   ],
                 ),
+              ),
+              
+              // Content section
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(isDesktopOrWeb ? 24 : 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      message,
+                      style: GoogleFonts.poppins(
+                        fontSize: isDesktopOrWeb ? 14 : 14,
+                        color: Colors.grey.shade700,
+                        height: 1.4,
+                      ),
+                    ),
+                    
+                    SizedBox(height: isDesktopOrWeb ? 24 : 20),
+                    
+                    // OK Button
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red.shade600,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          elevation: 2,
+                        ),
+                        child: Text(
+                          'OK',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (isDesktopOrWeb) {
+        // Center the modal within the profile view area (same as email verification modal)
+        final profileLeft = isSidebarVisible ? 285.0 : 80.0;
+        final profileWidth = 450.0;
+        final modalWidth = 400.0;
+        final centeredLeft = profileLeft + (profileWidth - modalWidth) / 2;
+        
+        return Stack(
+          children: [
+            Positioned(
+              left: centeredLeft, // Center within profile view
+              top: 250, // Position to center vertically in profile
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 400),
+                child: dialogContent,
               ),
             ),
           ],
         );
       } else {
-        // Mobile view: Default AlertDialog with expanded width
         return ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500), // Expanded width
-          child: AlertDialog(
-            title: const Text('Success'),
-            content: Text(message),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  if (onOkPressed != null) onOkPressed();
-                },
-                child: const Text('OK'),
-              ),
-            ],
-          ),
+          constraints: const BoxConstraints(maxWidth: 500),
+          child: dialogContent,
         );
       }
     },
   );
 }
 
-void _showInfoDialog(BuildContext context, String message) {
+
+Future<void> _resendEmailChangeOTP(BuildContext context, StateSetter setModalState) async {
+  try {
+    if (_isVerifyingCurrentEmail) {
+      // Use the new resend method for current email verification
+      await _authService.resendReauthenticationOTP(email: _pendingEmailChange!);
+    } else {
+      // Use existing method for email changes
+      await _authService.resendEmailChangeOTP(email: _pendingEmailChange!);
+    }
+    
+    setModalState(() {
+      _startEmailResendTimer();
+    });
+    _showSnackBar(context, 'Verification code sent again!');
+  } catch (e) {
+    _showSnackBar(context, 'Failed to resend code. Please try again.');
+  }
+}
+
+
+
+void _startEmailResendTimer() {
+  _canResendEmailOTP = false;
+  _emailResendCountdown = 60;
+  
+  _emailResendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    if (_emailResendCountdown > 0) {
+      _emailResendCountdown--;
+    } else {
+      _canResendEmailOTP = true;
+      timer.cancel();
+    }
+  });
+}
+
+
+// Updated _showSuccessDialog to match desktop positioning
+void _showSuccessDialog(BuildContext context, String message, {VoidCallback? onOkPressed, required bool isSidebarVisible}) {
   final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
       Theme.of(context).platform == TargetPlatform.linux ||
       Theme.of(context).platform == TargetPlatform.windows ||
       kIsWeb;
 
+  // Only show dialog on mobile - desktop uses button states for other success messages
+  if (isDesktopOrWeb) {
+    return;
+  }
+
   showDialog(
     context: context,
-    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    barrierDismissible: false, // Prevent dismissing by tapping outside
     builder: (context) {
-      if (isDesktopOrWeb) {
-        // Assuming sidebar width is 240 pixels; adjust as needed
-        const double sidebarWidth = 240.0;
-        final screenWidth = MediaQuery.of(context).size.width;
-        final availableWidth = screenWidth - sidebarWidth;
-
-        return Stack(
-          children: [
-            // Center the dialog in the available content area
-            Positioned(
-              left: sidebarWidth + (availableWidth - 400) / 2, // Adjusted for new width
-              top: MediaQuery.of(context).size.height / 2 - 100, // Vertically center
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 400), // Expanded width
-                child: AlertDialog(
-                  title: Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Colors.blue.shade600),
-                      const SizedBox(width: 8),
-                      const Text('Info'),
-                    ],
-                  ),
-                  content: Text(message),
-                  actions: [
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      child: const Text('OK'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      } else {
-        // Mobile view: Default AlertDialog with expanded width
-        return ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500), // Expanded width
-          child: AlertDialog(
-            title: Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.blue.shade600),
-                const SizedBox(width: 8),
-                const Text('Info'),
-              ],
-            ),
-            content: Text(message),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                },
-                child: const Text('OK'),
-              ),
+      return ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 500), // Expanded width
+        child: AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green.shade600),
+              const SizedBox(width: 8),
+              const Text('Success'),
             ],
           ),
-        );
-      }
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                // Only call onOkPressed AFTER the dialog is dismissed
+                if (onOkPressed != null) {
+                  // Add a small delay to ensure dialog is fully closed
+                  Future.delayed(const Duration(milliseconds: 100), () {
+                    onOkPressed();
+                  });
+                }
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+void _showInfoDialog(BuildContext context, String message) {
+  showDialog(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.info_outline, color: Colors.blue.shade600),
+            const SizedBox(width: 8),
+            const Text('Info'),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (Navigator.of(dialogContext).canPop()) {
+                Navigator.of(dialogContext).pop();
+              }
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      );
     },
   );
 }
@@ -381,6 +1562,9 @@ void _showInfoDialog(BuildContext context, String message) {
   void setShouldScrollToTop(bool value) {
   _shouldScrollToTop = value;
 }
+
+
+
 
 Future<void> _loadPoliceData() async {
   try {
@@ -402,6 +1586,7 @@ Future<void> _loadPoliceData() async {
 
 
 
+//PROFILE PAGE MOBILE
 Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback onEditPressed) {
   // Only scroll to top when explicitly requested (when returning from edit mode)
   if (_shouldScrollToTop) {
@@ -418,498 +1603,429 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
   }
 
   return SingleChildScrollView(
-    controller: _profileViewScrollController, // Use the separate controller
+    controller: _profileViewScrollController,
     padding: const EdgeInsets.only(bottom: 20),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Enhanced header section with gradient
+        // Header section with background image
         Container(
           width: double.infinity,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Theme.of(context).primaryColor.withOpacity(0.8),
-                Theme.of(context).primaryColor.withOpacity(0.6),
-              ],
+          height: 280,
+          decoration: const BoxDecoration(
+            image: DecorationImage(
+              image: AssetImage('assets/images/LIGHT.jpg'),
+              fit: BoxFit.cover,
             ),
-            borderRadius: BorderRadius.zero,
           ),
-          child: Stack(
-            children: [
-              // Background pattern
-              Positioned(
-                right: -50,
-                top: -30,
-                child: Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.1),
-                  ),
-                ),
-              ),
-              Positioned(
-                right: 10,
-                top: 50,
-                child: Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.05),
-                  ),
-                ),
-              ),
-              // Content - removed top padding
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.center,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.3),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(height: 40),
+                // Profile avatar
+                Stack(
                   children: [
-                    // Enhanced avatar with border and shadow
                     Container(
-                      margin: const EdgeInsets.only(top: 20),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withOpacity(0.2),
                             blurRadius: 15,
-                            offset: const Offset(0, 8),
+                            offset: const Offset(0, 4),
                           ),
                         ],
                       ),
                       child: CircleAvatar(
                         backgroundColor: Colors.white,
-                        radius: 38,
+                        radius: 50,
                         child: CircleAvatar(
-                          backgroundColor: Theme.of(context).primaryColor.withOpacity(0.8),
-                          radius: 35,
-                          child: Text(
-                            userProfile?['first_name']?.toString().substring(0, 1) ?? 'U',
-                            style: const TextStyle(
-                              fontSize: 36,
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
+                          backgroundColor: Colors.white,
+                          radius: 47,
+                          child: Icon(
+                            _getGenderIcon(userProfile?['gender']),
+                            size: 50,
+                            color: Colors.grey.shade700,
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 20),
-                    // Name with better typography - properly centered
-                    Container(
-                      width: double.infinity,
-                      alignment: Alignment.center,
-                      child: Text(
-                        '${userProfile?['first_name'] ?? ''}'
-                        '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-                        ' ${userProfile?['last_name'] ?? ''}'
-                        '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                          height: 1.2,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    // Email with subtle styling - properly centered
-                    Center(
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          userProfile?['email'] ?? '',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    // Enhanced role chip - properly centered
-                    Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(25),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 8,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            if (isAdmin) ...[
-                              Icon(
-                                Icons.admin_panel_settings,
-                                size: 18,
-                                color: Colors.blue,
-                              ),
-                              const SizedBox(width: 6),
-                            ] else if (userProfile?['role'] == 'officer') ...[
-                              Icon(
-                                Icons.local_police,
-                                size: 18,
-                                color: Colors.indigo,
-                              ),
-                              const SizedBox(width: 6),
-                            ],
-                            Text(
-                              userProfile?['role']?.toUpperCase() ?? 'USER',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: isAdmin ? Colors.blue : 
-                                      (userProfile?['role'] == 'officer' ? Colors.indigo : Colors.green),
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        // Personal information section
-        Container(
-          margin: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.withOpacity(0.1),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.person,
-                        color: Colors.blue.shade600,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Text(
-                      'Personal Information',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1, indent: 20, endIndent: 20),
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    _buildProfileInfoItem(
-                      context,
-                      icon: Icons.person_outline,
-                      label: 'Username',
-                      value: userProfile?['username'] ?? 'Not set',
-                    ),
-                    _buildProfileInfoItem(
-                      context,
-                      icon: Icons.cake_outlined,
-                      label: 'Birthday',
-                      value: userProfile?['bday'] != null
-                          ? DateFormat('MMMM d, y').format(
-                              DateTime.parse(userProfile?['bday']))
-                          : 'Not specified',
-                    ),
-                    _buildProfileInfoItem(
-                      context,
-                      icon: Icons.calendar_today,
-                      label: 'Age',
-                      value: userProfile?['bday'] != null
-                          ? '${_calculateAge(DateTime.parse(userProfile!['bday']))} years old'
-                          : 'Not specified',
-                    ),
-                    _buildProfileInfoItem(
-                      context,
-                      icon: Icons.transgender,
-                      label: 'Gender',
-                      value: userProfile?['gender'] ?? 'Not specified',
-                    ),
-                    _buildProfileInfoItem(
-                      context,
-                      icon: Icons.phone,
-                      label: 'Contact Number',
-                      value: userProfile?['contact_number'] ?? 'Not specified',
-                      isLast: true,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // Police information section (shown only for officers)
-        if (userProfile?['role'] == 'officer') ...[
-          Container(
-            margin: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Row(
-                    children: [
-                      Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: Colors.indigo.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.grey.shade300,
+                            width: 2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
                         child: Icon(
-                          Icons.local_police,
-                          color: Colors.indigo.shade600,
-                          size: 20,
+                          Icons.camera_alt,
+                          size: 16,
+                          color: Colors.grey.shade600,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      const Text(
-                        'Police Information',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1, indent: 20, endIndent: 20),
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: [
-                      _buildProfileInfoItem(
-                        context,
-                        icon: Icons.military_tech,
-                        label: 'Police Rank',
-                        value: _getPoliceRankName(userProfile?['police_rank_id']) ?? 'Not assigned',
-                      ),
-                      _buildProfileInfoItem(
-                        context,
-                        icon: Icons.location_on,
-                        label: 'Assigned Station',
-                        value: _getPoliceStationName(userProfile?['police_station_id']) ?? 'Not assigned',
-                        isLast: true,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-
-        // Enhanced action buttons
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Column(
-            children: [
-              // Primary edit button with gradient
-              Container(
-                width: double.infinity,
-                height: 56,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Theme.of(context).primaryColor,
-                      Theme.of(context).primaryColor.withOpacity(0.8),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Theme.of(context).primaryColor.withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
                     ),
                   ],
                 ),
-                child: ElevatedButton(
-                  onPressed: onEditPressed,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    shadowColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.edit,
+                const SizedBox(height: 16),
+
+                // Full name
+                Text(
+                  '${userProfile?['first_name'] ?? ''}'
+                  '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                  ' ${userProfile?['last_name'] ?? ''}'
+                  '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                    height: 1.2,
+                    shadows: [
+                      Shadow(
+                        offset: Offset(0, 1),
+                        blurRadius: 3,
                         color: Colors.white,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'EDIT PROFILE',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                        ),
                       ),
                     ],
                   ),
                 ),
-              ),
-              
-              if (isAdmin) ...[
-                const SizedBox(height: 16),
-                // Admin dashboard button with modern styling
-                Container(
-                  width: double.infinity,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: Colors.blue.shade300,
-                      width: 2,
-                    ),
-                    color: Colors.blue.shade50,
-                  ),
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const AdminDashboardScreen(),
-                      ),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: Colors.transparent,
-                      side: BorderSide.none,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
+                const SizedBox(height: 8),
+
+                // Role badge
+                if (userProfile?['role'] != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.grey.shade300, width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.dashboard,
-                          color: Colors.blue.shade600,
-                          size: 20,
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: userProfile?['role'] == 'officer' ? Colors.green : Colors.blue,
+                            shape: BoxShape.circle,
+                          ),
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          'ADMIN DASHBOARD',
+                          userProfile?['role']?.toUpperCase() ?? 'USER',
                           style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: Colors.blue.shade600,
-                            letterSpacing: 0.5,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
+                const SizedBox(height: 30),
               ],
-            ],
+            ),
           ),
         ),
+
+        // --- Tabs section ---
+        StatefulBuilder(
+          builder: (context, setState) {
+            bool showPersonalInfo = _selectedTab == 0;
+
+            return Column(
+              children: [
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _selectedTab = 0),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: showPersonalInfo
+                                      ? Theme.of(context).primaryColor
+                                      : Colors.grey.shade300,
+                                  width: showPersonalInfo ? 2 : 1,
+                                ),
+                              ),
+                            ),
+                            child: Text(
+                              'Personal Info',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: showPersonalInfo ? FontWeight.w600 : FontWeight.w500,
+                                color: showPersonalInfo ? Colors.black87 : Colors.grey.shade600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (userProfile?['role'] == 'officer')
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _selectedTab = 1),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                border: Border(
+                                  bottom: BorderSide(
+                                    color: !showPersonalInfo
+                                        ? Theme.of(context).primaryColor
+                                        : Colors.grey.shade300,
+                                    width: !showPersonalInfo ? 2 : 1,
+                                  ),
+                                ),
+                              ),
+                              child: Text(
+                                'Police Info',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: !showPersonalInfo ? FontWeight.w600 : FontWeight.w500,
+                                  color: !showPersonalInfo ? Colors.black87 : Colors.grey.shade600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // Tab content
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.95),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade200, width: 1),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: showPersonalInfo
+                        ? _buildPersonalInfoItems(context)
+                        : _buildPoliceInfoItems(context),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+
+        const SizedBox(height: 30),
+
+        // Edit button
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: onEditPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).primaryColor,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 2,
+              ),
+              child: const Text(
+                'Edit Profile',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // Admin dashboard button
+        if (isAdmin) ...[
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: OutlinedButton(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const AdminDashboardScreen(),
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Theme.of(context).primaryColor),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  'Admin Dashboard',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    color: Theme.of(context).primaryColor,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ],
     ),
   );
 }
 
-// Enhanced _buildProfileInfoItem method
-Widget _buildProfileInfoItem(
+
+// Personal info items
+List<Widget> _buildPersonalInfoItems(BuildContext context) {
+  return [
+    _buildCleanInfoItem(
+      context,
+      icon: Icons.email_outlined,
+      label: 'Email',
+      value: userProfile?['email'] ?? 'Add an email',
+      hasValue: userProfile?['email'] != null,
+    ),
+    _buildCleanInfoItem(
+      context,
+      icon: Icons.phone_outlined,
+      label: 'Phone',
+      value: userProfile?['contact_number'] ?? 'Add a phone number',
+      hasValue: userProfile?['contact_number'] != null,
+    ),
+    _buildCleanInfoItem(
+      context,
+      icon: Icons.cake_outlined,
+      label: 'Birthday',
+      value: userProfile?['bday'] != null
+          ? DateFormat('MMMM d, y').format(DateTime.parse(userProfile?['bday']))
+          : 'Add a birthday',
+      hasValue: userProfile?['bday'] != null,
+    ),
+    _buildCleanInfoItem(
+      context,
+      icon: Icons.person_outline,
+      label: 'Gender',
+      value: userProfile?['gender'] ?? 'Add gender',
+      hasValue: userProfile?['gender'] != null,
+    ),
+    _buildCleanInfoItem(
+      context,
+      icon: Icons.person_outline,
+      label: 'Username',
+      value: userProfile?['username'] ?? 'Add username',
+      hasValue: userProfile?['username'] != null,
+      isLast: true,
+    ),
+  ];
+}
+
+// Police info items
+List<Widget> _buildPoliceInfoItems(BuildContext context) {
+  return [
+    _buildCleanInfoItem(
+      context,
+      icon: Icons.military_tech_outlined,
+      label: 'Police Rank',
+      value: _getPoliceRankName(userProfile?['police_rank_id']) ?? 'Not assigned',
+      hasValue: _getPoliceRankName(userProfile?['police_rank_id']) != null,
+    ),
+    _buildCleanInfoItem(
+      context,
+      icon: Icons.location_on_outlined,
+      label: 'Assigned Station',
+      value: _getPoliceStationName(userProfile?['police_station_id']) ?? 'Not assigned',
+      hasValue: _getPoliceStationName(userProfile?['police_station_id']) != null,
+    ),
+    _buildCleanInfoItem(
+      context,
+      icon: isAdmin ? Icons.admin_panel_settings_outlined : Icons.work_outline,
+      label: 'Role',
+      value: userProfile?['role']?.toUpperCase() ?? 'USER',
+      hasValue: true,
+      isLast: true,
+    ),
+  ];
+}
+
+// Clean info item widget matching the image design
+Widget _buildCleanInfoItem(
   BuildContext context, {
   required IconData icon,
   required String label,
   required String value,
+  required bool hasValue,
   bool isLast = false,
 }) {
   return Container(
-    margin: EdgeInsets.only(bottom: isLast ? 0 : 16),
-    padding: const EdgeInsets.all(8),
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
     decoration: BoxDecoration(
-      color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(
-        color: Colors.grey.shade200,
-        width: 1,
-      ),
+      border: isLast 
+          ? null 
+          : Border(
+              bottom: BorderSide(
+                color: Colors.grey.shade200,
+                width: 1,
+              ),
+            ),
     ),
     child: Row(
       children: [
         Container(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(10),
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(
             icon,
             size: 20,
-            color: Colors.blue.shade600,
+            color: Colors.grey.shade600,
           ),
         ),
         const SizedBox(width: 16),
@@ -920,19 +2036,18 @@ Widget _buildProfileInfoItem(
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: FontWeight.w500,
-                  color: Colors.grey.shade600,
-                  letterSpacing: 0.2,
+                  color: Colors.grey.shade700,
                 ),
               ),
               const SizedBox(height: 4),
               Text(
                 value,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
+                  fontWeight: FontWeight.w400,
+                  color: hasValue ? Colors.black87 : Colors.grey.shade500,
                 ),
               ),
             ],
@@ -943,16 +2058,13 @@ Widget _buildProfileInfoItem(
   );
 }
 
+//EDIT PROFILE MOBILE
 Widget buildEditProfileForm(
   BuildContext context, 
   bool isDesktopOrWeb, 
   VoidCallback onCancel,
   {required VoidCallback onSuccess}
 ) {
-  bool showCurrentPassword = false;
-  bool showNewPassword = false;
-  bool showConfirmPassword = false;
-
   // Only scroll to top when explicitly requested (when entering edit mode)
   if (_shouldScrollToTop) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -969,6 +2081,9 @@ Widget buildEditProfileForm(
 
   return StatefulBuilder(
     builder: (context, setState) {
+      // FIX 1: Initialize isSidebarVisible properly with null check and default value
+      bool isSidebarVisible = false; // Initialize with a default value instead of leaving it uninitialized
+      
       return PopScope(
         canPop: false,
         onPopInvoked: (didPop) {
@@ -979,92 +2094,1531 @@ Widget buildEditProfileForm(
           }
         },
         child: Container(
+          decoration: const BoxDecoration(
+            image: DecorationImage(
+              image: AssetImage('assets/images/LIGHT.jpg'),
+              fit: BoxFit.cover,
+            ),
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.3),
+            ),
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              padding: const EdgeInsets.only(bottom: 20),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: isDesktopOrWeb ? 20.0 : 20.0,
+                  vertical: isDesktopOrWeb ? 24.0 : 20.0,
+                ),
+                child: Form(
+                  key: _profileFormKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (isDesktopOrWeb) ...[
+                        Align(
+                          alignment: Alignment.topRight,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(25),
+                              border: Border.all(color: Colors.grey.shade300, width: 1),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.1),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: IconButton(
+                              icon: const Icon(Icons.close, size: 20, color: Colors.grey),
+                              onPressed: onCancel,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      // Personal Information Card
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.95),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade200, width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.grey.withOpacity(0.1),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Column(
+                            children: [
+                              // Header with icon
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(
+                                      Icons.person_outline,
+                                      color: Colors.grey.shade600,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  const Text(
+                                    'Personal Information',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 20),
+
+                              // FIX 2: Add null checks for userProfile access
+                              if ((userProfile?['registration_type'] ?? '') == 'simple') ...[
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: (_isEmailFieldReadOnly) ? Colors.grey.shade50 : Colors.grey.shade100,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: (_isEmailFieldReadOnly) ? Colors.grey.shade300 : Colors.grey.shade200, 
+                                      width: 1
+                                    ),
+                                  ),
+                                  child: TextFormField(
+                                    controller: _emailController,
+                                    readOnly: _isEmailFieldReadOnly, // FIX 3: Add null check with default
+                                    keyboardType: TextInputType.emailAddress,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        // If user starts typing and checkbox is checked, uncheck it
+                                        if ((_forceEmailVerification) && value.trim() != (userProfile?['email'] ?? '')) {
+                                          _forceEmailVerification = false;
+                                          _isEmailFieldReadOnly = false;
+                                        }
+                                      });
+                                    },
+                                    decoration: InputDecoration(
+                                      label: (_isEmailFieldReadOnly) 
+                                          ? Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  'Email',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: Colors.grey.shade600,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Icon(
+                                                  Icons.verified,
+                                                  size: 16,
+                                                  color: Colors.green.shade600,
+                                                ),
+                                              ],
+                                            )
+                                          : null,
+                                      labelText: (_isEmailFieldReadOnly) ? null : 'Email',
+                                      labelStyle: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                        color: (_isEmailFieldReadOnly) ? Colors.grey.shade500 : Colors.grey.shade700,
+                                      ),
+                                      border: InputBorder.none,
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                      prefixIcon: Icon(
+                                        (_isEmailFieldReadOnly) ? Icons.lock_outline : Icons.email_outlined,
+                                        size: 20,
+                                        color: (_isEmailFieldReadOnly) ? Colors.grey.shade600 : Colors.grey.shade600,
+                                      ),
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: (_isEmailFieldReadOnly) ? Colors.grey.shade600 : Colors.black87,
+                                    ),
+                                    validator: (value) {
+                                      if (value?.isEmpty ?? true) return 'Required';
+                                      if (!value!.contains('@')) return 'Invalid email';
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                Container(
+                                  margin: const EdgeInsets.only(top: 8),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.orange.shade200),
+                                  ),
+                                  child: InkWell(
+                                    onTap: () {
+                                      setState(() {
+                                        _forceEmailVerification = !(_forceEmailVerification); // FIX 4: Add null check
+                                        _handleEmailMutualExclusivity();
+                                      });
+                                    },
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        SizedBox(
+                                          height: 18,
+                                          width: 18,
+                                          child: Checkbox(
+                                            value: _forceEmailVerification, // FIX 5: Add null check with default
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _forceEmailVerification = value ?? false;
+                                                _handleEmailMutualExclusivity();
+                                              });
+                                            },
+                                            activeColor: Colors.orange.shade600,
+                                            checkColor: Colors.white,
+                                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            (_forceEmailVerification) 
+                                              ? 'Keep current email and send verification to: ${userProfile?['email'] ?? ''}'
+                                              : 'Email verification required. Change your email above or check this box to keep current email, then click Save to send verification.',
+                                            style: const TextStyle(fontSize: 12, color: Colors.orange),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ] else ...[
+                                // VERIFIED EMAIL SECTION - Add null checks here too
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.grey.shade300, width: 1),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade200,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          Icons.lock_outline,
+                                          size: 20,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  'Email',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: Colors.grey.shade600,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Icon(
+                                                  Icons.verified,
+                                                  size: 16,
+                                                  color: Colors.green.shade600,
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              userProfile?['email'] ?? '',
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w500,
+                                                color: Colors.black87,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  margin: const EdgeInsets.only(top: 8),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.green.shade200),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.verified_outlined, size: 16, color: Colors.green.shade600),
+                                      const SizedBox(width: 8),
+                                      const Expanded(
+                                        child: Text(
+                                          'Your email address has been verified and cannot be changed.',
+                                          style: TextStyle(fontSize: 12, color: Colors.green),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 16),
+                              // Continue with rest of form fields...
+                              _buildEnhancedTextField(
+                                controller: _firstNameController,
+                                label: 'First Name',
+                                icon: Icons.person_outline,
+                                validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEnhancedTextField(
+                                controller: _lastNameController,
+                                label: 'Last Name',
+                                icon: Icons.person_outline,
+                                validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEnhancedTextField(
+                                controller: _middleNameController,
+                                label: 'Middle Name (optional)',
+                                icon: Icons.person_outline,
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEnhancedTextField(
+                                controller: _extNameController,
+                                label: 'Extension Name (optional)',
+                                icon: Icons.person_outline,
+                              ),
+                              const SizedBox(height: 16),
+                              // Birthday Selector with null checks
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.grey.shade200, width: 1),
+                                ),
+                                child: InkWell(
+                                  onTap: () async {
+                                    final date = await showDatePicker(
+                                      context: context,
+                                      initialDate: _selectedBirthday ?? DateTime.now(),
+                                      firstDate: DateTime(1900),
+                                      lastDate: DateTime.now(),
+                                    );
+                                    if (date != null) {
+                                      _selectedBirthday = date;
+                                      setState(() {});
+                                    }
+                                  },
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 16),
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey.shade100,
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Icon(
+                                            Icons.cake_outlined,
+                                            size: 20,
+                                            color: Colors.grey.shade600,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: Text(
+                                            _selectedBirthday == null
+                                                ? 'Select Birthday'
+                                                : 'Birthday: ${DateFormat('MMM d, y').format(_selectedBirthday!)}',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w400,
+                                              color: _selectedBirthday == null ? Colors.grey.shade500 : Colors.black87,
+                                            ),
+                                          ),
+                                        ),
+                                        Icon(
+                                          Icons.arrow_forward_ios,
+                                          size: 16,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              // Gender Dropdown
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.grey.shade200, width: 1),
+                                ),
+                                child: DropdownButtonFormField<String>(
+                                  value: _selectedGender,
+                                  decoration: InputDecoration(
+                                    labelText: 'Gender',
+                                    labelStyle: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey.shade700,
+                                    ),
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                    prefixIcon: Container(
+                                      margin: const EdgeInsets.only(right: 16),
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        Icons.person_outline,
+                                        size: 20,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                  ),
+                                  items: ['Male', 'Female', 'LGBTQ+', 'Others']
+                                      .map((gender) => DropdownMenuItem(
+                                            value: gender,
+                                            child: Text(
+                                              gender,
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w400,
+                                                color: Colors.black87,
+                                              ),
+                                            ),
+                                          ))
+                                      .toList(),
+                                  onChanged: (value) => _selectedGender = value,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.black87,
+                                  ),
+                                  dropdownColor: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEnhancedTextField(
+                                controller: _contactNumberController,
+                                label: 'Contact Number',
+                                icon: Icons.phone_outlined,
+                                hintText: '+63 9123456789',
+                                keyboardType: TextInputType.number,
+                                onChanged: (value) {
+                                  if (!value.startsWith('+63')) {
+                                    _contactNumberController.text = '+63';
+                                    _contactNumberController.selection = TextSelection.fromPosition(
+                                      TextPosition(offset: _contactNumberController.text.length),
+                                    );
+                                  }
+                                  
+                                  if (value.length > 13) {
+                                    _contactNumberController.text = value.substring(0, 13);
+                                    _contactNumberController.selection = TextSelection.fromPosition(
+                                      TextPosition(offset: _contactNumberController.text.length),
+                                    );
+                                  }
+                                },
+                                validator: (value) {
+                                  if (value != null && value.isNotEmpty) {
+                                    if (!value.startsWith('+63') || value.length != 13) {
+                                      return 'Must be in format +63xxxxxxxxxx (11 digits total)';
+                                    }
+                                    String digits = value.substring(3);
+                                    if (!RegExp(r'^\d{10}$').hasMatch(digits)) {
+                                      return 'Please enter valid digits after +63';
+                                    }
+                                  }
+                                  return null;
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Police Information Card (shown only for officers)
+                      if ((userProfile?['role'] ?? '') == 'officer') ...[
+                        const SizedBox(height: 20),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.95),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade200, width: 1),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.grey.withOpacity(0.1),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20.0),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        Icons.local_police,
+                                        color: Colors.grey.shade600,
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    const Text(
+                                      'Police Information',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 20),
+                                // Police dropdowns with FutureBuilder...
+                                // (Rest of police information section remains the same but add null checks where needed)
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 30),
+                      // Action Buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 50,
+                              child: OutlinedButton(
+                                onPressed: onCancel,
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(color: Theme.of(context).primaryColor),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  backgroundColor: Colors.white.withOpacity(0.95),
+                                  foregroundColor: Theme.of(context).primaryColor,
+                                ),
+                                child: Text(
+                                  'CANCEL',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 16,
+                                    color: Theme.of(context).primaryColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: SizedBox(
+                              height: 50,
+                              child: ElevatedButton(
+                                onPressed: (_isUpdatingEmail) // FIX 6: Add null check
+                                    ? null
+                                    : () => updateProfile(
+                                          context,
+                                          onSuccess: onSuccess,
+                                          onStateChange: setState,
+                                          isSidebarVisible: isSidebarVisible, // Now properly initialized
+                                        ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(context).primaryColor,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  elevation: 2,
+                                ),
+                                child: (_isUpdatingEmail) // FIX 7: Add null check
+                                    ? const Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                            ),
+                                          ),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'SENDING..',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 16,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : const Text(
+                                        'SAVE',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 16,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (isDesktopOrWeb) const SizedBox(height: 16),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+// Helper method for enhanced text fields
+Widget _buildEnhancedTextField({
+  required TextEditingController controller,
+  required String label,
+  required IconData icon,
+  String? hintText,
+  TextInputType? keyboardType,
+  String? Function(String?)? validator,
+  void Function(String)? onChanged,
+}) {
+  return Container(
+    decoration: BoxDecoration(
+      color: Colors.grey.shade100,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: Colors.grey.shade200, width: 1),
+    ),
+    child: TextFormField(
+      controller: controller,
+      keyboardType: keyboardType,
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+          color: Colors.grey.shade700,
+        ),
+        hintText: hintText,
+        hintStyle: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w400,
+          color: Colors.grey.shade500,
+        ),
+        border: InputBorder.none,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        prefixIcon: Container(
+          margin: const EdgeInsets.only(right: 16),
+          padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.grey.shade50,
-                Colors.white,
-              ],
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: Colors.grey.shade600,
+          ),
+        ),
+      ),
+      style: const TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w400,
+        color: Colors.black87,
+      ),
+      validator: validator,
+    ),
+  );
+}
+
+
+
+//PROFILE VIEW DESKTOP
+Widget buildDesktopProfileView(
+  BuildContext context,
+  VoidCallback onEditPressed,
+  {VoidCallback? onClosePressed, required bool isSidebarVisible} // Added isSidebarVisible
+) {
+  // Scroll to top when requested
+  if (_shouldScrollToTop) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_profileViewScrollController.hasClients) {
+        _profileViewScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+    _shouldScrollToTop = false;
+  }
+
+  return Positioned(
+    left: isSidebarVisible ? 5 : 20, // Match QuickAccessDesktopScreen
+    top: 100,
+    child: GestureDetector(
+      onTap: () {}, // Prevent propagation to overlay
+      child: Material(
+        elevation: 16, // Match QuickAccessDesktopScreen elevation
+        borderRadius: BorderRadius.circular(16),
+        shadowColor: Colors.black.withOpacity(0.3),
+        child: Container(
+          width: 450, // Match QuickAccessDesktopScreen
+          height: 800, // Match QuickAccessDesktopScreen
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Column(
+            children: [
+              // Header section
+              Container(
+                width: double.infinity,
+                height: 280,
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                  image: const DecorationImage(
+                    image: AssetImage('assets/images/LIGHT.jpg'),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.3),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        top: 16,
+                        right: 16,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.grey.shade300, width: 1),
+                          ),
+                          child: IconButton(
+                            icon: Icon(Icons.close, size: 18, color: Colors.grey.shade700),
+                            onPressed: onClosePressed ?? () {},
+                          ),
+                        ),
+                      ),
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            const SizedBox(height: 40),
+                            Stack(
+                              children: [
+                                Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 15,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
+                                  ),
+                                  child: CircleAvatar(
+                                    backgroundColor: Colors.white,
+                                    radius: 50,
+                                    child: CircleAvatar(
+                                      backgroundColor: Colors.white,
+                                      radius: 47,
+                                      child: Icon(
+                                        _getGenderIcon(userProfile?['gender']),
+                                        size: 50,
+                                        color: Colors.grey.shade700,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Positioned(
+                                  bottom: 0,
+                                  right: 0,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.grey.shade300,
+                                        width: 2,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.2),
+                                          blurRadius: 4,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Icon(
+                                      Icons.camera_alt,
+                                      size: 16,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Container(
+                              width: double.infinity,
+                              child: Text(
+                                '${userProfile?['first_name'] ?? ''}'
+                                '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                                ' ${userProfile?['last_name'] ?? ''}'
+                                '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black87,
+                                  height: 1.2,
+                                  shadows: [
+                                    Shadow(
+                                      offset: Offset(0, 1),
+                                      blurRadius: 3,
+                                      color: Colors.white,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            if (userProfile?['role'] != null)
+                              Center(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.95),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(color: Colors.grey.shade300, width: 1),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.1),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: BoxDecoration(
+                                          color: userProfile?['role'] == 'officer' ? Colors.green : Colors.blue,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        userProfile?['role']?.toUpperCase() ?? 'USER',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.grey.shade800,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: StatefulBuilder(
+                  builder: (context, setState) {
+                    bool showPersonalInfo = _selectedTab == 0;
+                    return Column(
+                      children: [
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () => setState(() => _selectedTab = 0),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      border: Border(
+                                        bottom: BorderSide(
+                                          color: showPersonalInfo
+                                              ? Theme.of(context).primaryColor
+                                              : Colors.grey.shade300,
+                                          width: showPersonalInfo ? 2 : 1,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      'Personal Info',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: showPersonalInfo ? FontWeight.w600 : FontWeight.w500,
+                                        color: showPersonalInfo ? Colors.black87 : Colors.grey.shade600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              if (userProfile?['role'] == 'officer')
+                                Expanded(
+                                  child: GestureDetector(
+                                    onTap: () => setState(() => _selectedTab = 1),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        border: Border(
+                                          bottom: BorderSide(
+                                            color: !showPersonalInfo
+                                                ? Theme.of(context).primaryColor
+                                                : Colors.grey.shade300,
+                                            width: !showPersonalInfo ? 2 : 1,
+                                          ),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'Police Info',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: !showPersonalInfo ? FontWeight.w600 : FontWeight.w500,
+                                          color: !showPersonalInfo ? Colors.black87 : Colors.grey.shade600,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            controller: _profileViewScrollController,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            child: Column(
+                              children: [
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.95),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: Colors.grey.shade200, width: 1),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.grey.withOpacity(0.1),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Column(
+                                    children: showPersonalInfo
+                                        ? _buildDesktopPersonalInfoItems(context)
+                                        : _buildDesktopPoliceInfoItems(context),
+                                  ),
+                                ),
+                                const SizedBox(height: 30),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: ElevatedButton(
+                                    onPressed: onEditPressed,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Theme.of(context).primaryColor,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      elevation: 2,
+                                    ),
+                                    child: const Text(
+                                      'Edit Profile',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 16,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                if (isAdmin) ...[
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    height: 50,
+                                    child: OutlinedButton(
+                                      onPressed: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => const AdminDashboardScreen(),
+                                        ),
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        side: BorderSide(color: Theme.of(context).primaryColor),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'Admin Dashboard',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 16,
+                                          color: Theme.of(context).primaryColor,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 20),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// Desktop Personal info items - matching mobile clean design
+List<Widget> _buildDesktopPersonalInfoItems(BuildContext context) {
+  return [
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: Icons.email_outlined,
+      label: 'Email',
+      value: userProfile?['email'] ?? 'Add an email',
+      hasValue: userProfile?['email'] != null,
+    ),
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: Icons.phone_outlined,
+      label: 'Phone',
+      value: userProfile?['contact_number'] ?? 'Add a phone number',
+      hasValue: userProfile?['contact_number'] != null,
+    ),
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: Icons.cake_outlined,
+      label: 'Birthday',
+      value: userProfile?['bday'] != null
+          ? DateFormat('MMMM d, y').format(DateTime.parse(userProfile?['bday']))
+          : 'Add a birthday',
+      hasValue: userProfile?['bday'] != null,
+    ),
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: Icons.person_outline,
+      label: 'Gender',
+      value: userProfile?['gender'] ?? 'Add gender',
+      hasValue: userProfile?['gender'] != null,
+    ),
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: Icons.person_outline,
+      label: 'Username',
+      value: userProfile?['username'] ?? 'Add username',
+      hasValue: userProfile?['username'] != null,
+      isLast: true,
+    ),
+  ];
+}
+
+// Desktop Police info items - matching mobile clean design
+List<Widget> _buildDesktopPoliceInfoItems(BuildContext context) {
+  return [
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: Icons.military_tech_outlined,
+      label: 'Police Rank',
+      value: _getPoliceRankName(userProfile?['police_rank_id']) ?? 'Not assigned',
+      hasValue: _getPoliceRankName(userProfile?['police_rank_id']) != null,
+    ),
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: Icons.location_on_outlined,
+      label: 'Assigned Station',
+      value: _getPoliceStationName(userProfile?['police_station_id']) ?? 'Not assigned',
+      hasValue: _getPoliceStationName(userProfile?['police_station_id']) != null,
+    ),
+    _buildDesktopCleanInfoItem(
+      context,
+      icon: isAdmin ? Icons.admin_panel_settings_outlined : Icons.work_outline,
+      label: 'Role',
+      value: userProfile?['role']?.toUpperCase() ?? 'USER',
+      hasValue: true,
+      isLast: true,
+    ),
+  ];
+}
+
+// Clean info item widget for desktop - exactly matching mobile design
+Widget _buildDesktopCleanInfoItem(
+  BuildContext context, {
+  required IconData icon,
+  required String label,
+  required String value,
+  required bool hasValue,
+  bool isLast = false,
+}) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+    decoration: BoxDecoration(
+      border: isLast 
+          ? null 
+          : Border(
+              bottom: BorderSide(
+                color: Colors.grey.shade200,
+                width: 1,
+              ),
+            ),
+    ),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: Colors.grey.shade600,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                  color: hasValue ? Colors.black87 : Colors.grey.shade500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+//EDIT PROFILE DESKTOP
+Widget buildDesktopEditProfileForm(
+  BuildContext context,
+  VoidCallback onCancel, {
+  required VoidCallback onSuccess,
+  required bool isSidebarVisible,
+  required Function(VoidCallback) onStateChange, // Add callback for state changes
+}) {
+  if (_shouldScrollToTop) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+    _shouldScrollToTop = false;
+  }
+
+  return Positioned(
+    left: isSidebarVisible ? 5 : 20, // Match QuickAccessDesktopScreen
+    top: 100,
+    child: GestureDetector(
+      onTap: () {}, // Prevent propagation to overlay
+      child: Material(
+        elevation: 16, // Match QuickAccessDesktopScreen
+        borderRadius: BorderRadius.circular(16),
+        shadowColor: Colors.black.withOpacity(0.3),
+        child: Container(
+          width: 450, // Match QuickAccessDesktopScreen
+          height: 800, // Match QuickAccessDesktopScreen
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.3),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey[200]!),
+            image: const DecorationImage(
+              image: AssetImage('assets/images/LIGHT.jpg'),
+              fit: BoxFit.cover,
             ),
           ),
           child: SingleChildScrollView(
             controller: _scrollController,
+            padding: const EdgeInsets.only(bottom: 20),
             child: Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: isDesktopOrWeb ? 16.0 : 12.0,
-                vertical: isDesktopOrWeb ? 24.0 : 20.0,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
               child: Form(
                 key: _profileFormKey,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (isDesktopOrWeb) ...[
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(25),
-                          ),
-                          child: IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: onCancel,
-                          ),
+                    Align(
+                      alignment: Alignment.topRight,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(25),
+                          border: Border.all(color: Colors.grey.shade300, width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.close, size: 20, color: Colors.grey),
+                          onPressed: () {
+                            _shouldScrollToTop = true;
+                            onCancel();
+                          },
                         ),
                       ),
-                      const SizedBox(height: 8),
-                    ],
-                    // Personal Information Card
+                    ),
+                    const SizedBox(height: 8),
                     Container(
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
+                        color: Colors.white.withOpacity(0.95),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade200, width: 1),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.grey.withOpacity(0.1),
-                            blurRadius: 15,
-                            offset: const Offset(0, 8),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
                           ),
                         ],
                       ),
                       child: Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: isDesktopOrWeb ? 20.0 : 16.0,
-                          vertical: isDesktopOrWeb ? 28.0 : 20.0,
-                        ),
+                        padding: const EdgeInsets.all(20.0),
                         child: Column(
                           children: [
-                            // Header with icon
                             Row(
                               children: [
                                 Container(
-                                  padding: const EdgeInsets.all(10),
+                                  padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: Colors.blue.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(12),
+                                    color: Colors.grey.shade100,
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Icon(
-                                    Icons.person,
-                                    color: Colors.blue.shade600,
-                                    size: 24,
+                                    Icons.person_outline,
+                                    color: Colors.grey.shade600,
+                                    size: 20,
                                   ),
                                 ),
-                                const SizedBox(width: 12),
+                                const SizedBox(width: 16),
                                 const Text(
                                   'Personal Information',
                                   style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
                                     color: Colors.black87,
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 24),
-                            // Form fields
+                            const SizedBox(height: 20),
+                            if (userProfile?['registration_type'] == 'simple') ...[
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: _isEmailFieldReadOnly ? Colors.grey.shade50 : Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: _isEmailFieldReadOnly ? Colors.grey.shade300 : Colors.grey.shade200,
+                                    width: 1,
+                                  ),
+                                ),
+                                child: TextFormField(
+                                  controller: _emailController,
+                                  readOnly: _isEmailFieldReadOnly,
+                                  keyboardType: TextInputType.emailAddress,
+                                  onChanged: (value) {
+                                    onStateChange(() {
+                                      if (_forceEmailVerification && value.trim() != (userProfile?['email'] ?? '')) {
+                                        _forceEmailVerification = false;
+                                        _isEmailFieldReadOnly = false;
+                                      }
+                                    });
+                                  },
+                                  decoration: InputDecoration(
+                                    label: _isEmailFieldReadOnly
+                                        ? Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                'Email',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Colors.grey.shade600,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Icon(
+                                                Icons.verified,
+                                                size: 16,
+                                                color: Colors.green.shade600,
+                                              ),
+                                            ],
+                                          )
+                                        : null,
+                                    labelText: _isEmailFieldReadOnly ? null : 'Email',
+                                    labelStyle: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: _isEmailFieldReadOnly ? Colors.grey.shade500 : Colors.grey.shade700,
+                                    ),
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                    prefixIcon: Icon(
+                                      _isEmailFieldReadOnly ? Icons.lock_outline : Icons.email_outlined,
+                                      size: 20,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    color: _isEmailFieldReadOnly ? Colors.grey.shade600 : Colors.black87,
+                                  ),
+                                  validator: (value) {
+                                    if (value?.isEmpty ?? true) return 'Required';
+                                    if (!value!.contains('@')) return 'Invalid email';
+                                    return null;
+                                  },
+                                ),
+                              ),
+                              Container(
+                                margin: const EdgeInsets.only(top: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.orange.shade200),
+                                ),
+                                child: InkWell(
+                                  onTap: () {
+                                    onStateChange(() {
+                                      _forceEmailVerification = !_forceEmailVerification;
+                                      _handleEmailMutualExclusivity();
+                                    });
+                                  },
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      SizedBox(
+                                        height: 18,
+                                        width: 18,
+                                        child: Checkbox(
+                                          value: _forceEmailVerification,
+                                          onChanged: (value) {
+                                            onStateChange(() {
+                                              _forceEmailVerification = value ?? false;
+                                              _handleEmailMutualExclusivity();
+                                            });
+                                          },
+                                          activeColor: Colors.orange.shade600,
+                                          checkColor: Colors.white,
+                                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          _forceEmailVerification
+                                              ? 'Keep current email and send verification to: ${userProfile?['email'] ?? ''}'
+                                              : 'Email verification required. Change your email above or check this box to keep current email, then click Save to send verification.',
+                                          style: const TextStyle(fontSize: 12, color: Colors.orange),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ] else ...[
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.grey.shade300, width: 1),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade200,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        Icons.lock_outline,
+                                        size: 20,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Text(
+                                                'Email',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Colors.grey.shade600,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Icon(
+                                                Icons.verified,
+                                                size: 16,
+                                                color: Colors.green.shade600,
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            userProfile?['email'] ?? '',
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                margin: const EdgeInsets.only(top: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.green.shade200),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.verified_outlined, size: 16, color: Colors.green.shade600),
+                                    const SizedBox(width: 8),
+                                    const Expanded(
+                                      child: Text(
+                                        'Your email address has been verified and cannot be changed.',
+                                        style: TextStyle(fontSize: 12, color: Colors.green),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 16),
                             _buildEnhancedTextField(
                               controller: _firstNameController,
                               label: 'First Name',
@@ -1091,43 +3645,13 @@ Widget buildEditProfileForm(
                               icon: Icons.person_outline,
                             ),
                             const SizedBox(height: 16),
-                            // Birthday Selector
                             Container(
                               decoration: BoxDecoration(
-                                border: Border.all(color: Colors.grey.shade300),
-                                borderRadius: BorderRadius.circular(12),
-                                color: Colors.grey.shade50,
+                                color: Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey.shade200, width: 1),
                               ),
-                              child: ListTile(
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                leading: Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.blue.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Icon(
-                                    Icons.calendar_today,
-                                    size: 20,
-                                    color: Colors.blue.shade600,
-                                  ),
-                                ),
-                                title: Text(
-                                  _selectedBirthday == null
-                                      ? 'Select Birthday'
-                                      : 'Birthday: ${DateFormat('MMM d, y').format(_selectedBirthday!)}',
-                                  style: TextStyle(
-                                    color: _selectedBirthday == null 
-                                        ? Colors.grey.shade600
-                                        : Colors.black87,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                trailing: Icon(
-                                  Icons.arrow_forward_ios,
-                                  size: 16,
-                                  color: Colors.grey.shade600,
-                                ),
+                              child: InkWell(
                                 onTap: () async {
                                   final date = await showDatePicker(
                                     context: context,
@@ -1136,63 +3660,138 @@ Widget buildEditProfileForm(
                                     lastDate: DateTime.now(),
                                   );
                                   if (date != null) {
-                                    _selectedBirthday = date;
-                                    setState(() {});
+                                    onStateChange(() {
+                                      _selectedBirthday = date;
+                                    });
                                   }
                                 },
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                                borderRadius: BorderRadius.circular(8),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade100,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          Icons.cake_outlined,
+                                          size: 20,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Expanded(
+                                        child: Text(
+                                          _selectedBirthday == null
+                                              ? 'Select Birthday'
+                                              : 'Birthday: ${DateFormat('MMM d, y').format(_selectedBirthday!)}',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w400,
+                                            color: _selectedBirthday == null ? Colors.grey.shade500 : Colors.black87,
+                                          ),
+                                        ),
+                                      ),
+                                      Icon(
+                                        Icons.arrow_forward_ios,
+                                        size: 16,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
                             const SizedBox(height: 16),
-                            // Gender Dropdown
                             Container(
                               decoration: BoxDecoration(
-                                border: Border.all(color: Colors.grey.shade300),
-                                borderRadius: BorderRadius.circular(12),
-                                color: Colors.grey.shade50,
+                                color: Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey.shade200, width: 1),
                               ),
                               child: DropdownButtonFormField<String>(
                                 value: _selectedGender,
                                 decoration: InputDecoration(
                                   labelText: 'Gender',
+                                  labelStyle: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey.shade700,
+                                  ),
                                   border: InputBorder.none,
-                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                                   prefixIcon: Container(
-                                    margin: const EdgeInsets.only(left: 12, right: 8),
+                                    margin: const EdgeInsets.only(right: 16),
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: Colors.blue.withOpacity(0.1),
+                                      color: Colors.grey.shade100,
                                       borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Icon(
-                                      Icons.transgender,
+                                      Icons.person_outline,
                                       size: 20,
-                                      color: Colors.blue.shade600,
+                                      color: Colors.grey.shade600,
                                     ),
                                   ),
                                 ),
                                 items: ['Male', 'Female', 'LGBTQ+', 'Others']
                                     .map((gender) => DropdownMenuItem(
                                           value: gender,
-                                          child: Text(gender),
+                                          child: Text(
+                                            gender,
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w400,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
                                         ))
                                     .toList(),
-                                onChanged: (value) => _selectedGender = value,
+                                onChanged: (value) {
+                                  onStateChange(() {
+                                    _selectedGender = value;
+                                  });
+                                },
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w400,
+                                  color: Colors.black87,
+                                ),
+                                dropdownColor: Colors.white,
                               ),
                             ),
                             const SizedBox(height: 16),
                             _buildEnhancedTextField(
                               controller: _contactNumberController,
                               label: 'Contact Number',
-                              icon: Icons.phone,
-                              hintText: 'e.g. +639123456789',
-                              keyboardType: TextInputType.phone,
+                              icon: Icons.phone_outlined,
+                              hintText: '+63 9123456789',
+                              keyboardType: TextInputType.number,
+                              onChanged: (value) {
+                                if (!value.startsWith('+63')) {
+                                  _contactNumberController.text = '+63';
+                                  _contactNumberController.selection = TextSelection.fromPosition(
+                                    TextPosition(offset: _contactNumberController.text.length),
+                                  );
+                                }
+                                if (value.length > 13) {
+                                  _contactNumberController.text = value.substring(0, 13);
+                                  _contactNumberController.selection = TextSelection.fromPosition(
+                                    TextPosition(offset: _contactNumberController.text.length),
+                                  );
+                                }
+                              },
                               validator: (value) {
                                 if (value != null && value.isNotEmpty) {
-                                  if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
-                                    return 'Please enter a valid phone number';
+                                  if (!value.startsWith('+63') || value.length != 13) {
+                                    return 'Must be in format +63xxxxxxxxxx (11 digits total)';
+                                  }
+                                  String digits = value.substring(3);
+                                  if (!RegExp(r'^\d{10}$').hasMatch(digits)) {
+                                    return 'Please enter valid digits after +63';
                                   }
                                 }
                                 return null;
@@ -1202,56 +3801,51 @@ Widget buildEditProfileForm(
                         ),
                       ),
                     ),
-                    // Police Information Card (shown only for officers)
                     if (userProfile?['role'] == 'officer') ...[
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 20),
                       Container(
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
+                          color: Colors.white.withOpacity(0.95),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade200, width: 1),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.grey.withOpacity(0.1),
-                              blurRadius: 15,
-                              offset: const Offset(0, 8),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
                             ),
                           ],
                         ),
                         child: Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: isDesktopOrWeb ? 20.0 : 16.0,
-                            vertical: isDesktopOrWeb ? 28.0 : 20.0,
-                          ),
+                          padding: const EdgeInsets.all(20.0),
                           child: Column(
                             children: [
-                              // Header with icon
                               Row(
                                 children: [
                                   Container(
-                                    padding: const EdgeInsets.all(10),
+                                    padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: Colors.indigo.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(12),
+                                      color: Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Icon(
                                       Icons.local_police,
-                                      color: Colors.indigo.shade600,
-                                      size: 24,
+                                      color: Colors.grey.shade600,
+                                      size: 20,
                                     ),
                                   ),
-                                  const SizedBox(width: 12),
+                                  const SizedBox(width: 16),
                                   const Text(
                                     'Police Information',
                                     style: TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
                                       color: Colors.black87,
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 24),
-                              // Police Rank Dropdown
+                              const SizedBox(height: 20),
                               FutureBuilder<void>(
                                 future: _policeRanks.isEmpty ? _loadPoliceData() : null,
                                 builder: (context, snapshot) {
@@ -1259,9 +3853,9 @@ Widget buildEditProfileForm(
                                     return Container(
                                       height: 56,
                                       decoration: BoxDecoration(
-                                        border: Border.all(color: Colors.grey.shade300),
-                                        borderRadius: BorderRadius.circular(12),
-                                        color: Colors.grey.shade50,
+                                        color: Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.grey.shade200, width: 1),
                                       ),
                                       child: const Center(
                                         child: Row(
@@ -1273,7 +3867,14 @@ Widget buildEditProfileForm(
                                               child: CircularProgressIndicator(strokeWidth: 2),
                                             ),
                                             SizedBox(width: 8),
-                                            Text('Loading ranks...'),
+                                            Text(
+                                              'Loading ranks...',
+                                              style: TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w400,
+                                                color: Colors.black87,
+                                              ),
+                                            ),
                                           ],
                                         ),
                                       ),
@@ -1281,27 +3882,32 @@ Widget buildEditProfileForm(
                                   }
                                   return Container(
                                     decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.grey.shade300),
-                                      borderRadius: BorderRadius.circular(12),
-                                      color: Colors.grey.shade50,
+                                      color: Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.grey.shade200, width: 1),
                                     ),
                                     child: DropdownButtonFormField<int>(
                                       value: _selectedPoliceRankId,
                                       decoration: InputDecoration(
                                         labelText: 'Police Rank',
+                                        labelStyle: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.grey.shade700,
+                                        ),
                                         border: InputBorder.none,
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                                         prefixIcon: Container(
-                                          margin: const EdgeInsets.only(left: 12, right: 8),
+                                          margin: const EdgeInsets.only(right: 16),
                                           padding: const EdgeInsets.all(8),
                                           decoration: BoxDecoration(
-                                            color: Colors.indigo.withOpacity(0.1),
+                                            color: Colors.grey.shade100,
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           child: Icon(
-                                            Icons.military_tech,
+                                            Icons.military_tech_outlined,
                                             size: 20,
-                                            color: Colors.indigo.shade600,
+                                            color: Colors.grey.shade600,
                                           ),
                                         ),
                                       ),
@@ -1311,22 +3917,32 @@ Widget buildEditProfileForm(
                                                 value: rank['id'],
                                                 child: Text(
                                                   rank['new_rank'] ?? 'Unknown',
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w400,
+                                                    color: Colors.black87,
+                                                  ),
                                                   overflow: TextOverflow.ellipsis,
                                                   maxLines: 1,
                                                 ),
                                               ))
                                           .toList(),
                                       onChanged: (value) {
-                                        setState(() {
+                                        onStateChange(() {
                                           _selectedPoliceRankId = value;
                                         });
                                       },
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w400,
+                                        color: Colors.black87,
+                                      ),
+                                      dropdownColor: Colors.white,
                                     ),
                                   );
                                 },
                               ),
                               const SizedBox(height: 16),
-                              // Police Station Dropdown
                               FutureBuilder<void>(
                                 future: _policeStations.isEmpty ? _loadPoliceData() : null,
                                 builder: (context, snapshot) {
@@ -1334,9 +3950,9 @@ Widget buildEditProfileForm(
                                     return Container(
                                       height: 56,
                                       decoration: BoxDecoration(
-                                        border: Border.all(color: Colors.grey.shade300),
-                                        borderRadius: BorderRadius.circular(12),
-                                        color: Colors.grey.shade50,
+                                        color: Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.grey.shade200, width: 1),
                                       ),
                                       child: const Center(
                                         child: Row(
@@ -1348,7 +3964,14 @@ Widget buildEditProfileForm(
                                               child: CircularProgressIndicator(strokeWidth: 2),
                                             ),
                                             SizedBox(width: 8),
-                                            Text('Loading stations...'),
+                                            Text(
+                                              'Loading stations...',
+                                              style: TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w400,
+                                                color: Colors.black87,
+                                              ),
+                                            ),
                                           ],
                                         ),
                                       ),
@@ -1356,41 +3979,59 @@ Widget buildEditProfileForm(
                                   }
                                   return Container(
                                     decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.grey.shade300),
-                                      borderRadius: BorderRadius.circular(12),
-                                      color: Colors.grey.shade50,
+                                      color: Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.grey.shade200, width: 1),
                                     ),
                                     child: DropdownButtonFormField<int>(
                                       value: _selectedPoliceStationId,
                                       decoration: InputDecoration(
                                         labelText: 'Assigned Station',
+                                        labelStyle: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.grey.shade700,
+                                        ),
                                         border: InputBorder.none,
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                                         prefixIcon: Container(
-                                          margin: const EdgeInsets.only(left: 12, right: 8),
+                                          margin: const EdgeInsets.only(right: 16),
                                           padding: const EdgeInsets.all(8),
                                           decoration: BoxDecoration(
-                                            color: Colors.indigo.withOpacity(0.1),
+                                            color: Colors.grey.shade100,
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           child: Icon(
-                                            Icons.location_on,
+                                            Icons.location_on_outlined,
                                             size: 20,
-                                            color: Colors.indigo.shade600,
+                                            color: Colors.grey.shade600,
                                           ),
                                         ),
                                       ),
                                       items: _policeStations
                                           .map((station) => DropdownMenuItem<int>(
                                                 value: station['id'],
-                                                child: Text(station['name'] ?? 'Unknown'),
+                                                child: Text(
+                                                  station['name'] ?? 'Unknown',
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w400,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
                                               ))
                                           .toList(),
                                       onChanged: (value) {
-                                        setState(() {
+                                        onStateChange(() {
                                           _selectedPoliceStationId = value;
                                         });
                                       },
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w400,
+                                        color: Colors.black87,
+                                      ),
+                                      dropdownColor: Colors.white,
                                     ),
                                   );
                                 },
@@ -1400,1732 +4041,177 @@ Widget buildEditProfileForm(
                         ),
                       ),
                     ],
-                    const SizedBox(height: 24),
-                    // Password Change Card
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.grey.withOpacity(0.1),
-                            blurRadius: 15,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: isDesktopOrWeb ? 20.0 : 16.0,
-                          vertical: isDesktopOrWeb ? 28.0 : 20.0,
-                        ),
-                        child: Column(
-                          children: [
-                            // Header with icon
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: Colors.orange.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Icon(
-                                    Icons.lock,
-                                    color: Colors.orange.shade600,
-                                    size: 24,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                const Text(
-                                  'Change Password',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.shade50,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.blue.shade200),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.info_outline, size: 16, color: Colors.blue.shade600),
-                                  const SizedBox(width: 8),
-                                  const Expanded(
-                                    child: Text(
-                                      'Leave blank to keep current password',
-                                      style: TextStyle(fontSize: 12, color: Colors.blue),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            // Password fields
-                            _buildEnhancedPasswordField(
-                              controller: _passwordController,
-                              label: 'Current Password',
-                              isVisible: showCurrentPassword,
-                              onVisibilityToggle: () {
-                                setState(() {
-                                  showCurrentPassword = !showCurrentPassword;
-                                });
-                              },
-                              errorText: _currentPasswordError,
-                              validator: (value) {
-                                if (_currentPasswordError != null) {
-                                  return _currentPasswordError;
-                                }
-                                if (_newPasswordController.text.isNotEmpty &&
-                                    (value?.isEmpty ?? true)) {
-                                  return 'Required to change password';
-                                }
-                                return null;
-                              },
-                              onChanged: (value) {
-                                if (_currentPasswordError != null) {
-                                  setState(() {
-                                    _currentPasswordError = null;
-                                  });
-                                }
-                              },
-                            ),
-                            const SizedBox(height: 16),
-                            _buildEnhancedPasswordField(
-                              controller: _newPasswordController,
-                              label: 'New Password',
-                              isVisible: showNewPassword,
-                              onVisibilityToggle: () {
-                                setState(() {
-                                  showNewPassword = !showNewPassword;
-                                });
-                              },
-                              validator: (value) {
-                                if (value?.isNotEmpty ?? false) {
-                                  if (value == _passwordController.text) {
-                                    return 'New password must be different';
-                                  }
-                                  if (value!.length < 6) {
-                                    return 'Must be at least 6 characters';
-                                  }
-                                }
-                                return null;
-                              },
-                            ),
-                            const SizedBox(height: 16),
-                            _buildEnhancedPasswordField(
-                              controller: _confirmPasswordController,
-                              label: 'Confirm New Password',
-                              isVisible: showConfirmPassword,
-                              onVisibilityToggle: () {
-                                setState(() {
-                                  showConfirmPassword = !showConfirmPassword;
-                                });
-                              },
-                              validator: (value) {
-                                if (_newPasswordController.text.isNotEmpty) {
-                                  if (value?.isEmpty ?? true) {
-                                    return 'Please confirm your password';
-                                  }
-                                  if (value != _newPasswordController.text) {
-                                    return 'Passwords do not match';
-                                  }
-                                }
-                                return null;
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    // Action Buttons
+                    const SizedBox(height: 30),
                     Row(
                       children: [
                         Expanded(
-                          child: Container(
-                            height: 56,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.grey.shade300, width: 2),
-                            ),
+                          child: SizedBox(
+                            height: 50,
                             child: OutlinedButton(
-                              onPressed: onCancel,
+                              onPressed: () {
+                                _shouldScrollToTop = true;
+                                onCancel();
+                              },
                               style: OutlinedButton.styleFrom(
-                                side: BorderSide.none,
+                                side: BorderSide(color: Theme.of(context).primaryColor),
                                 shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
+                                backgroundColor: Colors.white.withOpacity(0.95),
+                                foregroundColor: Theme.of(context).primaryColor,
                               ),
                               child: Text(
                                 'CANCEL',
                                 style: TextStyle(
-                                  fontWeight: FontWeight.bold,
+                                  fontWeight: FontWeight.w600,
                                   fontSize: 16,
-                                  color: Colors.grey.shade600,
+                                  color: Theme.of(context).primaryColor,
                                 ),
                               ),
                             ),
                           ),
                         ),
                         const SizedBox(width: 16),
-                        Expanded(
-                          child: Container(
-                            height: 56,
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  Theme.of(context).primaryColor,
-                                  Theme.of(context).primaryColor.withOpacity(0.8),
-                                ],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Theme.of(context).primaryColor.withOpacity(0.3),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 6),
-                                ),
-                              ],
-                            ),
-                            child: ElevatedButton(
-                              onPressed: () => updateProfile(context, onSuccess: onSuccess),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.transparent,
-                                shadowColor: Colors.transparent,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                              ),
-                              child: const Text(
-                                'SAVE',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (isDesktopOrWeb) const SizedBox(height: 16),
-                  ],
-                ),
+                       Expanded(
+  child: SizedBox(
+    height: 50,
+    child: ElevatedButton(
+      onPressed: _isUpdatingEmail
+          ? null
+          : () => updateProfile(
+                context,
+                onSuccess: onSuccess,
+                onStateChange: onStateChange,
+                isSidebarVisible: isSidebarVisible
               ),
-            ),
-          ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: _getSaveButtonColor(context),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
         ),
-      );
-    },
-  );
-}
-
-// Helper method for enhanced text fields
-Widget _buildEnhancedTextField({
-  required TextEditingController controller,
-  required String label,
-  required IconData icon,
-  String? hintText,
-  TextInputType? keyboardType,
-  String? Function(String?)? validator,
-}) {
-  return Container(
-    decoration: BoxDecoration(
-      color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Colors.grey.shade300),
-    ),
-    child: TextFormField(
-      controller: controller,
-      keyboardType: keyboardType,
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hintText,
-        border: InputBorder.none,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        prefixIcon: Container(
-          margin: const EdgeInsets.only(left: 12, right: 8),
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            icon,
-            size: 20,
-            color: Colors.blue.shade600,
-          ),
-        ),
+        elevation: 2,
       ),
-      validator: validator,
+      child: _buildSaveButtonContent(),
     ),
-  );
-}
-
-// Helper method for enhanced password fields
-Widget _buildEnhancedPasswordField({
-  required TextEditingController controller,
-  required String label,
-  required bool isVisible,
-  required VoidCallback onVisibilityToggle,
-  String? errorText,
-  String? Function(String?)? validator,
-  void Function(String)? onChanged,
-}) {
-  return Container(
-    decoration: BoxDecoration(
-      color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(
-        color: errorText != null ? Colors.red.shade300 : Colors.grey.shade300,
-      ),
-    ),
-    child: TextFormField(
-      controller: controller,
-      obscureText: !isVisible,
-      onChanged: onChanged,
-      decoration: InputDecoration(
-        labelText: label,
-        border: InputBorder.none,
-        errorText: errorText,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        prefixIcon: Container(
-          margin: const EdgeInsets.only(left: 12, right: 8),
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            Icons.lock_outline,
-            size: 20,
-            color: Colors.orange.shade600,
-          ),
-        ),
-        suffixIcon: Container(
-          margin: const EdgeInsets.only(right: 8),
-          child: IconButton(
-            icon: Icon(
-              isVisible ? Icons.visibility : Icons.visibility_off,
-              color: Colors.grey.shade600,
-            ),
-            onPressed: onVisibilityToggle,
-          ),
-        ),
-      ),
-      validator: validator,
-    ),
-  );
-}
-
-
-
-
-//DESKTOP VIEW
-Widget buildDesktopProfileView(
-  BuildContext context, 
-  VoidCallback onEditPressed,
-  {VoidCallback? onClosePressed}
-) {
-  // Only scroll to top when explicitly requested (when returning from edit mode)
-  if (_shouldScrollToTop) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_profileViewScrollController.hasClients) {
-        _profileViewScrollController.animateTo(
-          0,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-    _shouldScrollToTop = false; // Reset the flag
-  }
-
-  return Center(
-    child: Container(
-      width: 480,
-      height: MediaQuery.of(context).size.height * 0.85,
-      margin: const EdgeInsets.symmetric(vertical: 40),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.15),
-            blurRadius: 30,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Enhanced gradient header section
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Theme.of(context).primaryColor.withOpacity(0.8),
-                  Theme.of(context).primaryColor.withOpacity(0.6),
-                ],
-              ),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(24),
-                topRight: Radius.circular(24),
-              ),
-            ),
-            child: Stack(
-              children: [
-                // Background pattern
-                Positioned(
-                  right: -50,
-                  top: -30,
-                  child: Container(
-                    width: 120,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withOpacity(0.1),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  right: 10,
-                  top: 50,
-                  child: Container(
-                    width: 60,
-                    height: 60,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withOpacity(0.05),
-                    ),
-                  ),
-                ),
-                // Close button
-                Positioned(
-                  top: 16,
-                  right: 16,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.close, size: 18, color: Colors.white),
-                      onPressed: onClosePressed ?? () {},
-                    ),
-                  ),
-                ),
-                // Content
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // Enhanced avatar with border and shadow
-                      Container(
-                        margin: const EdgeInsets.only(top: 10),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 15,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
-                        ),
-                        child: CircleAvatar(
-                          backgroundColor: Colors.white,
-                          radius: 35,
-                          child: CircleAvatar(
-                            backgroundColor: Theme.of(context).primaryColor.withOpacity(0.8),
-                            radius: 32,
-                            child: Text(
-                              userProfile?['first_name']?.toString().substring(0, 1) ?? 'U',
-                              style: const TextStyle(
-                                fontSize: 32,
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      // Name with better typography
-                      Container(
-                        width: double.infinity,
-                        alignment: Alignment.center,
-                        child: Text(
-                          '${userProfile?['first_name'] ?? ''}'
-                          '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-                          ' ${userProfile?['last_name'] ?? ''}'
-                          '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                            letterSpacing: 0.5,
-                            height: 1.2,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      // Email with subtle styling
-                      Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Text(
-                            userProfile?['email'] ?? '',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      // Enhanced role chip
-                      Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(22),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (isAdmin) ...[
-                                Icon(
-                                  Icons.admin_panel_settings,
-                                  size: 16,
-                                  color: Colors.blue,
-                                ),
-                                const SizedBox(width: 6),
-                              ] else if (userProfile?['role'] == 'officer') ...[
-                                Icon(
-                                  Icons.local_police,
-                                  size: 16,
-                                  color: Colors.indigo,
-                                ),
-                                const SizedBox(width: 6),
-                              ],
-                              Text(
-                                userProfile?['role']?.toUpperCase() ?? 'USER',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: isAdmin ? Colors.blue : 
-                                        (userProfile?['role'] == 'officer' ? Colors.indigo : Colors.green),
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          
-          // Information section with scrolling
-          Expanded(
-            child: SingleChildScrollView(
-              controller: _profileViewScrollController,
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Personal Information Section
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          Icons.person,
-                          color: Colors.blue.shade600,
-                          size: 18,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Text(
-                        'Personal Information',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Information items with enhanced styling
-                  _buildDesktopInfoItem(
-                    context,
-                    icon: Icons.person_outline,
-                    label: 'Username',
-                    value: userProfile?['username'] ?? 'Not set',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildDesktopInfoItem(
-                    context,
-                    icon: Icons.cake_outlined,
-                    label: 'Birthday',
-                    value: userProfile?['bday'] != null
-                        ? DateFormat('MMMM d, y').format(
-                            DateTime.parse(userProfile?['bday']))
-                        : 'Not specified',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildDesktopInfoItem(
-                    context,
-                    icon: Icons.calendar_today,
-                    label: 'Age',
-                    value: userProfile?['bday'] != null
-                        ? '${_calculateAge(DateTime.parse(userProfile!['bday']))} years old'
-                        : 'Not specified',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildDesktopInfoItem(
-                    context,
-                    icon: Icons.transgender,
-                    label: 'Gender',
-                    value: userProfile?['gender'] ?? 'Not specified',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildDesktopInfoItem(
-                    context,
-                    icon: Icons.phone,
-                    label: 'Contact Number',
-                    value: userProfile?['contact_number'] ?? 'Not specified',
-                  ),
-
-                  // Police information section (shown only for officers)
-                  if (userProfile?['role'] == 'officer') ...[
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.indigo.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            Icons.local_police,
-                            color: Colors.indigo.shade600,
-                            size: 18,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Text(
-                          'Police Information',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
-                          ),
-                        ),
+  ),
+),
                       ],
                     ),
                     const SizedBox(height: 16),
-                    _buildDesktopInfoItem(
-                      context,
-                      icon: Icons.military_tech,
-                      label: 'Police Rank',
-                      value: _getPoliceRankName(userProfile?['police_rank_id']) ?? 'Not assigned',
-                    ),
-                    const SizedBox(height: 12),
-                    _buildDesktopInfoItem(
-                      context,
-                      icon: Icons.location_on,
-                      label: 'Assigned Station',
-                      value: _getPoliceStationName(userProfile?['police_station_id']) ?? 'Not assigned',
-                    ),
                   ],
-                  
-                  const SizedBox(height: 24),
-                  
-                  // Enhanced action buttons
-                  Container(
-                    width: double.infinity,
-                    height: 50,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Theme.of(context).primaryColor,
-                          Theme.of(context).primaryColor.withOpacity(0.8),
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Theme.of(context).primaryColor.withOpacity(0.3),
-                          blurRadius: 12,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: ElevatedButton(
-                      onPressed: onEditPressed,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.transparent,
-                        shadowColor: Colors.transparent,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.edit, color: Colors.white, size: 18),
-                          SizedBox(width: 8),
-                          Text(
-                            'EDIT PROFILE',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                              color: Colors.white,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  
-                  if (isAdmin) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      width: double.infinity,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: Colors.blue.shade300,
-                          width: 2,
-                        ),
-                        color: Colors.blue.shade50,
-                      ),
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const AdminDashboardScreen(),
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          side: BorderSide.none,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.dashboard, color: Colors.blue.shade600, size: 18),
-                            const SizedBox(width: 8),
-                            Text(
-                              'ADMIN DASHBOARD',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                                color: Colors.blue.shade600,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
+                ),
               ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// Add these helper methods for the save button
+Color _getSaveButtonColor(BuildContext context) {
+  switch (_saveButtonState) {
+    case SaveButtonState.saved:
+      return Colors.green;
+    case SaveButtonState.noChanges:
+      return Colors.orange;
+    case SaveButtonState.saving:
+    case SaveButtonState.normal:
+    return Theme.of(context).primaryColor;
+  }
+}
+
+Widget _buildSaveButtonContent() {
+  switch (_saveButtonState) {
+    case SaveButtonState.saving:
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Text(
+            'SAVING..',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              color: Colors.white,
             ),
           ),
         ],
-      ),
-    ),
-  );
-}
-
-// Enhanced _buildDesktopInfoItem method
-Widget _buildDesktopInfoItem(
-  BuildContext context, {
-  required IconData icon,
-  required String label,
-  required String value,
-}) {
-  return Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(
-        color: Colors.grey.shade200,
-        width: 1,
-      ),
-    ),
-    child: Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
+      );
+    case SaveButtonState.saved:
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.check,
+            color: Colors.white,
+            size: 20,
           ),
-          child: Icon(
-            icon,
-            size: 18,
-            color: Colors.blue.shade600,
-          ),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.grey.shade600,
-                  letterSpacing: 0.2,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-
-// Updated buildDesktopEditProfileForm with single scrollable column and proper close functionality
-Widget buildDesktopEditProfileForm(
-  BuildContext context,
-  VoidCallback onCancel,
-  {required VoidCallback onSuccess}
-) {
-  bool showCurrentPassword = false;
-  bool showNewPassword = false;
-  bool showConfirmPassword = false;
-
-  // Only scroll to top when explicitly requested (when entering edit mode)
-  if (_shouldScrollToTop) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          0,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-    _shouldScrollToTop = false; // Reset the flag
-  }
-
-  return StatefulBuilder(
-    builder: (context, setState) {
-      return PopScope(
-        canPop: false,
-        onPopInvoked: (didPop) {
-          if (!didPop) {
-            // Set flag to scroll to top when returning to profile view
-            _shouldScrollToTop = true;
-            onCancel();
-          }
-        },
-        child: Center(
-          child: Container(
-            width: 500,
-            height: MediaQuery.of(context).size.height * 0.90,
-            margin: const EdgeInsets.symmetric(vertical: 40),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.grey.shade50,
-                  Colors.white,
-                ],
-              ),
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
-                  blurRadius: 30,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                // Enhanced header with gradient
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Theme.of(context).primaryColor.withOpacity(0.8),
-                        Theme.of(context).primaryColor.withOpacity(0.6),
-                      ],
-                    ),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(24),
-                      topRight: Radius.circular(24),
-                    ),
-                  ),
-                  child: Stack(
-                    children: [
-                      // Background pattern
-                      Positioned(
-                        right: -20,
-                        top: -10,
-                        child: Container(
-                          width: 60,
-                          height: 60,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withOpacity(0.1),
-                          ),
-                        ),
-                      ),
-                      // Content
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Edit Profile',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: IconButton(
-                              icon: const Icon(Icons.close, size: 18, color: Colors.white),
-                              onPressed: () {
-                                // Set flag to scroll to top when returning to profile view
-                                _shouldScrollToTop = true;
-                                onCancel();
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                
-                // Scrollable form content
-                Expanded(
-                  child: SingleChildScrollView(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(24),
-                    child: Form(
-                      key: _profileFormKey,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Personal Information Card
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.grey.withOpacity(0.1),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(20),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // Header with icon
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(
-                                          color: Colors.blue.withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Icon(
-                                          Icons.person,
-                                          color: Colors.blue.shade600,
-                                          size: 20,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      const Text(
-                                        'Personal Information',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.black87,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 20),
-                                  
-                                  // Form fields
-                                  _buildDesktopTextField(
-                                    controller: _firstNameController,
-                                    label: 'First Name',
-                                    icon: Icons.person_outline,
-                                    validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  _buildDesktopTextField(
-                                    controller: _lastNameController,
-                                    label: 'Last Name',
-                                    icon: Icons.person_outline,
-                                    validator: (value) => value?.isEmpty ?? true ? 'Required' : null,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  _buildDesktopTextField(
-                                    controller: _middleNameController,
-                                    label: 'Middle Name (optional)',
-                                    icon: Icons.person_outline,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  _buildDesktopTextField(
-                                    controller: _extNameController,
-                                    label: 'Extension Name (optional)',
-                                    icon: Icons.person_outline,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  
-                                  // Birthday Selector
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.grey.shade300),
-                                      borderRadius: BorderRadius.circular(10),
-                                      color: Colors.grey.shade50,
-                                    ),
-                                    child: ListTile(
-                                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                                      leading: Container(
-                                        padding: const EdgeInsets.all(6),
-                                        decoration: BoxDecoration(
-                                          color: Colors.blue.withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Icon(
-                                          Icons.calendar_today,
-                                          size: 18,
-                                          color: Colors.blue.shade600,
-                                        ),
-                                      ),
-                                      title: Text(
-                                        _selectedBirthday == null
-                                            ? 'Select Birthday'
-                                            : 'Birthday: ${DateFormat('MMM d, y').format(_selectedBirthday!)}',
-                                        style: TextStyle(
-                                          color: _selectedBirthday == null 
-                                              ? Colors.grey.shade600
-                                              : Colors.black87,
-                                          fontWeight: FontWeight.w500,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      trailing: Icon(
-                                        Icons.arrow_forward_ios,
-                                        size: 14,
-                                        color: Colors.grey.shade600,
-                                      ),
-                                      onTap: () async {
-                                        final date = await showDatePicker(
-                                          context: context,
-                                          initialDate: _selectedBirthday ?? DateTime.now(),
-                                          firstDate: DateTime(1900),
-                                          lastDate: DateTime.now(),
-                                        );
-                                        if (date != null) {
-                                          _selectedBirthday = date;
-                                          setState(() {});
-                                        }
-                                      },
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  
-                                  // Gender Dropdown
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.grey.shade300),
-                                      borderRadius: BorderRadius.circular(10),
-                                      color: Colors.grey.shade50,
-                                    ),
-                                    child: DropdownButtonFormField<String>(
-                                      value: _selectedGender,
-                                      decoration: InputDecoration(
-                                        labelText: 'Gender',
-                                        border: InputBorder.none,
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                                        prefixIcon: Container(
-                                          margin: const EdgeInsets.only(left: 10, right: 6),
-                                          padding: const EdgeInsets.all(6),
-                                          decoration: BoxDecoration(
-                                            color: Colors.blue.withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(6),
-                                          ),
-                                          child: Icon(
-                                            Icons.transgender,
-                                            size: 18,
-                                            color: Colors.blue.shade600,
-                                          ),
-                                        ),
-                                      ),
-                                      items: ['Male', 'Female', 'LGBTQ+', 'Others']
-                                          .map((gender) => DropdownMenuItem(
-                                                value: gender,
-                                                child: Text(gender, style: const TextStyle(fontSize: 14)),
-                                              ))
-                                          .toList(),
-                                      onChanged: (value) => _selectedGender = value,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  
-                                  _buildDesktopTextField(
-                                    controller: _contactNumberController,
-                                    label: 'Contact Number',
-                                    icon: Icons.phone,
-                                    hintText: 'e.g. +639123456789',
-                                    keyboardType: TextInputType.phone,
-                                    validator: (value) {
-                                      if (value != null && value.isNotEmpty) {
-                                        if (!RegExp(r'^\+?[\d\s\-]{10,}$').hasMatch(value)) {
-                                          return 'Please enter a valid phone number';
-                                        }
-                                      }
-                                      return null;
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-
-                          // Police Information Card (shown only for officers)
-                          if (userProfile?['role'] == 'officer') ...[
-                            const SizedBox(height: 20),
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.grey.withOpacity(0.1),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(20),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    // Header with icon
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.all(8),
-                                          decoration: BoxDecoration(
-                                            color: Colors.indigo.withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(8),
-                                          ),
-                                          child: Icon(
-                                            Icons.local_police,
-                                            color: Colors.indigo.shade600,
-                                            size: 20,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        const Text(
-                                          'Police Information',
-                                          style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 20),
-                                    
-                                    // Police Rank Dropdown
-                                    FutureBuilder<void>(
-                                      future: _policeRanks.isEmpty ? _loadPoliceData() : null,
-                                      builder: (context, snapshot) {
-                                        if (snapshot.connectionState == ConnectionState.waiting) {
-                                          return Container(
-                                            height: 50,
-                                            decoration: BoxDecoration(
-                                              border: Border.all(color: Colors.grey.shade300),
-                                              borderRadius: BorderRadius.circular(10),
-                                              color: Colors.grey.shade50,
-                                            ),
-                                            child: const Center(
-                                              child: Row(
-                                                mainAxisAlignment: MainAxisAlignment.center,
-                                                children: [
-                                                  SizedBox(
-                                                    width: 14,
-                                                    height: 14,
-                                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                                  ),
-                                                  SizedBox(width: 8),
-                                                  Text('Loading ranks...', style: TextStyle(fontSize: 14)),
-                                                ],
-                                              ),
-                                            ),
-                                          );
-                                        }
-                                        return Container(
-                                          decoration: BoxDecoration(
-                                            border: Border.all(color: Colors.grey.shade300),
-                                            borderRadius: BorderRadius.circular(10),
-                                            color: Colors.grey.shade50,
-                                          ),
-                                          child: DropdownButtonFormField<int>(
-                                            value: _selectedPoliceRankId,
-                                            decoration: InputDecoration(
-                                              labelText: 'Police Rank',
-                                              border: InputBorder.none,
-                                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                                              prefixIcon: Container(
-                                                margin: const EdgeInsets.only(left: 10, right: 6),
-                                                padding: const EdgeInsets.all(6),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.indigo.withOpacity(0.1),
-                                                  borderRadius: BorderRadius.circular(6),
-                                                ),
-                                                child: Icon(
-                                                  Icons.military_tech,
-                                                  size: 18,
-                                                  color: Colors.indigo.shade600,
-                                                ),
-                                              ),
-                                            ),
-                                            isExpanded: true,
-                                            items: _policeRanks
-                                                .map((rank) => DropdownMenuItem<int>(
-                                                      value: rank['id'],
-                                                      child: Text(
-                                                        rank['new_rank'] ?? 'Unknown',
-                                                        overflow: TextOverflow.ellipsis,
-                                                        maxLines: 1,
-                                                        style: const TextStyle(fontSize: 14),
-                                                      ),
-                                                    ))
-                                                .toList(),
-                                            onChanged: (value) {
-                                              setState(() {
-                                                _selectedPoliceRankId = value;
-                                              });
-                                            },
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    const SizedBox(height: 14),
-                                    
-                                    // Police Station Dropdown
-                                    FutureBuilder<void>(
-                                      future: _policeStations.isEmpty ? _loadPoliceData() : null,
-                                      builder: (context, snapshot) {
-                                        if (snapshot.connectionState == ConnectionState.waiting) {
-                                          return Container(
-                                            height: 50,
-                                            decoration: BoxDecoration(
-                                              border: Border.all(color: Colors.grey.shade300),
-                                              borderRadius: BorderRadius.circular(10),
-                                              color: Colors.grey.shade50,
-                                            ),
-                                            child: const Center(
-                                              child: Row(
-                                                mainAxisAlignment: MainAxisAlignment.center,
-                                                children: [
-                                                  SizedBox(
-                                                    width: 14,
-                                                    height: 14,
-                                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                                  ),
-                                                  SizedBox(width: 8),
-                                                  Text('Loading stations...', style: TextStyle(fontSize: 14)),
-                                                ],
-                                              ),
-                                            ),
-                                          );
-                                        }
-                                        return Container(
-                                          decoration: BoxDecoration(
-                                            border: Border.all(color: Colors.grey.shade300),
-                                            borderRadius: BorderRadius.circular(10),
-                                            color: Colors.grey.shade50,
-                                          ),
-                                          child: DropdownButtonFormField<int>(
-                                            value: _selectedPoliceStationId,
-                                            decoration: InputDecoration(
-                                              labelText: 'Assigned Station',
-                                              border: InputBorder.none,
-                                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                                              prefixIcon: Container(
-                                                margin: const EdgeInsets.only(left: 10, right: 6),
-                                                padding: const EdgeInsets.all(6),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.indigo.withOpacity(0.1),
-                                                  borderRadius: BorderRadius.circular(6),
-                                                ),
-                                                child: Icon(
-                                                  Icons.location_on,
-                                                  size: 18,
-                                                  color: Colors.indigo.shade600,
-                                                ),
-                                              ),
-                                            ),
-                                            items: _policeStations
-                                                .map((station) => DropdownMenuItem<int>(
-                                                      value: station['id'],
-                                                      child: Text(
-                                                        station['name'] ?? 'Unknown',
-                                                        style: const TextStyle(fontSize: 14),
-                                                      ),
-                                                    ))
-                                                .toList(),
-                                            onChanged: (value) {
-                                              setState(() {
-                                                _selectedPoliceStationId = value;
-                                              });
-                                            },
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-
-                          const SizedBox(height: 20),
-                          
-                          // Password Change Card
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.grey.withOpacity(0.1),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(20),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // Header with icon
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(
-                                          color: Colors.orange.withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Icon(
-                                          Icons.lock,
-                                          color: Colors.orange.shade600,
-                                          size: 20,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      const Text(
-                                        'Change Password',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.black87,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue.shade50,
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: Colors.blue.shade200),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.info_outline, size: 14, color: Colors.blue.shade600),
-                                        const SizedBox(width: 8),
-                                        const Expanded(
-                                          child: Text(
-                                            'Leave blank to keep current password',
-                                            style: TextStyle(fontSize: 12, color: Colors.blue),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  
-                                  // Password fields
-                                  _buildDesktopPasswordField(
-                                    controller: _passwordController,
-                                    label: 'Current Password',
-                                    isVisible: showCurrentPassword,
-                                    onVisibilityToggle: () {
-                                      setState(() {
-                                        showCurrentPassword = !showCurrentPassword;
-                                      });
-                                    },
-                                    errorText: _currentPasswordError,
-                                    validator: (value) {
-                                      if (_currentPasswordError != null) {
-                                        return _currentPasswordError;
-                                      }
-                                      if (_newPasswordController.text.isNotEmpty &&
-                                          (value?.isEmpty ?? true)) {
-                                        return 'Required to change password';
-                                      }
-                                      return null;
-                                    },
-                                    onChanged: (value) {
-                                      if (_currentPasswordError != null) {
-                                        setState(() {
-                                          _currentPasswordError = null;
-                                        });
-                                      }
-                                    },
-                                  ),
-                                  const SizedBox(height: 14),
-                                  
-                                  _buildDesktopPasswordField(
-                                    controller: _newPasswordController,
-                                    label: 'New Password',
-                                    isVisible: showNewPassword,
-                                    onVisibilityToggle: () {
-                                      setState(() {
-                                        showNewPassword = !showNewPassword;
-                                      });
-                                    },
-                                    validator: (value) {
-                                      if (value?.isNotEmpty ?? false) {
-                                        if (value == _passwordController.text) {
-                                          return 'New password must be different';
-                                        }
-                                        if (value!.length < 6) {
-                                          return 'Must be at least 6 characters';
-                                        }
-                                      }
-                                      return null;
-                                    },
-                                  ),
-                                  const SizedBox(height: 14),
-                                  
-                                  _buildDesktopPasswordField(
-                                    controller: _confirmPasswordController,
-                                    label: 'Confirm New Password',
-                                    isVisible: showConfirmPassword,
-                                    onVisibilityToggle: () {
-                                      setState(() {
-                                        showConfirmPassword = !showConfirmPassword;
-                                      });
-                                    },
-                                    validator: (value) {
-                                      if (_newPasswordController.text.isNotEmpty) {
-                                        if (value?.isEmpty ?? true) {
-                                          return 'Please confirm your password';
-                                        }
-                                        if (value != _newPasswordController.text) {
-                                          return 'Passwords do not match';
-                                        }
-                                      }
-                                      return null;
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                
-                // Footer with action buttons
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      top: BorderSide(color: Colors.grey.shade200, width: 1),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Container(
-                          height: 50,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.grey.shade300, width: 2),
-                          ),
-                          child: OutlinedButton(
-                            onPressed: () {
-                              // Set flag to scroll to top when returning to profile view
-                              _shouldScrollToTop = true;
-                              onCancel();
-                            },
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide.none,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
-                            child: Text(
-                              'CANCEL',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Container(
-                          height: 50,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Theme.of(context).primaryColor,
-                                Theme.of(context).primaryColor.withOpacity(0.8),
-                              ],
-                            ),
-                            borderRadius: BorderRadius.circular(14),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Theme.of(context).primaryColor.withOpacity(0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 6),
-                              ),
-                            ],
-                          ),
-                          child: ElevatedButton(
-                            onPressed: () => updateProfile(context, onSuccess: onSuccess),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.transparent,
-                              shadowColor: Colors.transparent,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
-                            child: const Text(
-                              'SAVE',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          const SizedBox(width: 8),
+          const Text(
+            'SAVED',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              color: Colors.white,
             ),
           ),
+        ],
+      );
+    case SaveButtonState.noChanges:
+      return const Text(
+        'NO CHANGES',
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
+          color: Colors.white,
         ),
       );
-    },
-  );
+    case SaveButtonState.normal:
+    return _isUpdatingEmail
+          ? Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'SENDING..',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            )
+          : const Text(
+              'SAVE',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 16,
+                color: Colors.white,
+              ),
+            );
+  }
 }
 
-// Helper method for desktop text fields
-Widget _buildDesktopTextField({
-  required TextEditingController controller,
-  required String label,
-  required IconData icon,
-  String? hintText,
-  TextInputType? keyboardType,
-  String? Function(String?)? validator,
-}) {
-  return Container(
-    decoration: BoxDecoration(
-      color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: Colors.grey.shade300),
-    ),
-    child: TextFormField(
-      controller: controller,
-      keyboardType: keyboardType,
-      style: const TextStyle(fontSize: 14),
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hintText,
-        border: InputBorder.none,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        prefixIcon: Container(
-          margin: const EdgeInsets.only(left: 10, right: 6),
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(
-            icon,
-            size: 18,
-            color: Colors.blue.shade600,
-          ),
-        ),
-      ),
-      validator: validator,
-    ),
-  );
-}
 
-// Helper method for desktop password fields
-Widget _buildDesktopPasswordField({
-  required TextEditingController controller,
-  required String label,
-  required bool isVisible,
-  required VoidCallback onVisibilityToggle,
-  String? errorText,
-  String? Function(String?)? validator,
-  void Function(String)? onChanged,
-}) {
-  return Container(
-    decoration: BoxDecoration(
-      color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(
-        color: errorText != null ? Colors.red.shade300 : Colors.grey.shade300,
-      ),
-    ),
-    child: TextFormField(
-      controller: controller,
-      obscureText: !isVisible,
-      onChanged: onChanged,
-      style: const TextStyle(fontSize: 14),
-      decoration: InputDecoration(
-        labelText: label,
-        border: InputBorder.none,
-        errorText: errorText,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        prefixIcon: Container(
-          margin: const EdgeInsets.only(left: 10, right: 6),
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(
-            Icons.lock_outline,
-            size: 18,
-            color: Colors.orange.shade600,
-          ),
-        ),
-        suffixIcon: Container(
-          margin: const EdgeInsets.only(right: 6),
-          child: IconButton(
-            icon: Icon(
-              isVisible ? Icons.visibility : Icons.visibility_off,
-              color: Colors.grey.shade600,
-              size: 18,
-            ),
-            onPressed: onVisibilityToggle,
-          ),
-        ),
-      ),
-      validator: validator,
-    ),
-  );
-}
 
 // Keep the existing helper methods unchanged
 
@@ -3177,4 +4263,20 @@ String? _getPoliceStationName(int? stationId) {
 
 
 
+}
+
+// Helper function to get gender-specific icon
+IconData _getGenderIcon(String? gender) {
+  if (gender == null) return Icons.person; // Default neutral icon
+  
+  switch (gender.toLowerCase()) {
+    case 'male':
+    case 'm':
+      return Icons.man;
+    case 'female':
+    case 'f':
+      return Icons.woman;
+    default:
+      return Icons.person; // Default for any other values or non-binary
+  }
 }

@@ -18,6 +18,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:zecure/desktop/desktop_mini_legends.dart';
 import 'package:zecure/desktop/hotlines_desktop.dart';
 import 'package:zecure/desktop/quick_access_desktop.dart';
 import 'package:zecure/main.dart';
@@ -217,6 +218,7 @@ List<Map<String, dynamic>> _savePoints = [];
 final SavePointService _savePointService = SavePointService();
 bool _showSavePointSelector = false; // New state for savepoint button
 
+Timer? _timeUpdateTimer;
 
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
@@ -534,11 +536,14 @@ void _deferredInitialization() async {
     await _loadSavePoints();
     if (!mounted) return;
 }
+
+
   
   // Mark markers as loaded
   setState(() {
     _markersLoaded = true;
   });
+  
   
   // Setup periodic tasks with initial delays (REDUCED FREQUENCY)
   _setupPeriodicTasksOptimized();
@@ -548,6 +553,13 @@ void _deferredInitialization() async {
     if (mounted) {
       print('Starting location services...');
       _startLiveLocationDeferred();
+    }
+  });
+
+  // Add this at the end of _deferredInitialization()
+  _timeUpdateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+    if (mounted) {
+      setState(() {}); // Updates time indicators
     }
   });
   
@@ -609,6 +621,8 @@ void dispose() {
   _updateDebounceTimer?.cancel();
   _processedUpdateIds.clear();
   _savePoints.clear();
+
+  _timeUpdateTimer?.cancel();
   
   super.dispose();
 }
@@ -6633,21 +6647,36 @@ Future<bool> _showNearbyHotspotConfirmation(LatLng position, List<dynamic> nearb
 }
 
 // Helper method to format time ago
-String _getTimeAgo(DateTime dateTime) {
+String _getTimeAgo(DateTime dateTime, {bool compact = false}) {
   final now = DateTime.now();
   final difference = now.difference(dateTime);
   
-  if (difference.inMinutes < 1) {
-    return 'Just now';
-  } else if (difference.inMinutes < 60) {
-    return '${difference.inMinutes} minutes ago';
-  } else if (difference.inHours < 24) {
-    return '${difference.inHours} hours ago';
+  if (compact) {
+    // Compact format for map labels
+    if (difference.inMinutes < 1) {
+      return 'NEW';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}min ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else if (difference.inDays < 7) {
+      return '${difference.inDays}d ago';
+    } else {
+      return '${(difference.inDays / 7).floor()}w ago';
+    }
   } else {
-    return '${difference.inDays} days ago';
+    // Original format for details
+    if (difference.inMinutes < 1) {
+      return 'Just now';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes} minutes ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours} hours ago';
+    } else {
+      return '${difference.inDays} days ago';
+    }
   }
 }
-
 
 // HOTSPOT DELETE
 void _handleHotspotDelete(PostgresChangePayload payload) {
@@ -6733,15 +6762,15 @@ Future<void> _logout() async {
     }
   }
 
+  
 void _showProfileDialog() {
   final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-                       Theme.of(context).platform == TargetPlatform.linux ||
-                       Theme.of(context).platform == TargetPlatform.windows ||
-                       kIsWeb;
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
 
-  // Only use dialog for desktop/web - mobile now uses the full screen approach
   if (!isDesktopOrWeb) {
-    return; // Mobile will handle profile through _buildProfileScreen()
+    return;
   }
 
   void toggleEditMode() {
@@ -6752,31 +6781,30 @@ void _showProfileDialog() {
     _showProfileDialog();
   }
 
-Future<void> refreshProfile() async {
-  final user = _authService.currentUser;
-  if (user != null) {
-    final response = await Supabase.instance.client
-        .from('users')
-        .select()
-        .eq('email', user.email as Object)
-        .single();
-
-    if (mounted) {
-      setState(() {
-        _userProfile = response;
-        _isAdmin = response['role'] == 'admin';
-        _isOfficer = response['role'] == 'officer';
- _profileScreen = ProfileScreen(
-  _authService, 
-  _userProfile, 
-  _isAdmin,           // Admin-only privileges
-  _hasAdminPermissions // Admin + Officer privileges
-);
-        _profileScreen.initControllers();
-      });
+  Future<void> refreshProfile() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select()
+          .eq('id', user.id)
+          .single();
+      if (mounted) {
+        setState(() {
+          _userProfile = response;
+          _isAdmin = response['role'] == 'admin';
+          _isOfficer = response['role'] == 'officer';
+          _profileScreen = ProfileScreen(
+            _authService,
+            _userProfile,
+            _isAdmin,
+            _hasAdminPermissions,
+          );
+          _profileScreen.initControllers();
+        });
+      }
     }
   }
-}
 
   void handleSuccess() {
     refreshProfile().then((_) {
@@ -6788,24 +6816,32 @@ Future<void> refreshProfile() async {
     });
   }
 
-  // Desktop/Web dialog view only
   showDialog(
     context: context,
     builder: (context) => Dialog(
-      insetPadding: const EdgeInsets.all(20),
+      insetPadding: EdgeInsets.only(
+        left: _isSidebarVisible ? 285 : 85,
+        top: 100,
+      ),
       child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 600,
-          maxHeight: MediaQuery.of(context).size.height * 0.8,
+        constraints: const BoxConstraints(
+          maxWidth: 450,
+          maxHeight: 800,
         ),
         child: _profileScreen.isEditingProfile
-            ? _profileScreen.buildEditProfileForm(
+            ? _profileScreen.buildDesktopEditProfileForm(
+              context,
+              toggleEditMode,
+              onSuccess: handleSuccess,
+              isSidebarVisible: _isSidebarVisible,
+              onStateChange: setState, // Pass setState
+            )
+            : _profileScreen.buildDesktopProfileView(
                 context,
-                isDesktopOrWeb,
                 toggleEditMode,
-                onSuccess: handleSuccess,
-              )
-            : _profileScreen.buildProfileView(context, isDesktopOrWeb, toggleEditMode),
+                onClosePressed: () => Navigator.pop(context),
+                isSidebarVisible: _isSidebarVisible,
+              ),
       ),
     ),
   ).then((_) {
@@ -7378,9 +7414,11 @@ void _handleBottomNavTap(int index) {
   if (targetTab != null) {
     setState(() {
       _currentTab = targetTab!;
-      if (_currentTab == MainTab.profile) {
-        _profileScreen.isEditingProfile = false;
-      }
+
+    if (_currentTab == MainTab.profile) {
+      _profileScreen.isEditingProfile = false;
+      _profileScreen.resetTab(); //
+    }
     });
   }
 }
@@ -9419,7 +9457,7 @@ Consumer<HotspotFilterService>(
           
           switch (crimeCategory?.toLowerCase()) {
             case 'property':
-              markerIcon = Icons.home_outlined;
+              markerIcon = Icons.key;
               break;
             case 'violent':
               markerIcon = Icons.warning;
@@ -9859,44 +9897,151 @@ Widget _buildStableHotspotMarker({
           ],
         ),
         
-        // Crime type label - ONLY the label position adjusts when selected
-        if (showLabel)
+        // Crime type label with improved time indicator
+              if (showLabel)
           Positioned(
             left: isSelected ? 93 : 73,
+            top: 20, // Center the label with the marker
             child: AnimatedOpacity(
               duration: const Duration(milliseconds: 300),
               opacity: showLabel ? 1.0 : 0.0,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  color: (status == 'rejected' || status == 'pending' || !isActive || opacity < 1.0) 
-                    ? markerColor.withOpacity(0.9 * opacity) 
-                    : markerColor.withOpacity(0.9),
-                  borderRadius: BorderRadius.circular(8),
-                  boxShadow: [
-                    BoxShadow(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Main crime type label
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
                       color: (status == 'rejected' || status == 'pending' || !isActive || opacity < 1.0) 
-                        ? Colors.black.withOpacity(0.15 * opacity) 
-                        : Colors.black.withOpacity(0.15),
-                      blurRadius: 3,
-                      offset: const Offset(1, 1),
+                        ? markerColor.withOpacity(0.9 * opacity) 
+                        : markerColor.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [
+                        BoxShadow(
+                          color: (status == 'rejected' || status == 'pending' || !isActive || opacity < 1.0) 
+                            ? Colors.black.withOpacity(0.15 * opacity) 
+                            : Colors.black.withOpacity(0.15),
+                          blurRadius: 3,
+                          offset: const Offset(1, 1),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      crimeTypeName,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  
+                  // Time indicator below the label
+                  if (hotspot['time'] != null) ...[
+                    const SizedBox(height: 3),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Clock icon with enhanced visibility
+                        Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.9),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.3),
+                                blurRadius: 2,
+                                offset: const Offset(0.5, 0.5),
+                              ),
+                            ],
+                          ),
+                          padding: const EdgeInsets.all(1.5),
+                          child: Icon(
+                            Icons.access_time,
+                            size: 8,
+                            color: markerColor.withOpacity(0.8),
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        // Enhanced time text with special styling for "NEW"
+                        _buildTimeText(hotspot, markerColor),
+                      ],
                     ),
                   ],
-                ),
-                child: Text(
-                  crimeTypeName,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                ],
               ),
             ),
           ),
       ],
     ),
   );
+}
+
+
+// Helper widget to build time text with special "NEW" styling
+Widget _buildTimeText(Map<String, dynamic> hotspot, Color markerColor) {
+  final timeText = _getTimeAgo(DateTime.parse(hotspot['time']), compact: true);
+  final isNew = timeText == 'NEW';
+  
+  if (isNew) {
+    // Blue text with white background for maximum visibility
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: Colors.blue, width: 0.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 2,
+            offset: const Offset(0.5, 0.5),
+          ),
+        ],
+      ),
+      child: Text(
+        timeText,
+        style: const TextStyle(
+          color: Colors.blue,
+          fontSize: 8,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  } else {
+    // Regular time text styling
+    return Text(
+      timeText,
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: 8,
+        fontWeight: FontWeight.w700,
+        shadows: [
+          Shadow(
+            color: Colors.black.withOpacity(0.8),
+            offset: const Offset(1, 1),
+            blurRadius: 2,
+          ),
+          Shadow(
+            color: Colors.black.withOpacity(0.6),
+            offset: const Offset(-1, -1),
+            blurRadius: 2,
+          ),
+          Shadow(
+            color: Colors.black.withOpacity(0.6),
+            offset: const Offset(1, -1),
+            blurRadius: 2,
+          ),
+          Shadow(
+            color: Colors.black.withOpacity(0.6),
+            offset: const Offset(-1, 1),
+            blurRadius: 2,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // UPDATED: Safe spot marker with selection indicator
@@ -12692,7 +12837,6 @@ Widget _buildAnimatedProximityAlert() {
   );
 }
 
-
 // BUILD CURRENT SCREEN
 Widget _buildCurrentScreen(bool isDesktop) {
   switch (_currentTab) {
@@ -12767,6 +12911,8 @@ Widget _buildCurrentScreen(bool isDesktop) {
             ),
           ),
           _buildFloatingDurationWidget(),
+          // Add the Mini Legend here
+          if (isDesktop) const MiniLegend(),
         ],
       );
     case MainTab.quickAccess:
@@ -12825,22 +12971,24 @@ Widget _buildCurrentScreen(bool isDesktop) {
                     ),
                   ),
                 ),
+                // Add the Mini Legend here
+                const MiniLegend(),
               ],
             )
-: QuickAccessScreen(
-    safeSpots: _safeSpots,
-    hotspots: _hotspots,
-    currentPosition: _currentPosition,
-    userProfile: _userProfile,
-    isAdmin: _hasAdminPermissions,
-    onGetDirections: _getDirections,
-    onGetSafeRoute: _getSafeRoute,
-    onShareLocation: _shareLocation,
-    onShowOnMap: _showOnMap,
-    onNavigateToSafeSpot: _navigateToSafeSpot,
-    onNavigateToHotspot: _navigateToHotspot,
-    onRefresh: _loadSafeSpots,
-  );
+          : QuickAccessScreen(
+              safeSpots: _safeSpots,
+              hotspots: _hotspots,
+              currentPosition: _currentPosition,
+              userProfile: _userProfile,
+              isAdmin: _hasAdminPermissions,
+              onGetDirections: _getDirections,
+              onGetSafeRoute: _getSafeRoute,
+              onShareLocation: _shareLocation,
+              onShowOnMap: _showOnMap,
+              onNavigateToSafeSpot: _navigateToSafeSpot,
+              onNavigateToHotspot: _navigateToHotspot,
+              onRefresh: _loadSafeSpots,
+            );
     case MainTab.notifications:
       return isDesktop
           ? Stack(
@@ -12896,14 +13044,16 @@ Widget _buildCurrentScreen(bool isDesktop) {
                       ),
                     ),
                   ),
-               ),
+                ),
+                // Add the Mini Legend here
+                const MiniLegend(),
               ],
             )
           : _buildNotificationsScreen();
     case MainTab.profile:
       return _buildProfileScreen();
 
-       case MainTab.savePoints:
+    case MainTab.savePoints:
       return isDesktop
           ? Stack(
               children: [
@@ -12960,6 +13110,8 @@ Widget _buildCurrentScreen(bool isDesktop) {
                   ),
                 ),
                 // SavePointDesktopScreen is rendered in _buildResponsiveDesktopLayout
+                // Add the Mini Legend here
+                const MiniLegend(),
               ],
             )
           : SavePointScreen(
@@ -12982,8 +13134,7 @@ Widget _buildCurrentScreen(bool isDesktop) {
 
 
 
-// PROFILE PAGE DESKTOP
-
+// PROFILE PAGE DESKTOP - UPDATED VERSION
 Widget _buildProfileScreen() {
   if (_userProfile == null) {
     return const Center(
@@ -12991,69 +13142,99 @@ Widget _buildProfileScreen() {
     );
   }
 
-  // FIXED: Use consistent screen size detection
   final isDesktop = _isDesktopScreen();
 
   void toggleEditMode() {
     setState(() {
       _profileScreen.setShouldScrollToTop(true);
       _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
+      if (!_profileScreen.isEditingProfile) {
+        _profileScreen.resetTab();
+      }
     });
   }
 
   void closeProfileAndGoToMap() {
     setState(() {
-      _currentTab = MainTab.map; // Switch to map tab
-      _profileScreen.isEditingProfile = false; // Ensure edit mode is off
+      _currentTab = MainTab.map;
+      _profileScreen.isEditingProfile = false;
+      _profileScreen.resetTab();
     });
   }
 
   Future<void> refreshProfile() async {
     final user = _authService.currentUser;
     if (user != null) {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select()
-          .eq('email', user.email as Object)
-          .single();
-
-      if (mounted) {
-        setState(() {
-          _userProfile = response;
-          _isAdmin = response['role'] == 'admin';
-          _isOfficer = response['role'] == 'officer';
-          _profileScreen = ProfileScreen(
-            _authService, 
-            _userProfile, 
-            _isAdmin,           // Admin-only privileges
-            _hasAdminPermissions // Admin + Officer privileges
+      try {
+        _profileScreen.disposeControllers();
+        final response = await Supabase.instance.client
+            .from('users')
+            .select()
+            .eq('id', user.id)
+            .single();
+        if (mounted) {
+          setState(() {
+            _userProfile = response;
+            _isAdmin = response['role'] == 'admin';
+            _isOfficer = response['role'] == 'officer';
+            _profileScreen = ProfileScreen(
+              _authService,
+              _userProfile,
+              _isAdmin,
+              _hasAdminPermissions,
+            );
+            _profileScreen.initControllers();
+          });
+          print('Profile refreshed successfully: Email = ${response['email']}, Role = ${response['role']}');
+        }
+      } catch (e) {
+        print('Error refreshing profile: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to refresh profile: ${e.toString()}'),
+              backgroundColor: Colors.orange,
+            ),
           );
-          _profileScreen.initControllers();
-        });
+        }
       }
     }
   }
 
   void handleSuccess() {
+    print('Profile update success - starting refresh...');
     refreshProfile().then((_) {
-      setState(() {
-        _profileScreen.setShouldScrollToTop(true);
-        _profileScreen.isEditingProfile = false;
-      });
+      if (mounted) {
+        setState(() {
+          _profileScreen.setShouldScrollToTop(true);
+          _profileScreen.isEditingProfile = false;
+          _profileScreen.resetTab();
+        });
+        print('Profile refresh completed, UI updated');
+      }
+    }).catchError((error) {
+      print('Error in handleSuccess refresh: $error');
+      if (mounted) {
+        setState(() {
+          _profileScreen.setShouldScrollToTop(true);
+          _profileScreen.isEditingProfile = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Profile updated, but display may not reflect latest changes. Please refresh.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     });
   }
 
   if (isDesktop) {
     return Stack(
       children: [
-        // Show map as background
         _buildMap(),
-        
-        // Loading indicator
         if (_isLoading && _currentPosition == null)
           const Center(child: CircularProgressIndicator()),
-        
-        // Top bar (same as other desktop tabs)
         Positioned(
           top: MediaQuery.of(context).padding.top + 16,
           left: 0,
@@ -13086,7 +13267,7 @@ Widget _buildProfileScreen() {
                         _userProfile == null ? Icons.login : Icons.logout,
                         color: Colors.grey.shade700,
                       ),
-                      onPressed: _userProfile == null 
+                      onPressed: _userProfile == null
                           ? () {
                               Navigator.pushReplacement(
                                 context,
@@ -13101,50 +13282,83 @@ Widget _buildProfileScreen() {
             ),
           ),
         ),
-        
-        // Profile modal overlay with GestureDetector
-        GestureDetector(
-          onTap: closeProfileAndGoToMap, // Close when clicking outside
-          child: Container(
-            color: Colors.black.withOpacity(0.3), // Semi-transparent overlay
-            child: Center(
-              child: GestureDetector(
-                onTap: () {}, // Prevent clicks on the profile content from propagating
-                child: Container(
-                  width: 600, // Match the width of other centered elements
-                  child: _profileScreen.isEditingProfile
-                      ? _profileScreen.buildDesktopEditProfileForm(
-                          context,
-                          toggleEditMode,
-                          onSuccess: handleSuccess,
-                        )
-                      : _profileScreen.buildDesktopProfileView(
-                          context,
-                          toggleEditMode,
-                          onClosePressed: closeProfileAndGoToMap,
-                        ),
-                ),
-              ),
+        // Overlay starting after sidebar
+        Positioned(
+          left: _isSidebarVisible ? 0 : 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          child: GestureDetector(
+            onTap: closeProfileAndGoToMap,
+            child: Container(
+              color: Colors.black.withOpacity(0.1),
             ),
           ),
         ),
+        // Profile content
+        // ignore: unnecessary_null_comparison
+        _profileScreen != null
+            ? (_profileScreen.isEditingProfile
+                ? _profileScreen.buildDesktopEditProfileForm(
+                    context,
+                    toggleEditMode,
+                    onSuccess: handleSuccess,
+                    isSidebarVisible: _isSidebarVisible,
+                    onStateChange: setState, // Pass setState as onStateChange
+                  )
+                : _profileScreen.buildDesktopProfileView(
+                    context,
+                    toggleEditMode,
+                    onClosePressed: closeProfileAndGoToMap,
+                    isSidebarVisible: _isSidebarVisible,
+                  ))
+            : Container(
+                width: 450,
+                height: 800,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('Loading profile...'),
+                    ],
+                  ),
+                ),
+              ),
       ],
     );
   }
 
   return Scaffold(
     body: SafeArea(
-      child: _profileScreen.isEditingProfile
-          ? _profileScreen.buildEditProfileForm(
-              context,
-              isDesktop, // FIXED: Use consistent screen size detection
-              toggleEditMode,
-              onSuccess: handleSuccess,
-            )
-          : _profileScreen.buildProfileView(
-              context,
-              isDesktop, // FIXED: Use consistent screen size detection
-              toggleEditMode,
+      // ignore: unnecessary_null_comparison
+      child: _profileScreen != null
+          ? (_profileScreen.isEditingProfile
+              ? _profileScreen.buildEditProfileForm(
+                  context,
+                  isDesktop,
+                  toggleEditMode,
+                  onSuccess: handleSuccess,
+                )
+              : _profileScreen.buildProfileView(
+                  context,
+                  isDesktop,
+                  toggleEditMode,
+                ))
+          : const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Loading profile...'),
+                ],
+              ),
             ),
     ),
   );

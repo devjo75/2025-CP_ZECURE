@@ -5,6 +5,9 @@ class AuthService {
 
   AuthService(this._supabase);
 
+
+//SIMPLE REGISTRATION
+// Updated signUpWithEmail method
 Future<AuthResponse> signUpWithEmail({
   required String email,
   required String password,
@@ -17,6 +20,17 @@ Future<AuthResponse> signUpWithEmail({
   String? gender,
   String? contactNumber,
 }) async {
+  // Check if email already exists
+  final existingEmail = await _supabase
+      .from('users')
+      .select('email')
+      .eq('email', email)
+      .maybeSingle();
+      
+  if (existingEmail != null) {
+    throw const AuthException('Email already exists. Please use a different email address.');
+  }
+
   // Check if username already exists
   final existingUser = await _supabase
       .from('users')
@@ -46,6 +60,8 @@ Future<AuthResponse> signUpWithEmail({
 
   return response;
 }
+
+// Updated signUpWithOTP method
 Future<AuthResponse> signUpWithOTP({
   required String email,
   required String password,
@@ -58,6 +74,17 @@ Future<AuthResponse> signUpWithOTP({
   String? gender,
   String? contactNumber,
 }) async {
+  // Check if email already exists
+  final existingEmail = await _supabase
+      .from('users')
+      .select('email')
+      .eq('email', email)
+      .maybeSingle();
+      
+  if (existingEmail != null) {
+    throw const AuthException('Email already exists. Please use a different email address.');
+  }
+
   // Check if username already exists
   final existingUser = await _supabase
       .from('users')
@@ -84,14 +111,6 @@ Future<AuthResponse> signUpWithOTP({
       'registration_type': 'verified',
     },
   );
-
-  // Remove this block - Supabase sends OTP automatically
-  // if (response.user != null) {
-  //   await _supabase.auth.resend(
-  //     type: OtpType.signup,
-  //     email: email,
-  //   );
-  // }
 
   return response;
 }
@@ -146,7 +165,7 @@ Future<AuthResponse> signInWithEmail({
   );
 }
 
-// Add these methods to your AuthService class
+// FORGOT PASSWORD AND RESET
 
 Future<void> resetPasswordWithOTP({
   required String email,
@@ -189,6 +208,126 @@ Future<AuthResponse> verifyPasswordResetOTP({
   }
 }
 
+// Add this new method to handle reauthentication OTP verification:
+Future<AuthResponse> verifyCurrentEmailOTP({
+  required String email,
+  required String otp,
+}) async {
+  try {
+    // For reauthentication emails, we don't use verifyOTP at all
+    // Instead, we use the reauthenticate method with the OTP
+    
+    // Method 1: Try using the session from reauthentication
+    final response = await _supabase.auth.verifyOTP(
+      type: OtpType.magiclink, // Reauthentication often uses magiclink type
+      email: email,
+      token: otp,
+    );
+
+    // After successful verification, update the registration type
+    if (response.user != null) {
+      await _supabase
+          .from('users')
+          .update({'registration_type': 'verified'})
+          .eq('id', response.user!.id);
+    }
+
+    return response;
+  } catch (e) {
+    // If magiclink doesn't work, the reauthentication might use a different approach
+    print('Reauthentication verification error: $e');
+    throw AuthException('Email verification failed: ${e.toString()}');
+  }
+}
+
+Future<void> updateEmailWithVerification({
+  required String newEmail,
+}) async {
+  final user = _supabase.auth.currentUser;
+  if (user == null) throw Exception('No user logged in');
+
+  final currentEmail = user.email;
+
+  // If it's the same email, use reauthentication instead
+  if (currentEmail == newEmail) {
+    await _supabase.auth.reauthenticate();
+    return;
+  }
+
+  // Only check for existing email if it's a different email
+  final existingUser = await _supabase
+      .from('users')
+      .select('email')
+      .eq('email', newEmail)
+      .maybeSingle();
+
+  if (existingUser != null) {
+    throw const AuthException('Email already exists. Please choose a different email.');
+  }
+
+  // Update email in auth (this will send verification automatically)
+  await _supabase.auth.updateUser(
+    UserAttributes(email: newEmail),
+  );
+}
+
+// Add this method for resending reauthentication OTP:
+Future<void> resendReauthenticationOTP({
+  required String email,
+}) async {
+  await _supabase.auth.resend(
+    type: OtpType.signup,
+    email: email,
+  );
+}
+
+Future<void> resendEmailChangeOTP({
+  required String email,
+}) async {
+  await _supabase.auth.resend(
+    type: OtpType.emailChange,
+    email: email,
+  );
+}
+
+Future<AuthResponse> verifyEmailChangeOTP({
+  required String email,
+  required String otp,
+}) async {
+  try {
+    final response = await _supabase.auth.verifyOTP(
+      type: OtpType.emailChange,
+      email: email,
+      token: otp,
+    );
+    
+    // After successful verification, update registration type and email in users table
+    if (response.user != null) {
+      try {
+        await _supabase
+            .from('users')
+            .update({
+              'email': email,
+              'registration_type': 'verified',
+              'updated_at': DateTime.now().toIso8601String(),
+            })
+            .eq('id', response.user!.id);
+      } catch (dbError) {
+        // Log the database error but don't fail the entire operation
+        print('Database update error after email verification: $dbError');
+        // The email change in auth was successful, so we can continue
+        // The users table update failing is not critical since the profile update handles it
+      }
+    }
+    
+    return response;
+  } catch (e) {
+    print('verifyEmailChangeOTP error: $e');
+    throw AuthException('Email verification failed: ${e.toString()}');
+  }
+}
+
+//CHANGE PASSWORD IN PROFILE PAGE
 Future<void> updatePasswordWithSession({
   required String newPassword,
 }) async {
@@ -262,44 +401,67 @@ Future<void> upgradeToVerifiedAccount({
   // The registration type should be updated in the OTP verification handler
 }
 
-  Future<void> updatePassword({
-    required String currentPassword,
-    required String newPassword,
-  }) async {
-    final email = _supabase.auth.currentUser?.email;
-    if (email == null) throw Exception('No user logged in');
-    
-    final _ = _supabase.auth.currentSession;
-    
-    try {
-      final authResponse = await _supabase.auth.signInWithPassword(
-        email: email,
-        password: currentPassword,
-      );
-      
-      if (authResponse.user == null) {
-        throw const AuthException('Invalid login credentials');
-      }
-      
-      await _supabase.auth.updateUser(
-        UserAttributes(password: newPassword),
-      );
-      
-    } catch (e) {
-      if (e is AuthException) {
-        rethrow;
-      }
-      
-      if (e.toString().contains('Invalid login credentials') || 
-          e.toString().contains('invalid_credentials') ||
-          e.toString().contains('Invalid') ||
-          e.toString().contains('credentials')) {
-        throw const AuthException('Invalid login credentials');
-      }
-      
-      rethrow;
-    }
+Future<void> sendVerificationToCurrentEmail() async {
+  final user = Supabase.instance.client.auth.currentUser;
+  if (user?.email == null) {
+    throw Exception('No authenticated user found');
   }
+
+  // Instead of reauthenticate(), use a magic link approach
+  try {
+    await _supabase.auth.signInWithOtp(
+      email: user?.email!,
+    );
+  } catch (e) {
+    // If that doesn't work, fall back to reauthenticate
+    await _supabase.auth.reauthenticate();
+  }
+}
+
+Future<void> updatePassword({
+  required String currentPassword,
+  required String newPassword,
+}) async {
+  final user = _supabase.auth.currentUser;
+  if (user == null) throw Exception('No user logged in');
+  
+  if (user.email == null) throw Exception('User email not available');
+  
+  try {
+    // First, verify the current password by attempting to sign in
+    // This is the crucial step that was missing
+    await _supabase.auth.signInWithPassword(
+      email: user.email!,
+      password: currentPassword,
+    );
+    
+    // If sign-in succeeds, the current password is correct
+    // Now update to the new password
+    await _supabase.auth.updateUser(
+      UserAttributes(password: newPassword),
+    );
+    
+  } on AuthException catch (e) {
+    // Handle specific auth errors
+    if (e.message.contains('Invalid login credentials') || 
+        e.message.contains('invalid_credentials') ||
+        e.message.contains('Invalid') ||
+        e.message.contains('credentials')) {
+      throw const AuthException('Current password is incorrect');
+    } else if (e.message.contains('New password should be different from the old password') ||
+               e.message.contains('same_password')) {
+      throw const AuthException('New password must be different from your current password');
+    }
+    rethrow;
+  } catch (e) {
+    // Convert any other errors to AuthException for consistency
+    if (e.toString().contains('Invalid login credentials') || 
+        e.toString().contains('invalid_credentials')) {
+      throw const AuthException('Current password is incorrect');
+    }
+    throw AuthException('Failed to update password: ${e.toString()}');
+  }
+}
 
   Future<void> resetPassword({
     required String email,
