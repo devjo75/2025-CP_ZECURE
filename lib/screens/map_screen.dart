@@ -4359,11 +4359,9 @@ Widget _buildFloatingDurationWidget() {
   );
 }
 
-
-////ADD HOTSPOT FOR ADMIN
 void _showAddHotspotForm(LatLng position) async {
   final isDesktop = _isDesktopScreen();
-    setState(() {
+  setState(() {
     _tempPinnedLocation = null; // Clear temp pin
   });
   try {
@@ -4384,42 +4382,76 @@ void _showAddHotspotForm(LatLng position) async {
     final descriptionController = TextEditingController();
     final dateController = TextEditingController();
     final timeController = TextEditingController();
-
+    
     String selectedCrimeType = crimeTypes[0]['name'];
     int selectedCrimeId = crimeTypes[0]['id'];
-    // Add active status state
-    bool isActiveStatus = true; // Default to active
+    bool isActiveStatus = true;
     String selectedActiveStatus = 'active';
-
-    // Photo state for this form
     XFile? selectedPhoto;
     bool isUploadingPhoto = false;
+    bool isTimeValid = true; // Track time validity
 
     final now = DateTime.now();
     dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-    timeController.text = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    timeController.text = TimeOfDay.fromDateTime(now).format(context);
+
+    bool validateDateTime() {
+      try {
+        final dateParts = dateController.text.split('-');
+        final timeParts = timeController.text.split(' ');
+        final time = timeParts[0].split(':');
+        final isPM = timeParts.length > 1 && timeParts[1].toLowerCase() == 'pm';
+        
+        int hour = int.parse(time[0]);
+        final minute = int.parse(time[1]);
+        
+        if (isPM && hour != 12) hour += 12;
+        if (!isPM && hour == 12) hour = 0;
+
+        final selectedDateTime = DateTime(
+          int.parse(dateParts[0]),
+          int.parse(dateParts[1]),
+          int.parse(dateParts[2]),
+          hour,
+          minute,
+        );
+
+        return !selectedDateTime.isAfter(DateTime.now());
+      } catch (e) {
+        return false;
+      }
+    }
 
     void onSubmit() async {
-      if (formKey.currentState!.validate()) {
+      if (formKey.currentState!.validate() && isTimeValid) {
         try {
+          final dateParts = dateController.text.split('-');
+          final timeParts = timeController.text.split(' ');
+          final time = timeParts[0].split(':');
+          final isPM = timeParts.length > 1 && timeParts[1].toLowerCase() == 'pm';
+          
+          int hour = int.parse(time[0]);
+          final minute = int.parse(time[1]);
+          
+          if (isPM && hour != 12) hour += 12;
+          if (!isPM && hour == 12) hour = 0;
+
           final dateTime = DateTime(
-            int.parse(dateController.text.split('-')[0]),
-            int.parse(dateController.text.split('-')[1]),
-            int.parse(dateController.text.split('-')[2]),
-            int.parse(timeController.text.split(':')[0]),
-            int.parse(timeController.text.split(':')[1]),
+            int.parse(dateParts[0]),
+            int.parse(dateParts[1]),
+            int.parse(dateParts[2]),
+            hour,
+            minute,
           );
 
-          // Save hotspot with active status
           final hotspotId = await _saveHotspot(
             selectedCrimeId.toString(),
             descriptionController.text,
             position,
             dateTime,
-            selectedActiveStatus, // Pass active status
+            selectedActiveStatus,
           );
 
-          // Upload photo if selected
           if (selectedPhoto != null && hotspotId != null) {
             try {
               await PhotoService.uploadPhoto(
@@ -4467,7 +4499,6 @@ void _showAddHotspotForm(LatLng position) async {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Crime type dropdown
                       DropdownButtonFormField<String>(
                         value: selectedCrimeType,
                         decoration: const InputDecoration(
@@ -4501,7 +4532,6 @@ void _showAddHotspotForm(LatLng position) async {
                         },
                       ),
                       const SizedBox(height: 16),
-                      // Description field
                       TextFormField(
                         controller: descriptionController,
                         decoration: const InputDecoration(
@@ -4511,7 +4541,6 @@ void _showAddHotspotForm(LatLng position) async {
                         maxLines: 3,
                       ),
                       const SizedBox(height: 16),
-                      // Photo section
                       _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
                         setState(() {
                           selectedPhoto = photo;
@@ -4519,7 +4548,6 @@ void _showAddHotspotForm(LatLng position) async {
                         });
                       }),
                       const SizedBox(height: 16),
-                      // Date and time fields
                       Row(
                         children: [
                           Expanded(
@@ -4535,11 +4563,14 @@ void _showAddHotspotForm(LatLng position) async {
                                   context: context,
                                   initialDate: now,
                                   firstDate: DateTime(2000),
-                                  lastDate: DateTime(2101),
+                                  lastDate: DateTime.now(),
                                 );
                                 if (pickedDate != null) {
-                                  dateController.text =
-                                      "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                  setState(() {
+                                    dateController.text =
+                                        "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                    isTimeValid = validateDateTime();
+                                  });
                                 }
                               },
                             ),
@@ -4557,18 +4588,33 @@ void _showAddHotspotForm(LatLng position) async {
                                 TimeOfDay? pickedTime = await showTimePicker(
                                   context: context,
                                   initialTime: TimeOfDay.now(),
+                                  builder: (context, child) {
+                                    return MediaQuery(
+                                      data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                                      child: child!,
+                                    );
+                                  },
                                 );
                                 if (pickedTime != null) {
-                                  timeController.text =
-                                      "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                                  setState(() {
+                                    timeController.text = pickedTime.format(context);
+                                    isTimeValid = validateDateTime();
+                                  });
                                 }
                               },
                             ),
                           ),
                         ],
                       ),
+                      if (!isTimeValid)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: Text(
+                            'Error: Selected time cannot be in the future',
+                            style: TextStyle(color: Colors.red, fontSize: 12),
+                          ),
+                        ),
                       const SizedBox(height: 16),
-                      // Active status toggle for admins
                       if (_hasAdminPermissions)
                         Container(
                           padding: const EdgeInsets.all(16),
@@ -4618,7 +4664,7 @@ void _showAddHotspotForm(LatLng position) async {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     ElevatedButton(
-                      onPressed: isUploadingPhoto ? null : onSubmit,
+                      onPressed: (isUploadingPhoto || !isTimeValid) ? null : onSubmit,
                       child: isUploadingPhoto
                           ? const SizedBox(
                               width: 16,
@@ -4773,7 +4819,6 @@ void _showAddHotspotForm(LatLng position) async {
                                     maxLines: 3,
                                   ),
                                   const SizedBox(height: 16),
-                                  // Photo section
                                   _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
                                     setState(() {
                                       selectedPhoto = photo;
@@ -4793,11 +4838,14 @@ void _showAddHotspotForm(LatLng position) async {
                                         context: context,
                                         initialDate: now,
                                         firstDate: DateTime(2000),
-                                        lastDate: DateTime(2101),
+                                        lastDate: DateTime.now(),
                                       );
                                       if (pickedDate != null) {
-                                        dateController.text =
-                                            "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                        setState(() {
+                                          dateController.text =
+                                              "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                          isTimeValid = validateDateTime();
+                                        });
                                       }
                                     },
                                   ),
@@ -4813,15 +4861,30 @@ void _showAddHotspotForm(LatLng position) async {
                                       TimeOfDay? pickedTime = await showTimePicker(
                                         context: context,
                                         initialTime: TimeOfDay.now(),
+                                        builder: (context, child) {
+                                          return MediaQuery(
+                                            data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                                            child: child!,
+                                          );
+                                        },
                                       );
                                       if (pickedTime != null) {
-                                        timeController.text =
-                                            "${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}";
+                                        setState(() {
+                                          timeController.text = pickedTime.format(context);
+                                          isTimeValid = validateDateTime();
+                                        });
                                       }
                                     },
                                   ),
+                                  if (!isTimeValid)
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 8),
+                                      child: Text(
+                                        'Error: Selected time cannot be in the future',
+                                        style: TextStyle(color: Colors.red, fontSize: 12),
+                                      ),
+                                    ),
                                   const SizedBox(height: 16),
-                                  // Active status toggle for admins
                                   if (_hasAdminPermissions)
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -4876,7 +4939,7 @@ void _showAddHotspotForm(LatLng position) async {
                                   SizedBox(
                                     width: double.infinity,
                                     child: ElevatedButton(
-                                      onPressed: isUploadingPhoto ? null : onSubmit,
+                                      onPressed: (isUploadingPhoto || !isTimeValid) ? null : onSubmit,
                                       child: isUploadingPhoto
                                           ? const CircularProgressIndicator()
                                           : const Text('Submit'),
@@ -4905,128 +4968,125 @@ void _showAddHotspotForm(LatLng position) async {
   }
 }
 
-   Widget _buildPhotoSection(XFile? selectedPhoto, bool isUploading, Function(XFile?, bool) onPhotoChanged) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Photo (Optional)',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+Widget _buildPhotoSection(XFile? selectedPhoto, bool isUploading, Function(XFile?, bool) onPhotoChanged) {
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      border: Border.all(color: Colors.grey.shade300),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Photo (Optional)',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 8),
+        if (selectedPhoto != null)
+          Stack(
+            children: [
+              Container(
+                height: 200,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: kIsWeb
+                      ? Image.network(
+                          selectedPhoto.path,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Center(child: Text('Error loading image'));
+                          },
+                        )
+                      : Image.file(
+                          File(selectedPhoto.path),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Center(child: Text('Error loading image'));
+                          },
+                        ),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: CircleAvatar(
+                  backgroundColor: Colors.red,
+                  radius: 16,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 16),
+                    onPressed: () {
+                      onPhotoChanged(null, false);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          )
+        else
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isUploading
+                      ? null
+                      : () async {
+                          onPhotoChanged(null, true);
+                          try {
+                            final photo = await PhotoService.pickImage();
+                            onPhotoChanged(photo, false);
+                          } catch (e) {
+                            onPhotoChanged(null, false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Error taking photo: $e')),
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.camera_alt),
+                  label: const Text('Take Photo'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isUploading
+                      ? null
+                      : () async {
+                          onPhotoChanged(null, true);
+                          try {
+                            final photo = await PhotoService.pickImageFromGallery();
+                            onPhotoChanged(photo, false);
+                          } catch (e) {
+                            onPhotoChanged(null, false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Error selecting photo: $e')),
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.photo_library),
+                  label: const Text('Gallery'),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          if (selectedPhoto != null)
-            Stack(
-              children: [
-                Container(
-                  height: 200,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: kIsWeb
-                        ? Image.network(
-                            selectedPhoto.path,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return const Center(child: Text('Error loading image'));
-                            },
-                          )
-                        : Image.file(
-                            File(selectedPhoto.path),
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return const Center(child: Text('Error loading image'));
-                            },
-                          ),
-                  ),
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: CircleAvatar(
-                    backgroundColor: Colors.red,
-                    radius: 16,
-                    child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white, size: 16),
-                      onPressed: () {
-                        onPhotoChanged(null, false);
-                      },
-                    ),
-                  ),
-                ),
-              ],
-            )
-          else
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: isUploading
-                        ? null
-                        : () async {
-                            onPhotoChanged(null, true);
-                            try {
-                              final photo = await PhotoService.pickImage();
-                              onPhotoChanged(photo, false);
-                            } catch (e) {
-                              onPhotoChanged(null, false);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Error taking photo: $e')),
-                              );
-                            }
-                          },
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Take Photo'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: isUploading
-                        ? null
-                        : () async {
-                            onPhotoChanged(null, true);
-                            try {
-                              final photo = await PhotoService.pickImageFromGallery();
-                              onPhotoChanged(photo, false);
-                            } catch (e) {
-                              onPhotoChanged(null, false);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Error selecting photo: $e')),
-                              );
-                            }
-                          },
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('Gallery'),
-                  ),
-                ),
-              ],
-            ),
-          if (isUploading)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Center(child: CircularProgressIndicator()),
-            ),
-        ],
-      ),
-    );
-  }
+        if (isUploading)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+      ],
+    ),
+  );
+}
 
-// REPORT HOTSPOT FOR REGULAR USERS
-
-
+  
 void _showReportHotspotForm(LatLng position) async {
-  // First check if user can still report today
   setState(() {
     _tempPinnedLocation = null; // Clear temp pin
   });
@@ -5037,7 +5097,6 @@ void _showReportHotspotForm(LatLng position) async {
     return;
   }
 
-  // Show current count in the form
   try {
     final crimeTypesResponse = await Supabase.instance.client
         .from('crime_type')
@@ -5053,7 +5112,6 @@ void _showReportHotspotForm(LatLng position) async {
     final now = DateTime.now();
 
     if (_isDesktopScreen()) {
-      // FIXED: Desktop dialog view - Remove the problematic structure
       if (!mounted) return;
       await showDialog(
         context: context,
@@ -5068,7 +5126,6 @@ void _showReportHotspotForm(LatLng position) async {
         ),
       );
     } else {
-      // For mobile, you can modify _showMobileReportForm to include the counter
       await _showMobileReportForm(position, crimeTypes, now, dailyCount);
     }
   } catch (e) {
@@ -5090,16 +5147,42 @@ Future<void> _showMobileReportForm(
     text: DateFormat('yyyy-MM-dd').format(now),
   );
   final timeController = TextEditingController(
-    text: DateFormat('HH:mm').format(now),
+    text: TimeOfDay.fromDateTime(now).format(context),
   );
 
   String selectedCrimeType = crimeTypes[0]['name'];
   int selectedCrimeId = crimeTypes[0]['id'];
   bool isSubmitting = false;
-  
-  // Photo state
   XFile? selectedPhoto;
   bool isUploadingPhoto = false;
+  bool isTimeValid = true;
+
+  bool validateDateTime() {
+    try {
+      final dateParts = dateController.text.split('-');
+      final timeParts = timeController.text.split(' ');
+      final time = timeParts[0].split(':');
+      final isPM = timeParts.length > 1 && timeParts[1].toLowerCase() == 'pm';
+      
+      int hour = int.parse(time[0]);
+      final minute = int.parse(time[1]);
+      
+      if (isPM && hour != 12) hour += 12;
+      if (!isPM && hour == 12) hour = 0;
+
+      final selectedDateTime = DateTime(
+        int.parse(dateParts[0]),
+        int.parse(dateParts[1]),
+        int.parse(dateParts[2]),
+        hour,
+        minute,
+      );
+
+      return !selectedDateTime.isAfter(DateTime.now());
+    } catch (e) {
+      return false;
+    }
+  }
 
   final _ = await showModalBottomSheet(
     context: context,
@@ -5123,7 +5206,6 @@ Future<void> _showMobileReportForm(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Drag indicator at the top
                   Container(
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Container(
@@ -5135,8 +5217,6 @@ Future<void> _showMobileReportForm(
                       ),
                     ),
                   ),
-                  
-                  // Content that will expand as needed
                   Flexible(
                     child: SingleChildScrollView(
                       padding: EdgeInsets.only(
@@ -5147,7 +5227,6 @@ Future<void> _showMobileReportForm(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Daily Reports Counter
                           Container(
                             width: double.infinity,
                             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
@@ -5178,8 +5257,6 @@ Future<void> _showMobileReportForm(
                               ],
                             ),
                           ),
-                          
-                          // Header Title
                           Container(
                             width: double.infinity,
                             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -5219,7 +5296,6 @@ Future<void> _showMobileReportForm(
                             ),
                           ),
                           const SizedBox(height: 20),
-                          
                           Form(
                             key: formKey,
                             child: Column(
@@ -5270,8 +5346,6 @@ Future<void> _showMobileReportForm(
                                   enabled: !isSubmitting,
                                 ),
                                 const SizedBox(height: 16),
-                                
-                                // Photo section
                                 _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
                                   setState(() {
                                     selectedPhoto = photo;
@@ -5279,7 +5353,6 @@ Future<void> _showMobileReportForm(
                                   });
                                 }),
                                 const SizedBox(height: 16),
-                                
                                 TextFormField(
                                   controller: dateController,
                                   decoration: const InputDecoration(
@@ -5294,11 +5367,14 @@ Future<void> _showMobileReportForm(
                                             context: context,
                                             initialDate: now,
                                             firstDate: DateTime(2000),
-                                            lastDate: DateTime(2101),
+                                            lastDate: DateTime.now(),
                                           );
                                           if (pickedDate != null) {
-                                            dateController.text =
-                                                DateFormat('yyyy-MM-dd').format(pickedDate);
+                                            setState(() {
+                                              dateController.text =
+                                                  DateFormat('yyyy-MM-dd').format(pickedDate);
+                                              isTimeValid = validateDateTime();
+                                            });
                                           }
                                         },
                                 ),
@@ -5316,16 +5392,30 @@ Future<void> _showMobileReportForm(
                                           final pickedTime = await showTimePicker(
                                             context: context,
                                             initialTime: TimeOfDay.now(),
+                                            builder: (context, child) {
+                                              return MediaQuery(
+                                                data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                                                child: child!,
+                                              );
+                                            },
                                           );
                                           if (pickedTime != null) {
-                                            timeController.text =
-                                                '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}';
+                                            setState(() {
+                                              timeController.text = pickedTime.format(context);
+                                              isTimeValid = validateDateTime();
+                                            });
                                           }
                                         },
                                 ),
+                                if (!isTimeValid)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 8),
+                                    child: Text(
+                                      'Error: Selected time cannot be in the future',
+                                      style: TextStyle(color: Colors.red, fontSize: 12),
+                                    ),
+                                  ),
                                 const SizedBox(height: 16),
-                                
-                         // Important notice about false reports
                                 Container(
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
@@ -5370,47 +5460,59 @@ Future<void> _showMobileReportForm(
                                   ),
                                 ),
                                 const SizedBox(height: 16),
-                                
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: ElevatedButton(
-                                          onPressed: (isSubmitting || isUploadingPhoto)
-                                              ? null
-                                              : () async {
-                                                  if (formKey.currentState!.validate()) {
-                                                    setState(() => isSubmitting = true);
-                                                    try {
-                                                      final dateTime = DateTime.parse(
-                                                          '${dateController.text} ${timeController.text}');
-                                                      
-                                                      // Await the result from _reportHotspot
-                                                      final success = await _reportHotspot(
-                                                        selectedCrimeId,
-                                                        descriptionController.text,
-                                                        position,
-                                                        dateTime,
-                                                        selectedPhoto,
-                                                      );
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton(
+                                    onPressed: (isSubmitting || isUploadingPhoto || !isTimeValid)
+                                        ? null
+                                        : () async {
+                                            if (formKey.currentState!.validate()) {
+                                              setState(() => isSubmitting = true);
+                                              try {
+                                                final dateParts = dateController.text.split('-');
+                                                final timeParts = timeController.text.split(' ');
+                                                final time = timeParts[0].split(':');
+                                                final isPM = timeParts.length > 1 && timeParts[1].toLowerCase() == 'pm';
+                                                
+                                                int hour = int.parse(time[0]);
+                                                final minute = int.parse(time[1]);
+                                                
+                                                if (isPM && hour != 12) hour += 12;
+                                                if (!isPM && hour == 12) hour = 0;
 
-                                                      if (mounted) {
-                                                        // Only close with success result if actually successful
-                                                        Navigator.pop(context, success);
-                                                      }
-                                                    } catch (e) {
-                                                      if (mounted) {
-                                                        setState(() => isSubmitting = false);
-                                                        _showSnackBar(
-                                                            'Failed to report hotspot: ${e.toString()}');
-                                                      }
-                                                    }
-                                                  }
-                                                },
-                                          child: (isSubmitting || isUploadingPhoto)
-                                              ? const CircularProgressIndicator()
-                                              : Text('Submit Report (${5 - dailyCount} remaining)'),
-                                        ),
-                                      ),
-                                // Add extra space at bottom for better scrolling
+                                                final dateTime = DateTime(
+                                                  int.parse(dateParts[0]),
+                                                  int.parse(dateParts[1]),
+                                                  int.parse(dateParts[2]),
+                                                  hour,
+                                                  minute,
+                                                );
+                                                
+                                                final success = await _reportHotspot(
+                                                  selectedCrimeId,
+                                                  descriptionController.text,
+                                                  position,
+                                                  dateTime,
+                                                  selectedPhoto,
+                                                );
+
+                                                if (mounted) {
+                                                  Navigator.pop(context, success);
+                                                }
+                                              } catch (e) {
+                                                if (mounted) {
+                                                  setState(() => isSubmitting = false);
+                                                  _showSnackBar(
+                                                      'Failed to report hotspot: ${e.toString()}');
+                                                }
+                                              }
+                                            }
+                                          },
+                                    child: (isSubmitting || isUploadingPhoto)
+                                        ? const CircularProgressIndicator()
+                                        : Text('Submit Report (${5 - dailyCount} remaining)'),
+                                  ),
+                                ),
                                 const SizedBox(height: 20),
                               ],
                             ),
@@ -5427,8 +5529,6 @@ Future<void> _showMobileReportForm(
       );
     },
   );
-
-
 }
 
 // Helper methods for daily counter styling
@@ -5450,8 +5550,7 @@ Color _getDailyCounterTextColor(int count) {
   return Colors.green.shade700;
 }
 
-
-// EDIT HOTSPOT
+// EDIT HOTSPOT 
 
 void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
   try {
@@ -5471,11 +5570,30 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
 
     final formKey = GlobalKey<FormState>();
     final descriptionController = TextEditingController(text: hotspot['description'] ?? '');
+    
+    // FIXED: Consistent timezone handling for edit form
+    DateTime hotspotDateTime;
+    try {
+      final timeString = hotspot['time'];
+      final parsedTime = DateTime.parse(timeString);
+      
+      if (timeString.endsWith('Z')) {
+        // It's UTC, convert to local
+        hotspotDateTime = parsedTime.toLocal();
+      } else {
+        // It's already local time, don't convert
+        hotspotDateTime = parsedTime;
+      }
+    } catch (e) {
+      print('Error parsing hotspot time for edit form: $e');
+      hotspotDateTime = DateTime.now();
+    }
+
     final dateController = TextEditingController(
-      text: DateFormat('yyyy-MM-dd').format(DateTime.parse(hotspot['time']).toLocal()),
+      text: DateFormat('yyyy-MM-dd').format(hotspotDateTime),
     );
     final timeController = TextEditingController(
-      text: DateFormat('HH:mm').format(DateTime.parse(hotspot['time']).toLocal()),
+      text: DateFormat('h:mm a').format(hotspotDateTime), 
     );
 
     final crimeTypes = List<Map<String, dynamic>>.from(crimeTypesResponse);
@@ -5492,9 +5610,76 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
     bool _ = existingPhoto != null;
     bool deleteExistingPhoto = false;
 
+    // NEW: Validation state
+    bool isTimeValid = true;
+    String? timeErrorMessage;
+
+    // HELPER FUNCTION: Parse time from controller (MOVED UP)
+    DateTime parseTimeFromControllers() {
+      final dateParts = dateController.text.split('-');
+      final year = int.parse(dateParts[0]);
+      final month = int.parse(dateParts[1]);
+      final day = int.parse(dateParts[2]);
+
+      // Parse AM/PM time format consistently
+      final timeFormat = DateFormat('h:mm a');
+      final timeOnly = timeFormat.parse(timeController.text);
+
+      return DateTime(year, month, day, timeOnly.hour, timeOnly.minute);
+    }
+
+    // HELPER FUNCTION: Get consistent reported DateTime
+    DateTime getReportedDateTime() {
+      try {
+        final createdString = hotspot['created_at'];
+        final parsedCreated = DateTime.parse(createdString);
+        
+        if (createdString.endsWith('Z')) {
+          return parsedCreated.toLocal();
+        } else {
+          return parsedCreated;
+        }
+      } catch (e) {
+        return DateTime.now();
+      }
+    }
+
+    // HELPER FUNCTION: Validate incident time and update state
+    void validateTime(StateSetter setState) {
+      try {
+        final dateTime = parseTimeFromControllers();
+        final reportedDateTime = getReportedDateTime();
+        final currentDateTime = DateTime.now();
+        
+        if (dateTime.isAfter(currentDateTime)) {
+          setState(() {
+            isTimeValid = false;
+            timeErrorMessage = 'Incident time cannot be in the future';
+          });
+        } else if (dateTime.isAfter(reportedDateTime)) {
+          setState(() {
+            isTimeValid = false;
+            timeErrorMessage = 'Incident time cannot be later than when it was reported (${DateFormat('MMM d, yyyy h:mm a').format(reportedDateTime)})';
+          });
+        } else {
+          setState(() {
+            isTimeValid = true;
+            timeErrorMessage = null;
+          });
+        }
+      } catch (e) {
+        setState(() {
+          isTimeValid = false;
+          timeErrorMessage = 'Invalid date or time format';
+        });
+      }
+    }
+
+    // HELPER FUNCTION: Validate incident time
+
     // Desktop/Web view
-if (_isDesktopScreen()) {
-    showDialog(
+    if (_isDesktopScreen()) {
+      showDialog(
         context: context,
         builder: (context) => StatefulBuilder(
           builder: (context, setState) => AlertDialog(
@@ -5508,7 +5693,6 @@ if (_isDesktopScreen()) {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // Crime type dropdown
-                      
                       DropdownButtonFormField<String>(
                         value: selectedCrimeType,
                         decoration: const InputDecoration(
@@ -5585,20 +5769,26 @@ if (_isDesktopScreen()) {
                                 border: OutlineInputBorder(),
                               ),
                               readOnly: true,
-onTap: () async {
-  final reportedDate = DateTime.parse(hotspot['created_at']).toLocal();
-  final maxDate = DateTime(reportedDate.year, reportedDate.month, reportedDate.day);
-  
-  DateTime? pickedDate = await showDatePicker(
-    context: context,
-    initialDate: DateTime.parse(hotspot['time']).toLocal(),
-    firstDate: DateTime(2000),
-    lastDate: maxDate, // Restrict to reported date
-  );
-  if (pickedDate != null) {
-    dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
-  }
-},
+                              onTap: () async {
+                                final reportedDate = getReportedDateTime();
+                                final currentDate = DateTime.now();
+                                final maxDate = DateTime(
+                                  currentDate.isBefore(reportedDate) ? currentDate.year : reportedDate.year,
+                                  currentDate.isBefore(reportedDate) ? currentDate.month : reportedDate.month,
+                                  currentDate.isBefore(reportedDate) ? currentDate.day : reportedDate.day
+                                );
+                                
+                                DateTime? pickedDate = await showDatePicker(
+                                  context: context,
+                                  initialDate: hotspotDateTime.isBefore(maxDate) ? hotspotDateTime : maxDate,
+                                  firstDate: DateTime(2000),
+                                  lastDate: maxDate,
+                                );
+                                if (pickedDate != null) {
+                                  dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
+                                  validateTime(setState);
+                                }
+                              },
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -5610,48 +5800,58 @@ onTap: () async {
                                 border: OutlineInputBorder(),
                               ),
                               readOnly: true,
-                            onTap: () async {
-  TimeOfDay? pickedTime = await showTimePicker(
-    context: context,
-    initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time']).toLocal()),
-  );
-  if (pickedTime != null) {
-    final selectedDate = DateTime.parse(dateController.text);
-    final reportedDateTime = DateTime.parse(hotspot['created_at']).toLocal();
-    final pickedDateTime = DateTime(
-      selectedDate.year,
-      selectedDate.month,
-      selectedDate.day,
-      pickedTime.hour,
-      pickedTime.minute,
-    );
-    
-    // Check if the picked time is after the reported time on the same date
-    if (selectedDate.year == reportedDateTime.year &&
-        selectedDate.month == reportedDateTime.month &&
-        selectedDate.day == reportedDateTime.day &&
-        pickedDateTime.isAfter(reportedDateTime)) {
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Incident time cannot be later than when it was reported (${DateFormat('h:mm a').format(reportedDateTime)})'
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
-    }
-    
-    timeController.text = DateFormat('h:mm a').format(pickedDateTime);
-  }
-},
+                              onTap: () async {
+                                TimeOfDay? pickedTime = await showTimePicker(
+                                  context: context,
+                                  initialTime: TimeOfDay.fromDateTime(hotspotDateTime),
+                                );
+                                
+                                if (pickedTime != null) {
+                                  final selectedDate = DateTime.parse(dateController.text);
+                                  final pickedDateTime = DateTime(
+                                    selectedDate.year,
+                                    selectedDate.month,
+                                    selectedDate.day,
+                                    pickedTime.hour,
+                                    pickedTime.minute,
+                                  );
+                                  
+                                  timeController.text = DateFormat('h:mm a').format(pickedDateTime);
+                                  validateTime(setState);
+                                }
+                              },
                             ),
                           ),
                         ],
                       ),
+                      
+                      // NEW: Error message display
+                      if (!isTimeValid && timeErrorMessage != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.error_outline, size: 16, color: Colors.red.shade600),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  timeErrorMessage!,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.red.shade700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       
                       // Active status for admins
@@ -5702,12 +5902,12 @@ onTap: () async {
             ),
             actions: [
               ElevatedButton(
-                onPressed: isUploadingPhoto
+                onPressed: (isUploadingPhoto || !isTimeValid)
                     ? null
                     : () async {
                         if (formKey.currentState!.validate()) {
                           try {
-                            final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
+                            final dateTime = parseTimeFromControllers();
                             
                             // Update hotspot first
                             await _updateHotspot(
@@ -5759,385 +5959,379 @@ onTap: () async {
       return;
     }
 
-
-//MOBILE VIEW
-showModalBottomSheet(
-  context: context,
-  isScrollControlled: true,
-  builder: (context) => Container(
-    constraints: BoxConstraints(
-      maxHeight: MediaQuery.of(context).size.height * 0.95,
-    ),
-    child: Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
-        left: 16.0,
-        right: 16.0,
-        top: 25.0, // Increased top padding for better crime type visibility
-      ),
-      child: StatefulBuilder(
-        builder: (context, setState) {
-          return Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    value: selectedCrimeType,
-                    decoration: const InputDecoration(
-                      labelText: 'Crime Type',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: crimeTypes.map((crimeType) {
-                      return DropdownMenuItem<String>(
-                        value: crimeType['name'],
-                        child: Text(
-                          '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                          style: const TextStyle(fontSize: 14),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: (newValue) {
-                      if (newValue != null) {
-                        final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
-                        setState(() {
-                          selectedCrimeType = newValue;
-                          selectedCrimeId = selected['id'];
-                        });
-                      }
-                    },
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please select a crime type';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: descriptionController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description (optional)',
-                      border: OutlineInputBorder(),
-                    ),
-                    maxLines: 3,
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Photo section for mobile
-                  _buildEditPhotoSection(
-                    existingPhoto: existingPhoto,
-                    newSelectedPhoto: newSelectedPhoto,
-                    isUploadingPhoto: isUploadingPhoto,
-                    deleteExistingPhoto: deleteExistingPhoto,
-                    onPhotoChanged: (photo, uploading) {
-                      setState(() {
-                        newSelectedPhoto = photo;
-                        isUploadingPhoto = uploading;
-                      });
-                    },
-                    onDeleteExistingToggle: (delete) {
-                      setState(() {
-                        deleteExistingPhoto = delete;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Date and time fields - Side by side
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: dateController,
-                          decoration: const InputDecoration(
-                            labelText: 'Date of Incident',
-                            border: OutlineInputBorder(),
-                          ),
-                          readOnly: true,
-                          onTap: () async {
-                            DateTime? pickedDate = await showDatePicker(
-                              context: context,
-                              initialDate: DateTime.parse(hotspot['time']),
-                              firstDate: DateTime(2000),
-                              lastDate: DateTime(2101),
-                            );
-                            if (pickedDate != null) {
-                              dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
-                            }
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          controller: timeController,
-                          decoration: const InputDecoration(
-                            labelText: 'Time of Incident',
-                            border: OutlineInputBorder(),
-                          ),
-                          readOnly: true,
-                          onTap: () async {
-                            TimeOfDay? pickedTime = await showTimePicker(
-                              context: context,
-                              initialTime: TimeOfDay.fromDateTime(DateTime.parse(hotspot['time'])),
-                            );
-                            if (pickedTime != null) {
-                              final now = DateTime.now();
-                              final formatted = DateTime(now.year, now.month, now.day, pickedTime.hour, pickedTime.minute);
-                              timeController.text = DateFormat('HH:mm').format(formatted);
-                            }
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 8),
-Container(
-  padding: const EdgeInsets.all(8),
-  decoration: BoxDecoration(
-    color: Colors.blue.shade50,
-    borderRadius: BorderRadius.circular(6),
-    border: Border.all(color: Colors.blue.shade200),
-  ),
-  child: Row(
-    children: [
-      Icon(Icons.info_outline, size: 16, color: Colors.blue.shade600),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Text(
-          'Incident time cannot be later than when it was reported (${DateFormat('MMM d, yyyy h:mm a').format(DateTime.parse(hotspot['created_at']).toLocal())})',
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.blue.shade700,
-          ),
+    // MOBILE VIEW - FIXED
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.95,
         ),
-      ),
-    ],
-  ),
-),
-                  const SizedBox(height: 16),
-                  
-                  // Add active status toggle for admins only - Compact Design
-                  if (_hasAdminPermissions)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: isActiveStatus ? Colors.green.shade50 : Colors.grey.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: isActiveStatus ? Colors.green.shade200 : Colors.grey.shade300,
-                          width: 1,
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
+            left: 16.0,
+            right: 16.0,
+            top: 25.0,
+          ),
+          child: StatefulBuilder(
+            builder: (context, setState) {
+              // Initialize validation on first build
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                validateTime(setState);
+              });
+              
+              return Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        value: selectedCrimeType,
+                        decoration: const InputDecoration(
+                          labelText: 'Crime Type',
+                          border: OutlineInputBorder(),
                         ),
+                        items: crimeTypes.map((crimeType) {
+                          return DropdownMenuItem<String>(
+                            value: crimeType['name'],
+                            child: Text(
+                              '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                              style: const TextStyle(fontSize: 14),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (newValue) {
+                          if (newValue != null) {
+                            final selected = crimeTypes.firstWhere((crime) => crime['name'] == newValue);
+                            setState(() {
+                              selectedCrimeType = newValue;
+                              selectedCrimeId = selected['id'];
+                            });
+                          }
+                        },
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please select a crime type';
+                          }
+                          return null;
+                        },
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: descriptionController,
+                        decoration: const InputDecoration(
+                          labelText: 'Description (optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                        maxLines: 3,
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Photo section for mobile
+                      _buildEditPhotoSection(
+                        existingPhoto: existingPhoto,
+                        newSelectedPhoto: newSelectedPhoto,
+                        isUploadingPhoto: isUploadingPhoto,
+                        deleteExistingPhoto: deleteExistingPhoto,
+                        onPhotoChanged: (photo, uploading) {
+                          setState(() {
+                            newSelectedPhoto = photo;
+                            isUploadingPhoto = uploading;
+                          });
+                        },
+                        onDeleteExistingToggle: (delete) {
+                          setState(() {
+                            deleteExistingPhoto = delete;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Date and time fields with real-time validation
+                      Row(
                         children: [
-                          Row(
-                            children: [
-                              Icon(
-                                isActiveStatus ? Icons.check_circle : Icons.cancel,
-                                color: isActiveStatus ? Colors.green : Colors.grey,
-                                size: 20,
+                          Expanded(
+                            child: TextFormField(
+                              controller: dateController,
+                              decoration: const InputDecoration(
+                                labelText: 'Date of Incident',
+                                border: OutlineInputBorder(),
                               ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
-                                ),
-                              ),
-                            ],
-                          ),
-                          Transform.scale(
-                            scale: 0.8,
-                            child: Switch(
-                              value: isActiveStatus,
-                              onChanged: (value) {
-                                setState(() {
-                                  isActiveStatus = value;
-                                  selectedActiveStatus = value ? 'active' : 'inactive';
-                                });
+                              readOnly: true,
+                              onTap: () async {
+                                final reportedDate = getReportedDateTime();
+                                final currentDate = DateTime.now();
+                                final maxDate = DateTime(
+                                  currentDate.isBefore(reportedDate) ? currentDate.year : reportedDate.year,
+                                  currentDate.isBefore(reportedDate) ? currentDate.month : reportedDate.month,
+                                  currentDate.isBefore(reportedDate) ? currentDate.day : reportedDate.day
+                                );
+                                
+                                DateTime? pickedDate = await showDatePicker(
+                                  context: context,
+                                  initialDate: hotspotDateTime.isBefore(maxDate) ? hotspotDateTime : maxDate,
+                                  firstDate: DateTime(2000),
+                                  lastDate: maxDate,
+                                );
+                                if (pickedDate != null) {
+                                  dateController.text = DateFormat('yyyy-MM-dd').format(pickedDate);
+                                  validateTime(setState);
+                                }
                               },
-                              activeColor: Colors.green,
-                              inactiveThumbColor: Colors.grey,
-                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: timeController,
+                              decoration: const InputDecoration(
+                                labelText: 'Time of Incident',
+                                border: OutlineInputBorder(),
+                              ),
+                              readOnly: true,
+                              onTap: () async {
+                                TimeOfDay? pickedTime = await showTimePicker(
+                                  context: context,
+                                  initialTime: TimeOfDay.fromDateTime(hotspotDateTime),
+                                );
+                                
+                                if (pickedTime != null) {
+                                  final selectedDate = DateTime.parse(dateController.text);
+                                  final pickedDateTime = DateTime(
+                                    selectedDate.year,
+                                    selectedDate.month,
+                                    selectedDate.day,
+                                    pickedTime.hour,
+                                    pickedTime.minute,
+                                  );
+                                  
+                                  timeController.text = DateFormat('h:mm a').format(pickedDateTime);
+                                  validateTime(setState);
+                                }
+                              },
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  const SizedBox(height: 14),
-                  
-                  // Update and Cancel buttons - Update on left, Cancel on right
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-onPressed: isUploadingPhoto
-    ? null
-    : () async {
-        if (formKey.currentState!.validate()) {
-          try {
-            final dateTime = DateTime.parse('${dateController.text} ${timeController.text}');
-            final reportedDateTime = DateTime.parse(hotspot['created_at']).toLocal();
-            
-            // Validate incident time is not after reported time
-            if (dateTime.isAfter(reportedDateTime)) {
-              showDialog(
-                context: context,
-                builder: (BuildContext context) {
-                  return AlertDialog(
-                    title: Row(
-                      children: [
-                        Icon(Icons.error, color: Colors.red[600]),
-                        const SizedBox(width: 8),
-                        const Text('Invalid Time'),
-                      ],
-                    ),
-                  content: Text(
-                    'The incident time cannot be later than when it was reported.\n\n'
-                    'Reported: ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(reportedDateTime)}\n'
-                    'Selected: ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(dateTime)}\n\n'
-                    'Please select an earlier time.',
-                  ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('OK'),
-                      ),
-                    ],
-                  );
-                },
-              );
-              return;
-            }
-            
-            // Show loading indicator
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (BuildContext context) {
-                return const AlertDialog(
-                  content: Row(
-                    children: [
-                      CircularProgressIndicator(),
-                      SizedBox(width: 16),
-                      Text('Updating...'),
-                    ],
-                  ),
-                );
-              },
-            );
-            
-            // Continue with update...
-            await _updateHotspot(
-              hotspot['id'],
-              selectedCrimeId,
-              descriptionController.text,
-              dateTime,
-              selectedActiveStatus,
-            );
 
-            // Handle photo updates
-            await _handlePhotoUpdates(
-              hotspotId: hotspot['id'],
-              existingPhoto: existingPhoto,
-              newPhoto: newSelectedPhoto,
-              deleteExisting: deleteExistingPhoto,
-            );
-
-            await _loadHotspots();
-            
-            if (mounted) {
-              // Close loading dialog
-              Navigator.of(context).pop();
-              // Close edit dialog
-              Navigator.pop(context);
-              _showSnackBar('Crime report updated successfully');
-            }
-            
-          } catch (e) {
-            if (mounted) {
-              // Close loading dialog if it's open
-              Navigator.of(context).pop();
-              
-              // Show error dialog
-              showDialog(
-                context: context,
-                builder: (BuildContext context) {
-                  return AlertDialog(
-                    title: Row(
-                      children: [
-                        Icon(Icons.error, color: Colors.red[600]),
-                        const SizedBox(width: 8),
-                        const Text('Update Failed'),
+                      // NEW: Error message display (replaces the blue info container)
+                      if (!isTimeValid && timeErrorMessage != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.error_outline, size: 16, color: Colors.red.shade600),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  timeErrorMessage!,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.red.shade700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
-                    ),
-                    content: Text(
-                      'Failed to update crime report:\n\n${e.toString()}'
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('OK'),
-                      ),
-                    ],
-                  );
-                },
-              );
-            }
-          }
-        }
-      },
-                          style: ElevatedButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6),
+                      const SizedBox(height: 16),
+                      
+                      // Add active status toggle for admins only
+                      if (_hasAdminPermissions)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isActiveStatus ? Colors.green.shade50 : Colors.grey.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isActiveStatus ? Colors.green.shade200 : Colors.grey.shade300,
+                              width: 1,
                             ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
-                          child: isUploadingPhoto
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Text('Update'),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    isActiveStatus ? Icons.check_circle : Icons.cancel,
+                                    color: isActiveStatus ? Colors.green : Colors.grey,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Transform.scale(
+                                scale: 0.8,
+                                child: Switch(
+                                  value: isActiveStatus,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      isActiveStatus = value;
+                                      selectedActiveStatus = value ? 'active' : 'inactive';
+                                    });
+                                  },
+                                  activeColor: Colors.green,
+                                  inactiveThumbColor: Colors.grey,
+                                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.grey[500],
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6),
+                      const SizedBox(height: 14),
+                      
+                      // Update and Cancel buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: (isUploadingPhoto || !isTimeValid)
+                                  ? null
+                                  : () async {
+                                      if (formKey.currentState!.validate()) {
+                                        try {
+                                          final dateTime = parseTimeFromControllers();
+                                          
+                                          // Show loading indicator
+                                          showDialog(
+                                            context: context,
+                                            barrierDismissible: false,
+                                            builder: (BuildContext context) {
+                                              return const AlertDialog(
+                                                content: Row(
+                                                  children: [
+                                                    CircularProgressIndicator(),
+                                                    SizedBox(width: 16),
+                                                    Text('Updating...'),
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                          );
+                                          
+                                          // Continue with update...
+                                          await _updateHotspot(
+                                            hotspot['id'],
+                                            selectedCrimeId,
+                                            descriptionController.text,
+                                            dateTime,
+                                            selectedActiveStatus,
+                                          );
+
+                                          // Handle photo updates
+                                          await _handlePhotoUpdates(
+                                            hotspotId: hotspot['id'],
+                                            existingPhoto: existingPhoto,
+                                            newPhoto: newSelectedPhoto,
+                                            deleteExisting: deleteExistingPhoto,
+                                          );
+
+                                          await _loadHotspots();
+                                          
+                                          if (mounted) {
+                                            // Close loading dialog
+                                            Navigator.of(context).pop();
+                                            // Close edit dialog
+                                            Navigator.pop(context);
+                                            _showSnackBar('Crime report updated successfully');
+                                          }
+                                          
+                                        } catch (e) {
+                                          print('Update error details: $e');
+                                          if (mounted) {
+                                            // Close loading dialog if it's open
+                                            Navigator.of(context).pop();
+                                            
+                                            // Show error dialog
+                                            showDialog(
+                                              context: context,
+                                              builder: (BuildContext context) {
+                                                return AlertDialog(
+                                                  title: Row(
+                                                    children: [
+                                                      Icon(Icons.error, color: Colors.red[600]),
+                                                      const SizedBox(width: 8),
+                                                      const Text('Update Failed'),
+                                                    ],
+                                                  ),
+                                                  content: Text(
+                                                    'Failed to update crime report:\n\n${e.toString()}'
+                                                  ),
+                                                  actions: [
+                                                    TextButton(
+                                                      onPressed: () => Navigator.of(context).pop(),
+                                                      child: const Text('OK'),
+                                                    ),
+                                                  ],
+                                                );
+                                              },
+                                            );
+                                          }
+                                        }
+                                      }
+                                    },
+                              style: ElevatedButton.styleFrom(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: isUploadingPhoto
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Text('Update'),
                             ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
-                          child: const Text('Cancel'),
-                        ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.grey[500],
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: const Text('Cancel'),
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 4),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                ],
-              ),
-            ),
-          );
-        },
+                ),
+              );
+            },
+          ),
+        ),
       ),
-    ),
-  ),
-);
+    );
   } catch (e) {
     if (mounted) {
       _showSnackBar('Error loading crime types: ${e.toString()}');
@@ -6160,6 +6354,7 @@ Future<bool> _reportHotspot(
         _showSnackBar('User not authenticated');
         return false; // Return false on failure
       }
+      
 
       // Check daily report limit (5 per day)
       final today = DateTime.now();
@@ -6204,11 +6399,12 @@ Future<bool> _reportHotspot(
         'type_id': typeId,
         'description': description.trim().isNotEmpty ? description.trim() : null,
         'location': 'POINT(${position.longitude} ${position.latitude})',
-        'time': dateTime.toIso8601String(),
+        // Fix: Ensure the dateTime is treated as local time
+        'time': dateTime.toLocal().toIso8601String(),
         'status': 'pending',
         'created_by': currentUserId,
         'reported_by': currentUserId,
-        'created_at': DateTime.now().toIso8601String(),
+        'created_at': DateTime.now().toLocal().toIso8601String(),
       };
 
       final response = await Supabase.instance.client
@@ -6352,15 +6548,16 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
       }
     }
 
-    final insertData = {
-      'type_id': int.parse(typeId),
-      'description': description.trim().isNotEmpty ? description.trim() : null,
-      'location': 'POINT(${position.longitude} ${position.latitude})',
-      'time': dateTime.toIso8601String(),
-      'created_by': currentUserId,
-      'status': 'approved',
-      'active_status': activeStatus, // Use the passed active status
-    };
+  final insertData = {
+    'type_id': int.parse(typeId),
+    'description': description.trim().isNotEmpty ? description.trim() : null,
+    'location': 'POINT(${position.longitude} ${position.latitude})',
+    // Fix: Ensure the dateTime is treated as local time
+    'time': dateTime.toLocal().toIso8601String(),
+    'created_by': currentUserId,
+    'status': 'approved',
+    'active_status': activeStatus,
+  };
 
     // Insert the hotspot
     final response = await Supabase.instance.client
@@ -6647,15 +6844,14 @@ Future<bool> _showNearbyHotspotConfirmation(LatLng position, List<dynamic> nearb
 }
 
 // Helper method to format time ago
+
 String _getTimeAgo(DateTime dateTime, {bool compact = false}) {
   final now = DateTime.now();
   final difference = now.difference(dateTime);
   
   if (compact) {
-    // Compact format for map labels
-    if (difference.inMinutes < 1) {
-      return 'NEW';
-    } else if (difference.inMinutes < 60) {
+    // Remove the "NEW" check since it's handled in _buildTimeText
+    if (difference.inMinutes < 60) {
       return '${difference.inMinutes}min ago';
     } else if (difference.inHours < 24) {
       return '${difference.inHours}h ago';
@@ -6773,13 +6969,20 @@ void _showProfileDialog() {
     return;
   }
 
-  void toggleEditMode() {
-    setState(() {
-      _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
-    });
-    Navigator.pop(context);
-    _showProfileDialog();
-  }
+void toggleEditMode() {
+  setState(() {
+    // Reset save button state when entering edit mode
+    if (!_profileScreen.isEditingProfile) {
+      _profileScreen.resetSaveButtonState(); // Option 2
+      // OR
+      // _profileScreen.saveButtonState = SaveButtonState.normal; // Option 1
+    }
+    
+    _profileScreen.isEditingProfile = !_profileScreen.isEditingProfile;
+  });
+  Navigator.pop(context);
+  _showProfileDialog();
+}
 
   Future<void> refreshProfile() async {
     final user = _authService.currentUser;
@@ -9980,9 +10183,48 @@ Widget _buildStableHotspotMarker({
 
 
 // Helper widget to build time text with special "NEW" styling
+// Helper widget to build time text with special "NEW" styling
 Widget _buildTimeText(Map<String, dynamic> hotspot, Color markerColor) {
-  final timeText = _getTimeAgo(DateTime.parse(hotspot['time']), compact: true);
-  final isNew = timeText == 'NEW';
+  // Use created_at for "NEW" determination, but incident time for regular display
+  DateTime hotspotTime;
+  DateTime creationTime;
+  
+  try {
+    // Parse incident time for regular display
+    final timeString = hotspot['time'];
+    final parsedTime = DateTime.parse(timeString);
+    
+    if (timeString.endsWith('Z')) {
+      hotspotTime = parsedTime.toLocal();
+    } else {
+      hotspotTime = parsedTime;
+    }
+
+    // Parse creation time for "NEW" determination
+    final createdString = hotspot['created_at'] ?? hotspot['time'];
+    final parsedCreated = DateTime.parse(createdString);
+    
+    if (createdString.endsWith('Z')) {
+      creationTime = parsedCreated.toLocal();
+    } else {
+      creationTime = parsedCreated;
+    }
+  } catch (e) {
+    print('Error parsing hotspot time for marker: $e');
+    hotspotTime = DateTime.now();
+    creationTime = DateTime.now();
+  }
+  
+  // Determine if it's "NEW" based on BOTH creation time AND incident time
+  final now = DateTime.now();
+  final creationDifference = now.difference(creationTime);
+  final incidentDifference = now.difference(hotspotTime);
+  
+  // Show "NEW" only if both the report was created recently AND the incident time is recent
+  final isNew = creationDifference.inHours < 1 && incidentDifference.inHours < 1;
+  
+  // Get display text based on incident time
+  final timeText = isNew ? 'NEW' : _getTimeAgo(hotspotTime, compact: true);
   
   if (isNew) {
     // Blue text with white background for maximum visibility
@@ -10542,8 +10784,26 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
     fullLocation = "$address\n$coordinatesString";
   }
 
-  final DateTime time = DateTime.parse(hotspot['time'] ?? DateTime.now().toIso8601String()).toLocal();
-  final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
+// Fix the time parsing section (around line 47 in your code)
+DateTime time;
+try {
+  final timeString = hotspot['time'] ?? DateTime.now().toIso8601String();
+  final parsedTime = DateTime.parse(timeString);
+  
+  // Check if the parsed time is in UTC (has 'Z' suffix) or local
+  if (timeString.endsWith('Z')) {
+    // It's UTC, convert to local
+    time = parsedTime.toLocal();
+  } else {
+    // It's already local time, don't convert
+    time = parsedTime;
+  }
+} catch (e) {
+  print('Error parsing time: $e');
+  time = DateTime.now();
+}
+
+final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
   final status = hotspot['status'] ?? 'approved';
   final activeStatus = hotspot['active_status'] ?? 'active';
   final isOwner = (_userProfile?['id'] != null) && 
@@ -12389,9 +12649,9 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
     final updateData = {
       'type_id': typeId,
       'description': description.trim().isNotEmpty ? description.trim() : null,
-      'time': dateTime.toIso8601String(),
+      'time': dateTime.toLocal().toIso8601String(), // Fix: Use local time
       if (activeStatus != null) 'active_status': activeStatus,
-      'updated_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toLocal().toIso8601String(), // Fix: Use local time
       'last_updated_by': _userProfile?['id'],
     };
 
@@ -13134,7 +13394,8 @@ Widget _buildCurrentScreen(bool isDesktop) {
 
 
 
-// PROFILE PAGE DESKTOP - UPDATED VERSION
+// PROFILE PAGE DESKTOP 
+
 Widget _buildProfileScreen() {
   if (_userProfile == null) {
     return const Center(
@@ -13233,6 +13494,8 @@ Widget _buildProfileScreen() {
     return Stack(
       children: [
         _buildMap(),
+        // Add the Mini Legend here for profile screen
+        const MiniLegend(),
         if (_isLoading && _currentPosition == null)
           const Center(child: CircularProgressIndicator()),
         Positioned(
@@ -13282,9 +13545,9 @@ Widget _buildProfileScreen() {
             ),
           ),
         ),
-        // Overlay starting after sidebar
+        // Fixed overlay - starts after sidebar to avoid covering MiniLegend
         Positioned(
-          left: _isSidebarVisible ? 0 : 0,
+          left: _isSidebarVisible ? 00 : 00, // Start after sidebar (280 for full, 64 for mini)
           top: 0,
           right: 0,
           bottom: 0,

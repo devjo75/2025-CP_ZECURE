@@ -1,3 +1,5 @@
+// ignore_for_file: use_build_context_synchronously
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -8,7 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/auth/auth_service.dart';
 import 'package:zecure/screens/admin_dashboard.dart';
 
-enum SaveButtonState { normal, saving, saved, noChanges }
+enum SaveButtonState { normal, saving, saved,  }
 class ProfileScreen {
   final AuthService _authService;
   Map<String, dynamic>? userProfile;
@@ -35,6 +37,9 @@ class ProfileScreen {
   // ignore: unnecessary_getters_setters
   bool get isEditingProfile => _isEditingProfile;
   set isEditingProfile(bool value) => _isEditingProfile = value;
+
+
+  bool get _hasAnyChanges => _hasProfileChanges() || (_hasEmailChanges() && userProfile?['registration_type'] == 'simple');
 
 
 
@@ -159,54 +164,28 @@ bool _hasProfileChanges() {
 }
 
 
+// In your ProfileScreen class, add this method:
+void resetSaveButtonState() {
+  _saveButtonState = SaveButtonState.normal;
+}
 
-// Updated updateProfile method with mobile fixes
+// Updated updateProfile method with consistent button states for both desktop and mobile
+
 Future<void> updateProfile(BuildContext context, {
   required VoidCallback onSuccess,
   Function(VoidCallback)? onStateChange,
-  required bool isSidebarVisible, // Add this parameter
+  required bool isSidebarVisible,
 }) async {
   if (!_profileFormKey.currentState!.validate()) return;
-
-  // Check if we're on desktop/web
-  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
 
   try {
     bool hasProfileChanges = _hasProfileChanges();
     bool hasEmailChanges = _hasEmailChanges() && userProfile?['registration_type'] == 'simple';
 
-    if (!hasProfileChanges && !hasEmailChanges) {
-      if (isDesktopOrWeb) {
-        // Desktop: Show "NO CHANGES" button state
-        onStateChange?.call(() {
-          _saveButtonState = SaveButtonState.noChanges;
-        });
-        
-        // Reset button after 3 seconds
-        _buttonStateTimer?.cancel();
-        _buttonStateTimer = Timer(const Duration(seconds: 1), () {
-          if (onStateChange != null) {
-            onStateChange(() {
-              _saveButtonState = SaveButtonState.normal;
-            });
-          }
-        });
-      } else {
-        // Mobile: Show info dialog as before
-        _showInfoDialog(context, 'No changes were made to your profile.');
-      }
-      return;
-    }
-
-    // Set saving state for desktop
-    if (isDesktopOrWeb) {
-      onStateChange?.call(() {
-        _saveButtonState = SaveButtonState.saving;
-      });
-    }
+    // Set saving state for both desktop and mobile
+    onStateChange?.call(() {
+      _saveButtonState = SaveButtonState.saving;
+    });
 
     // Update profile data
     if (hasProfileChanges) {
@@ -232,170 +211,118 @@ Future<void> updateProfile(BuildContext context, {
     }
 
     // Handle email verification if needed
-   if (hasEmailChanges) {
-    final currentEmail = userProfile?['email'] ?? '';
-    final newEmail = _emailController.text.trim();
-    
-    // Determine if this is a change or verification of existing email
-    final isEmailChange = newEmail != currentEmail;
-    final isVerifyingCurrentEmail = _forceEmailVerification && !isEmailChange;
-
-    // Show loading state
-    onStateChange?.call(() {
-      _isUpdatingEmail = true;
-      if (isDesktopOrWeb) {
-        _saveButtonState = SaveButtonState.saving;
-      }
-    });
-
-    try {
-      if (isVerifyingCurrentEmail) {
-        // User wants to verify their current email
-        await _authService.sendVerificationToCurrentEmail();
-        _pendingEmailChange = currentEmail; // Use current email for verification
-        _isVerifyingCurrentEmail = true;
-      } else if (isEmailChange) {
-        // Email is being changed to a new one
-        await _authService.updateEmailWithVerification(newEmail: newEmail);
-        _pendingEmailChange = newEmail;
-        _isVerifyingCurrentEmail = false;
-      }
+    if (hasEmailChanges) {
+      final currentEmail = userProfile?['email'] ?? '';
+      final newEmail = _emailController.text.trim();
       
-      _startEmailResendTimer();
-      
-      // Reset the checkbox after initiating verification
-      _forceEmailVerification = false;
+      // Determine if this is a change or verification of existing email
+      final isEmailChange = newEmail != currentEmail;
+      final isVerifyingCurrentEmail = _forceEmailVerification && !isEmailChange;
 
-      // Hide loading state
+      // Show loading state
       onStateChange?.call(() {
-        _isUpdatingEmail = false;
-        if (isDesktopOrWeb) {
-          _saveButtonState = SaveButtonState.normal;
-        }
+        _isUpdatingEmail = true;
+        _saveButtonState = SaveButtonState.saving;
       });
 
-      // Show email verification modal with the correct verification type
-      _showEmailVerificationModal(
-        context,
-        onSuccess,
-        profileChanged: hasProfileChanges,
-        isSidebarVisible: isSidebarVisible,
-      );
-    } catch (e) {
-        // Reset the checkbox on error
-        _forceEmailVerification = false;
+      try {
+        if (isVerifyingCurrentEmail) {
+          // User wants to verify their current email
+          await _authService.sendVerificationToCurrentEmail();
+          _pendingEmailChange = currentEmail;
+          _isVerifyingCurrentEmail = true;
+        } else if (isEmailChange) {
+          // Email is being changed to a new one
+          await _authService.updateEmailWithVerification(newEmail: newEmail);
+          _pendingEmailChange = newEmail;
+          _isVerifyingCurrentEmail = false;
+        }
         
-        // Hide loading state
+        _startEmailResendTimer();
+        
+        // Reset UI state after successful email operation start
         onStateChange?.call(() {
+          _forceEmailVerification = false;
+          _handleEmailMutualExclusivity();
           _isUpdatingEmail = false;
-          if (isDesktopOrWeb) {
-            _saveButtonState = SaveButtonState.normal;
-          }
+          _saveButtonState = SaveButtonState.normal;
+        });
+
+        // Show email verification modal
+        _showEmailVerificationModal(
+          context,
+          onSuccess,
+          profileChanged: hasProfileChanges,
+          isSidebarVisible: isSidebarVisible,
+          onStateChange: onStateChange,
+        );
+      } catch (e) {
+        // Reset checkbox state but KEEP the saving button state initially
+        onStateChange?.call(() {
+          _forceEmailVerification = false;
+          _handleEmailMutualExclusivity();
+          _isUpdatingEmail = false;
+          // DON'T reset _saveButtonState yet - keep it as "saving"
         });
         
-      String errorMessage = 'Failed to initiate email verification: The email address you registered might be invalid or non-existent. Please enter a valid new email address to verify.';
+        String errorMessage = 'Email verification failed: The registered address may be invalid or inactive. Please enter a new valid email to verify.';
 
-
-
-        // Show success for profile changes even if email failed
-        if (hasProfileChanges) {
-          String successMessage = 'Profile updated successfully!\n\nEmail verification failed: ${e.toString()}';
-          
-          _shouldScrollToTop = true;
-          _isEditingProfile = false;
-          onSuccess();
-
-          // Desktop vs Mobile handling
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (context.mounted) {
-              if (isDesktopOrWeb) {
-                // Desktop: Show saved state briefly, then return to normal
-                onStateChange?.call(() {
-                  _saveButtonState = SaveButtonState.saved;
-                });
-                
-                _buttonStateTimer?.cancel();
-                _buttonStateTimer = Timer(const Duration(seconds: 1), () {
-                  if (onStateChange != null) {
-                    onStateChange(() {
-                      _saveButtonState = SaveButtonState.normal;
-                    });
-                  }
-                });
+        // Show email error with smart callback handling
+        bool isSnackBarDismissed = false;
+        
+        _showSnackBarWithCallback(
+          context, 
+          errorMessage,
+          isError: true,
+          duration: const Duration(seconds: 4),
+          isSidebarVisible: isSidebarVisible,
+          onDismissed: () {
+            if (!isSnackBarDismissed) {
+              isSnackBarDismissed = true;
+              
+              if (hasProfileChanges) {
+                // SnackBar dismissed, show "saved" state and navigate
+                if (context.mounted) {
+                  onStateChange?.call(() {
+                    _saveButtonState = SaveButtonState.saved;
+                  });
+                  
+                  // After showing "saved" for 1.5 seconds, navigate
+                  _buttonStateTimer?.cancel();
+                  _buttonStateTimer = Timer(const Duration(milliseconds: 1500), () {
+                    _shouldScrollToTop = true;
+                    _isEditingProfile = false;
+                    onSuccess(); // Navigate - button stays as "SAVED"
+                  });
+                }
               } else {
-                // Mobile: Show success dialog
-                _showSuccessDialog(
-                  context, 
-                  successMessage,
-                  isSidebarVisible: isSidebarVisible, // Pass the parameter
-                );
+                // No profile changes, just reset button
+                if (onStateChange != null) {
+                  onStateChange(() {
+                    _saveButtonState = SaveButtonState.normal;
+                  });
+                }
               }
             }
-          });
-        } else {
-          _showSnackBar(context, errorMessage);
-        }
-        return;
+          },
+        );
+        return; // Important: return here to prevent further execution
       }
     } else {
       // No email verification needed - show success for profile changes
       if (hasProfileChanges) {
-        if (isDesktopOrWeb) {
-          // Desktop: Show saved state for 3 seconds, then navigate to profile page
-          onStateChange?.call(() {
-            _saveButtonState = SaveButtonState.saved;
-          });
-          
-          _buttonStateTimer?.cancel();
-          _buttonStateTimer = Timer(const Duration(seconds: 1), () {
-            // After showing "SAVED" for 3 seconds, navigate to profile page
-            _shouldScrollToTop = true;
-            _isEditingProfile = false;
-            onSuccess(); // This triggers navigation to profile view
-            
-            // Reset button state after navigation
-            if (onStateChange != null) {
-              onStateChange(() {
-                _saveButtonState = SaveButtonState.normal;
-              });
-            }
-          });
-        } else {
-          // Mobile: Immediate navigation and show success dialog
+        // Show saved state for both desktop and mobile
+        onStateChange?.call(() {
+          _saveButtonState = SaveButtonState.saved;
+        });
+        
+        _buttonStateTimer?.cancel();
+        _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+          // Navigate to profile view - button stays as "SAVED"
           _shouldScrollToTop = true;
           _isEditingProfile = false;
-          onSuccess();
-          
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (context.mounted) {
-              _showSuccessDialog(
-                context, 
-                'Profile updated successfully!',
-                isSidebarVisible: isSidebarVisible, // Pass the parameter
-              );
-            }
-          });
-        }
-      } else {
-        if (isDesktopOrWeb) {
-          // Desktop: Show "NO CHANGES" button state
-          onStateChange?.call(() {
-            _saveButtonState = SaveButtonState.noChanges;
-          });
-          
-          // Reset button after 3 seconds
-          _buttonStateTimer?.cancel();
-          _buttonStateTimer = Timer(const Duration(seconds: 1), () {
-            if (onStateChange != null) {
-              onStateChange(() {
-                _saveButtonState = SaveButtonState.normal;
-              });
-            }
-          });
-        } else {
-          // Mobile: Show info dialog
-          _showInfoDialog(context, 'No changes were made to your profile.');
-        }
+          onSuccess(); // This triggers navigation to profile view
+        });
       }
     }
   } catch (e) {
@@ -403,10 +330,14 @@ Future<void> updateProfile(BuildContext context, {
     onStateChange?.call(() {
       _saveButtonState = SaveButtonState.normal;
     });
-    _showSnackBar(context, 'Error updating profile: ${e.toString()}');
+_showSnackBar(
+  context, 
+  'Error updating profile: ${e.toString()}',
+  isError: true,
+  isSidebarVisible: isSidebarVisible, // Add this line
+);
   }
 }
-
 
 void _handleEmailMutualExclusivity() {
   final currentEmail = userProfile?['email'] ?? '';
@@ -420,13 +351,254 @@ void _handleEmailMutualExclusivity() {
   }
 }
 
+void _showSnackBarWithCallback(
+  BuildContext context, 
+  String message, {
+  Color? backgroundColor,
+  Color? textColor,
+  IconData? icon,
+  Duration? duration,
+  bool isError = false,
+  bool isWarning = false,
+  bool isSuccess = false,
+  VoidCallback? onDismissed,
+  required bool isSidebarVisible, // Add this parameter
+}) {
+  // Determine colors and icon based on type
+  Color bgColor;
+  Color txColor;
+  IconData snackIcon;
+  
+  if (isSuccess) {
+    bgColor = Colors.green.shade600;
+    txColor = Colors.white;
+    snackIcon = Icons.check_circle_rounded;
+  } else if (isWarning) {
+    bgColor = Colors.orange.shade600;
+    txColor = Colors.white;
+    snackIcon = Icons.warning_rounded;
+  } else if (isError) {
+    bgColor = Colors.red.shade600;
+    txColor = Colors.white;
+    snackIcon = Icons.error_rounded;
+  } else {
+    bgColor = backgroundColor ?? Colors.blue.shade600;
+    txColor = textColor ?? Colors.white;
+    snackIcon = icon ?? Icons.info_rounded;
+  }
+
+  // Check if it's desktop/web
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
+
+  // Calculate margins to match profile container positioning
+  EdgeInsets snackBarMargin;
+  if (isDesktopOrWeb) {
+    // Match the profile container positioning
+    final profileLeft = isSidebarVisible ? 285.0 : 80.0;
+    final profileWidth = 450.0;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final rightMargin = screenWidth - profileLeft - profileWidth;
+    
+    snackBarMargin = EdgeInsets.only(
+      left: profileLeft,
+      right: rightMargin,
+      bottom: 16,
+      top: 16,
+    );
+  } else {
+    // Mobile - keep original margins
+    snackBarMargin = const EdgeInsets.all(16);
+  }
+
+  final snackBar = SnackBar(
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(snackIcon, color: txColor, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: GoogleFonts.poppins(
+                  color: txColor,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            GestureDetector(
+              onTap: () {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              },
+              child: Text(
+                'DISMISS',
+                style: GoogleFonts.poppins(
+                  color: txColor.withOpacity(0.7),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+    backgroundColor: bgColor,
+    duration: duration ?? const Duration(seconds: 4),
+    behavior: SnackBarBehavior.floating,
+    margin: snackBarMargin, // Use calculated margin
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+    ),
+    elevation: 8,
+  );
+
+  ScaffoldMessenger.of(context).showSnackBar(snackBar).closed.then((_) {
+    // This fires whether dismissed manually or auto-dismissed
+    onDismissed?.call();
+  });
+}
+
+void _showSnackBar(
+  BuildContext context, 
+  String message, {
+  Color? backgroundColor,
+  Color? textColor,
+  IconData? icon,
+  Duration? duration,
+  bool isError = false,
+  bool isWarning = false,
+  bool isSuccess = false,
+  required bool isSidebarVisible, // Add this parameter
+}) {
+  // Determine colors and icon based on type
+  Color bgColor;
+  Color txColor;
+  IconData snackIcon;
+  
+  if (isSuccess) {
+    bgColor = Colors.green.shade600;
+    txColor = Colors.white;
+    snackIcon = Icons.check_circle_rounded;
+  } else if (isWarning) {
+    bgColor = Colors.orange.shade600;
+    txColor = Colors.white;
+    snackIcon = Icons.warning_rounded;
+  } else if (isError) {
+    bgColor = Colors.red.shade600;
+    txColor = Colors.white;
+    snackIcon = Icons.error_rounded;
+  } else {
+    bgColor = backgroundColor ?? Colors.blue.shade600;
+    txColor = textColor ?? Colors.white;
+    snackIcon = icon ?? Icons.info_rounded;
+  }
+
+  // Check if it's desktop/web
+  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
+
+  // Calculate margins to match profile container positioning
+  EdgeInsets snackBarMargin;
+  if (isDesktopOrWeb) {
+    // Match the profile container positioning
+    final profileLeft = isSidebarVisible ? 285.0 : 80.0;
+    final profileWidth = 450.0;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final rightMargin = screenWidth - profileLeft - profileWidth;
+    
+    snackBarMargin = EdgeInsets.only(
+      left: profileLeft,
+      right: rightMargin,
+      bottom: 16,
+      top: 16,
+    );
+  } else {
+    // Mobile - keep original margins
+    snackBarMargin = const EdgeInsets.all(16);
+  }
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(snackIcon, color: txColor, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  message,
+                  style: GoogleFonts.poppins(
+                    color: txColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              GestureDetector(
+                onTap: () {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                },
+                child: Text(
+                  'DISMISS',
+                  style: GoogleFonts.poppins(
+                    color: txColor.withOpacity(0.7),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      backgroundColor: bgColor,
+      duration: duration ?? const Duration(seconds: 4),
+      behavior: SnackBarBehavior.floating,
+      margin: snackBarMargin, // Use calculated margin
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      elevation: 8,
+    ),
+  );
+}
+
 // EMAIL VERIFICATION STARTS HERE
 
 void _showEmailVerificationModal(
   BuildContext context, 
   VoidCallback onSuccess, {
   bool profileChanged = false,
-  required bool isSidebarVisible, // Add this parameter
+  required bool isSidebarVisible, 
+  Function(VoidCallback)? onStateChange,// Add this parameter
 }) {
   final List<TextEditingController> otpControllers = List.generate(6, (_) => TextEditingController());
   final List<FocusNode> otpFocusNodes = List.generate(6, (_) => FocusNode());
@@ -645,21 +817,29 @@ void _showEmailVerificationModal(
                                           Navigator.of(context).pop();
                                           
                                           // Only show success if other changes were made
+                               // Only show success if other changes were made
                                     if (profileChanged) {
-                                      _showSuccessDialog(
-                                        context,
-                                        'Profile updated successfully!\n\nEmail verification was skipped.',
-                                        onOkPressed: () {
-                                          _isEditingProfile = false;
-                                          onSuccess();
-                                        },
-                                        isSidebarVisible: isSidebarVisible, // Pass the parameter
-                                      );
+                                      // Show saved state briefly
+                                   if (onStateChange != null) {
+                                      onStateChange(() {
+                                        _saveButtonState = SaveButtonState.saved;
+                                      });
+                                      
+                                      _buttonStateTimer?.cancel();
+                                      _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+                                        _isEditingProfile = false;
+                                        onSuccess();
+                                        
+                                        onStateChange(() {
+                                          _saveButtonState = SaveButtonState.normal;
+                                        });
+                                      });
+                                    }
                                     } else {
-                                            // No other changes were made, just exit edit mode
-                                            _isEditingProfile = false;
-                                            onSuccess();
-                                          }
+                                      // No other changes were made, just exit edit mode
+                                      _isEditingProfile = false;
+                                      onSuccess();
+                                    }
                                         },
                                         style: OutlinedButton.styleFrom(
                                           foregroundColor: Colors.grey.shade600,
@@ -776,21 +956,29 @@ void _showEmailVerificationModal(
                                           Navigator.of(context).pop();
                                           
                                           // Only show success if other changes were made
+                                        // Only show success if other changes were made
                                         if (profileChanged) {
-                                          _showSuccessDialog(
-                                            context,
-                                            'Profile updated successfully!\n\nEmail verification was skipped.',
-                                            onOkPressed: () {
-                                              _isEditingProfile = false;
-                                              onSuccess();
-                                            },
-                                            isSidebarVisible: isSidebarVisible, // Pass the parameter
-                                          );
+                                          // Show saved state briefly
+                                      if (onStateChange != null) {
+                                        onStateChange(() {
+                                          _saveButtonState = SaveButtonState.saved;
+                                        });
+                                        
+                                        _buttonStateTimer?.cancel();
+                                        _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+                                          _isEditingProfile = false;
+                                          onSuccess();
+                                          
+                                          onStateChange(() {
+                                            _saveButtonState = SaveButtonState.normal;
+                                          });
+                                        });
+                                      }
                                         } else {
-                                            // No other changes were made, just exit edit mode
-                                            _isEditingProfile = false;
-                                            onSuccess();
-                                          }
+                                          // No other changes were made, just exit edit mode
+                                          _isEditingProfile = false;
+                                          onSuccess();
+                                        }
                                         },
                                         style: OutlinedButton.styleFrom(
                                           foregroundColor: Colors.grey.shade600,
@@ -820,7 +1008,7 @@ void _showEmailVerificationModal(
                             children: [
                               TextButton(
                                 onPressed: _canResendEmailOTP 
-                                    ? () => _resendEmailChangeOTP(context, setModalState) 
+                                    ? () => _resendEmailChangeOTP(context, setModalState, isSidebarVisible: isSidebarVisible,) 
                                     : null,
                                 style: TextButton.styleFrom(
                                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -897,7 +1085,7 @@ Future<void> _verifyEmailChangeFromModal(
 }) async {
   final otp = otpControllers.map((c) => c.text).join();
   if (otp.length != 6) {
-    _showSnackBar(context, 'Please enter the complete 6-digit code');
+    _showSnackBar(context, 'Please enter the complete 6-digit code', isSidebarVisible: isSidebarVisible,);
     return;
   }
 
@@ -1439,8 +1627,11 @@ void _showErrorDialog(BuildContext context, String message, {required bool isSid
   );
 }
 
-
-Future<void> _resendEmailChangeOTP(BuildContext context, StateSetter setModalState) async {
+Future<void> _resendEmailChangeOTP(
+  BuildContext context, 
+  StateSetter setModalState, 
+  {required bool isSidebarVisible} // Add this parameter
+) async {
   try {
     if (_isVerifyingCurrentEmail) {
       // Use the new resend method for current email verification
@@ -1453,9 +1644,21 @@ Future<void> _resendEmailChangeOTP(BuildContext context, StateSetter setModalSta
     setModalState(() {
       _startEmailResendTimer();
     });
-    _showSnackBar(context, 'Verification code sent again!');
+    
+    _showSnackBar(
+      context, 
+      'Verification code sent again!',
+      isSuccess: true,
+      isSidebarVisible: isSidebarVisible, // Add this parameter
+    );
+    
   } catch (e) {
-    _showSnackBar(context, 'Failed to resend code. Please try again.');
+    _showSnackBar(
+      context, 
+      'Failed to resend code. Please try again.',
+      isError: true,
+      isSidebarVisible: isSidebarVisible, // Add this parameter
+    );
   }
 }
 
@@ -1476,87 +1679,8 @@ void _startEmailResendTimer() {
 }
 
 
-// Updated _showSuccessDialog to match desktop positioning
-void _showSuccessDialog(BuildContext context, String message, {VoidCallback? onOkPressed, required bool isSidebarVisible}) {
-  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
 
-  // Only show dialog on mobile - desktop uses button states for other success messages
-  if (isDesktopOrWeb) {
-    return;
-  }
 
-  showDialog(
-    context: context,
-    barrierDismissible: false, // Prevent dismissing by tapping outside
-    builder: (context) {
-      return ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 500), // Expanded width
-        child: AlertDialog(
-          title: Row(
-            children: [
-              Icon(Icons.check_circle, color: Colors.green.shade600),
-              const SizedBox(width: 8),
-              const Text('Success'),
-            ],
-          ),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                // Only call onOkPressed AFTER the dialog is dismissed
-                if (onOkPressed != null) {
-                  // Add a small delay to ensure dialog is fully closed
-                  Future.delayed(const Duration(milliseconds: 100), () {
-                    onOkPressed();
-                  });
-                }
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-}
-
-void _showInfoDialog(BuildContext context, String message) {
-  showDialog(
-    context: context,
-    builder: (dialogContext) {
-      return AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.info_outline, color: Colors.blue.shade600),
-            const SizedBox(width: 8),
-            const Text('Info'),
-          ],
-        ),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () {
-              if (Navigator.of(dialogContext).canPop()) {
-                Navigator.of(dialogContext).pop();
-              }
-            },
-            child: const Text('OK'),
-          ),
-        ],
-      );
-    },
-  );
-}
-
-  void _showSnackBar(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
 
 //PROFILE PAGE TO ALWAYS START FROM THE TOP
   void setShouldScrollToTop(bool value) {
@@ -2654,59 +2778,29 @@ Widget buildEditProfileForm(
                             ),
                           ),
                           const SizedBox(width: 16),
-                          Expanded(
-                            child: SizedBox(
-                              height: 50,
-                              child: ElevatedButton(
-                                onPressed: (_isUpdatingEmail) // FIX 6: Add null check
-                                    ? null
-                                    : () => updateProfile(
-                                          context,
-                                          onSuccess: onSuccess,
-                                          onStateChange: setState,
-                                          isSidebarVisible: isSidebarVisible, // Now properly initialized
-                                        ),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Theme.of(context).primaryColor,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  elevation: 2,
-                                ),
-                                child: (_isUpdatingEmail) // FIX 7: Add null check
-                                    ? const Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                            ),
-                                          ),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            'SENDING..',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 16,
-                                              color: Colors.white,
-                                            ),
-                                          ),
-                                        ],
-                                      )
-                                    : const Text(
-                                        'SAVE',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 16,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                              ),
+               Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: (_isUpdatingEmail || !_hasAnyChanges)
+                        ? null
+                        : () => updateProfile(
+                              context,
+                              onSuccess: onSuccess,
+                              onStateChange: setState,
+                              isSidebarVisible: isSidebarVisible,
                             ),
-                          ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _getSaveButtonColor(context),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 2,
+                    ),
+                    child: _buildSaveButtonContent(),
+                  ),
+                ),
+              ),
                         ],
                       ),
                       if (isDesktopOrWeb) const SizedBox(height: 16),
@@ -4076,7 +4170,7 @@ Widget buildDesktopEditProfileForm(
   child: SizedBox(
     height: 50,
     child: ElevatedButton(
-      onPressed: _isUpdatingEmail
+      onPressed: (_isUpdatingEmail || !_hasAnyChanges)
           ? null
           : () => updateProfile(
                 context,
@@ -4114,13 +4208,14 @@ Color _getSaveButtonColor(BuildContext context) {
   switch (_saveButtonState) {
     case SaveButtonState.saved:
       return Colors.green;
-    case SaveButtonState.noChanges:
-      return Colors.orange;
+
     case SaveButtonState.saving:
     case SaveButtonState.normal:
     return Theme.of(context).primaryColor;
   }
 }
+
+
 
 Widget _buildSaveButtonContent() {
   switch (_saveButtonState) {
@@ -4167,15 +4262,7 @@ Widget _buildSaveButtonContent() {
           ),
         ],
       );
-    case SaveButtonState.noChanges:
-      return const Text(
-        'NO CHANGES',
-        style: TextStyle(
-          fontWeight: FontWeight.w600,
-          fontSize: 16,
-          color: Colors.white,
-        ),
-      );
+
     case SaveButtonState.normal:
     return _isUpdatingEmail
           ? Row(
