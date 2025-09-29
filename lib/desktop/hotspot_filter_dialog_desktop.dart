@@ -118,6 +118,187 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
 
+                    // Time Frame section
+Column(
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    const Padding(
+      padding: EdgeInsets.only(left: 8.0),
+      child: Text(
+        'Time Frame',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: Colors.grey,
+        ),
+      ),
+    ),
+    const SizedBox(height: 8),
+    
+    // Date Range Row
+    Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () async {
+                final date = await showDatePicker(
+                  context: context,
+                  initialDate: filterService.startDate ?? DateTime.now(),
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime.now(),
+                );
+                if (date != null) {
+                  filterService.setStartDate(date);
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: filterService.startDate != null 
+                        ? Colors.blue.shade300 
+                        : Colors.grey.shade300,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  color: filterService.startDate != null 
+                      ? Colors.blue.shade50 
+                      : Colors.white,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: filterService.startDate != null 
+                          ? Colors.blue.shade600 
+                          : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        filterService.startDate != null
+                            ? '${filterService.startDate!.day}/${filterService.startDate!.month}/${filterService.startDate!.year}'
+                            : 'Start Date',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: filterService.startDate != null 
+                              ? Colors.blue.shade700 
+                              : Colors.grey.shade600,
+                          fontWeight: filterService.startDate != null 
+                              ? FontWeight.w500 
+                              : FontWeight.normal,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Container(
+              width: 20,
+              height: 1,
+              color: Colors.grey.shade400,
+            ),
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: () async {
+                final date = await showDatePicker(
+                  context: context,
+                  initialDate: filterService.endDate ?? DateTime.now(),
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime.now(),
+                );
+                if (date != null) {
+                  filterService.setEndDate(date);
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: filterService.endDate != null 
+                        ? Colors.blue.shade300 
+                        : Colors.grey.shade300,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  color: filterService.endDate != null 
+                      ? Colors.blue.shade50 
+                      : Colors.white,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: filterService.endDate != null 
+                          ? Colors.blue.shade600 
+                          : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        filterService.endDate != null
+                            ? '${filterService.endDate!.day}/${filterService.endDate!.month}/${filterService.endDate!.year}'
+                            : 'End Date',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: filterService.endDate != null 
+                              ? Colors.blue.shade700 
+                              : Colors.grey.shade600,
+                          fontWeight: filterService.endDate != null 
+                              ? FontWeight.w500 
+                              : FontWeight.normal,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+    
+    // Clear dates option - bottom right
+    if (filterService.startDate != null || filterService.endDate != null) ...[
+      const SizedBox(height: 8),
+      Padding(
+        padding: const EdgeInsets.only(right: 8.0),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            GestureDetector(
+              onTap: () {
+                filterService.setStartDate(null);
+                filterService.setEndDate(null);
+              },
+              child: Text(
+                'Clear dates',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.blue.shade600,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  ],
+),
+
+const SizedBox(height: 16),
+
                     // Dynamic content based on toggle
                     if (isShowingCrimes) ...[
                       // CRIMES FILTERS

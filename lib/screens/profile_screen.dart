@@ -1,7 +1,4 @@
-// ignore_for_file: use_build_context_synchronously
-
 import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -69,8 +66,8 @@ Timer? _emailResendTimer;   // Keep this for the modal
 int _emailResendCountdown = 60;
 bool _canResendEmailOTP = false;
 bool _isUpdatingEmail = false;
-
 bool _isEmailFieldReadOnly = false;
+StateSetter? _currentModalSetState;
 
 
 
@@ -351,6 +348,22 @@ void _handleEmailMutualExclusivity() {
   }
 }
 
+
+
+bool _shouldUseDesktopLayout(BuildContext context) {
+  final isDesktopPlatform = Theme.of(context).platform == TargetPlatform.macOS ||
+      Theme.of(context).platform == TargetPlatform.linux ||
+      Theme.of(context).platform == TargetPlatform.windows ||
+      kIsWeb;
+  
+  final screenWidth = MediaQuery.of(context).size.width;
+  
+  // Only use desktop layout if it's a desktop platform AND has enough width
+  // Use a reasonable breakpoint (e.g., 1024px) to determine if sidebar layout should be used
+  return isDesktopPlatform && screenWidth >= 1024;
+}
+
+// Updated _showSnackBarWithCallback method
 void _showSnackBarWithCallback(
   BuildContext context, 
   String message, {
@@ -362,7 +375,7 @@ void _showSnackBarWithCallback(
   bool isWarning = false,
   bool isSuccess = false,
   VoidCallback? onDismissed,
-  required bool isSidebarVisible, // Add this parameter
+  required bool isSidebarVisible,
 }) {
   // Determine colors and icon based on type
   Color bgColor;
@@ -387,16 +400,13 @@ void _showSnackBarWithCallback(
     snackIcon = icon ?? Icons.info_rounded;
   }
 
-  // Check if it's desktop/web
-  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
+  // Use responsive helper instead of fixed platform check
+  final useDesktopLayout = _shouldUseDesktopLayout(context);
 
-  // Calculate margins to match profile container positioning
+  // Calculate margins
   EdgeInsets snackBarMargin;
-  if (isDesktopOrWeb) {
-    // Match the profile container positioning
+  if (useDesktopLayout) {
+    // Desktop layout with enough space - match the profile container positioning
     final profileLeft = isSidebarVisible ? 285.0 : 80.0;
     final profileWidth = 450.0;
     final screenWidth = MediaQuery.of(context).size.width;
@@ -409,7 +419,7 @@ void _showSnackBarWithCallback(
       top: 16,
     );
   } else {
-    // Mobile - keep original margins
+    // Mobile or narrow desktop - use centered margins
     snackBarMargin = const EdgeInsets.all(16);
   }
 
@@ -460,7 +470,7 @@ void _showSnackBarWithCallback(
     backgroundColor: bgColor,
     duration: duration ?? const Duration(seconds: 4),
     behavior: SnackBarBehavior.floating,
-    margin: snackBarMargin, // Use calculated margin
+    margin: snackBarMargin,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(12),
     ),
@@ -468,11 +478,11 @@ void _showSnackBarWithCallback(
   );
 
   ScaffoldMessenger.of(context).showSnackBar(snackBar).closed.then((_) {
-    // This fires whether dismissed manually or auto-dismissed
     onDismissed?.call();
   });
 }
 
+// Updated _showSnackBar method
 void _showSnackBar(
   BuildContext context, 
   String message, {
@@ -483,7 +493,7 @@ void _showSnackBar(
   bool isError = false,
   bool isWarning = false,
   bool isSuccess = false,
-  required bool isSidebarVisible, // Add this parameter
+  required bool isSidebarVisible,
 }) {
   // Determine colors and icon based on type
   Color bgColor;
@@ -508,16 +518,13 @@ void _showSnackBar(
     snackIcon = icon ?? Icons.info_rounded;
   }
 
-  // Check if it's desktop/web
-  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
+  // Use responsive helper instead of fixed platform check
+  final useDesktopLayout = _shouldUseDesktopLayout(context);
 
-  // Calculate margins to match profile container positioning
+  // Calculate margins
   EdgeInsets snackBarMargin;
-  if (isDesktopOrWeb) {
-    // Match the profile container positioning
+  if (useDesktopLayout) {
+    // Desktop layout - match the profile container positioning
     final profileLeft = isSidebarVisible ? 285.0 : 80.0;
     final profileWidth = 450.0;
     final screenWidth = MediaQuery.of(context).size.width;
@@ -530,7 +537,7 @@ void _showSnackBar(
       top: 16,
     );
   } else {
-    // Mobile - keep original margins
+    // Mobile or narrow desktop - use centered margins
     snackBarMargin = const EdgeInsets.all(16);
   }
 
@@ -582,7 +589,7 @@ void _showSnackBar(
       backgroundColor: bgColor,
       duration: duration ?? const Duration(seconds: 4),
       behavior: SnackBarBehavior.floating,
-      margin: snackBarMargin, // Use calculated margin
+      margin: snackBarMargin,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
       ),
@@ -592,41 +599,41 @@ void _showSnackBar(
 }
 
 // EMAIL VERIFICATION STARTS HERE
-
 void _showEmailVerificationModal(
   BuildContext context, 
   VoidCallback onSuccess, {
   bool profileChanged = false,
   required bool isSidebarVisible, 
-  Function(VoidCallback)? onStateChange,// Add this parameter
+  Function(VoidCallback)? onStateChange,
 }) {
   final List<TextEditingController> otpControllers = List.generate(6, (_) => TextEditingController());
   final List<FocusNode> otpFocusNodes = List.generate(6, (_) => FocusNode());
   
-  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
+  final useDesktopLayout = _shouldUseDesktopLayout(context);
 
   showDialog(
     context: context,
     barrierDismissible: false,
-    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    barrierColor: useDesktopLayout ? Colors.black.withOpacity(0.3) : null,
     builder: (context) {
       return StatefulBuilder(
         builder: (context, setModalState) {
+          if (_pendingEmailChange != null && _currentModalSetState == null) {
+            // Only restart timer if it's not already running with a modal callback
+            _startEmailResendTimer(modalSetState: setModalState);
+          }
           Widget dialogContent = AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             contentPadding: EdgeInsets.zero,
             backgroundColor: Colors.white,
             insetPadding: EdgeInsets.symmetric(
-              horizontal: isDesktopOrWeb ? 40 : 16,
+              horizontal: useDesktopLayout ? 40 : 16,
               vertical: 24,
             ),
             content: Container(
-              width: isDesktopOrWeb ? 450 : double.maxFinite, // Match profile view width
+              width: useDesktopLayout ? 450 : double.maxFinite, // Match profile view width
               constraints: BoxConstraints(
-                maxWidth: isDesktopOrWeb ? 450 : MediaQuery.of(context).size.width - 32, // Match profile view
+                maxWidth: useDesktopLayout ? 450 : MediaQuery.of(context).size.width - 32, // Match profile view
                 maxHeight: MediaQuery.of(context).size.height * 0.85,
               ),
               decoration: BoxDecoration(
@@ -648,7 +655,7 @@ void _showEmailVerificationModal(
                     // Header section with gradient background
                     Container(
                       width: double.infinity,
-                      padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 20),
+                      padding: EdgeInsets.all(useDesktopLayout ? 32 : 20),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
@@ -673,15 +680,15 @@ void _showEmailVerificationModal(
                             ),
                             child: Icon(
                               Icons.mark_email_read_rounded,
-                              size: isDesktopOrWeb ? 40 : 32,
+                              size: useDesktopLayout ? 40 : 32,
                               color: Colors.white,
                             ),
                           ),
-                          SizedBox(height: isDesktopOrWeb ? 16 : 12),
+                          SizedBox(height: useDesktopLayout ? 16 : 12),
                           Text(
                             'Verify New Email',
                             style: GoogleFonts.poppins(
-                              fontSize: isDesktopOrWeb ? 22 : 18,
+                              fontSize: useDesktopLayout ? 22 : 18,
                               fontWeight: FontWeight.bold,
                               color: Colors.white,
                             ),
@@ -692,14 +699,14 @@ void _showEmailVerificationModal(
                     
                     // Content section
                     Container(
-                      padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 20),
+                      padding: EdgeInsets.all(useDesktopLayout ? 32 : 20),
                       child: Column(
                         children: [
                           Text(
                             'Enter the 6-digit code sent to:',
                             style: GoogleFonts.poppins(
                               color: Colors.grey.shade600,
-                              fontSize: isDesktopOrWeb ? 15 : 14,
+                              fontSize: useDesktopLayout ? 15 : 14,
                             ),
                             textAlign: TextAlign.center,
                           ),
@@ -708,15 +715,15 @@ void _showEmailVerificationModal(
                             _pendingEmailChange ?? '',
                             style: GoogleFonts.poppins(
                               fontWeight: FontWeight.bold,
-                              fontSize: isDesktopOrWeb ? 16 : 14,
+                              fontSize: useDesktopLayout ? 16 : 14,
                               color: Colors.blue.shade600,
                             ),
                             textAlign: TextAlign.center,
                           ),
                           
-                          SizedBox(height: isDesktopOrWeb ? 20 : 16),
+                          SizedBox(height: useDesktopLayout ? 20 : 16),
                           Container(
-                            padding: EdgeInsets.all(isDesktopOrWeb ? 16 : 12),
+                            padding: EdgeInsets.all(useDesktopLayout ? 16 : 12),
                             decoration: BoxDecoration(
                               color: Colors.blue.shade50,
                               borderRadius: BorderRadius.circular(12),
@@ -734,7 +741,7 @@ void _showEmailVerificationModal(
                                   child: Text(
                                     'Check your spam folder if you don\'t see the email. The code expires in 10 minutes.',
                                     style: GoogleFonts.poppins(
-                                      fontSize: isDesktopOrWeb ? 13 : 12,
+                                      fontSize: useDesktopLayout ? 13 : 12,
                                       color: Colors.blue.shade700,
                                     ),
                                   ),
@@ -743,14 +750,14 @@ void _showEmailVerificationModal(
                             ),
                           ),
                           
-                          SizedBox(height: isDesktopOrWeb ? 32 : 24),
+                          SizedBox(height: useDesktopLayout ? 32 : 24),
                           
                           // OTP Input Fields
                           Wrap(
                             alignment: WrapAlignment.center,
-                            spacing: isDesktopOrWeb ? 8 : 8,
+                            spacing: useDesktopLayout ? 8 : 8,
                             children: List.generate(6, (index) {
-                              final fieldSize = isDesktopOrWeb ? 40.0 : 
+                              final fieldSize = useDesktopLayout ? 40.0 : 
                                                MediaQuery.of(context).size.width < 360 ? 35.0 : 40.0;
                               
                               return Container(
@@ -771,7 +778,7 @@ void _showEmailVerificationModal(
                                   keyboardType: TextInputType.number,
                                   maxLength: 1,
                                   style: GoogleFonts.poppins(
-                                    fontSize: isDesktopOrWeb ? 22 : 
+                                    fontSize: useDesktopLayout ? 22 : 
                                              MediaQuery.of(context).size.width < 360 ? 16 : 18,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.grey.shade800,
@@ -793,10 +800,10 @@ void _showEmailVerificationModal(
                             }),
                           ),
                           
-                          SizedBox(height: isDesktopOrWeb ? 32 : 24),
+                          SizedBox(height: useDesktopLayout ? 32 : 24),
                           
                           // Action buttons
-                          isDesktopOrWeb || MediaQuery.of(context).size.width > 400
+                          useDesktopLayout || MediaQuery.of(context).size.width > 400
                               ? Row(
                                   children: [
                                     // Skip button - UPDATED LOGIC
@@ -811,35 +818,35 @@ void _showEmailVerificationModal(
                                           for (var focusNode in otpFocusNodes) {
                                             focusNode.dispose();
                                           }
+                                          _currentModalSetState = null;
                                           _emailResendTimer?.cancel();
                                           _pendingEmailChange = null;
                                           
                                           Navigator.of(context).pop();
                                           
                                           // Only show success if other changes were made
-                               // Only show success if other changes were made
-                                    if (profileChanged) {
-                                      // Show saved state briefly
-                                   if (onStateChange != null) {
-                                      onStateChange(() {
-                                        _saveButtonState = SaveButtonState.saved;
-                                      });
-                                      
-                                      _buttonStateTimer?.cancel();
-                                      _buttonStateTimer = Timer(const Duration(seconds: 1), () {
-                                        _isEditingProfile = false;
-                                        onSuccess();
-                                        
-                                        onStateChange(() {
-                                          _saveButtonState = SaveButtonState.normal;
-                                        });
-                                      });
-                                    }
-                                    } else {
-                                      // No other changes were made, just exit edit mode
-                                      _isEditingProfile = false;
-                                      onSuccess();
-                                    }
+                                          if (profileChanged) {
+                                            // Show saved state briefly
+                                            if (onStateChange != null) {
+                                              onStateChange(() {
+                                                _saveButtonState = SaveButtonState.saved;
+                                              });
+                                              
+                                              _buttonStateTimer?.cancel();
+                                              _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+                                                _isEditingProfile = false;
+                                                onSuccess();
+                                                
+                                                onStateChange(() {
+                                                  _saveButtonState = SaveButtonState.normal;
+                                                });
+                                              });
+                                            }
+                                          } else {
+                                            // No other changes were made, just exit edit mode
+                                            _isEditingProfile = false;
+                                            onSuccess();
+                                          }
                                         },
                                         style: OutlinedButton.styleFrom(
                                           foregroundColor: Colors.grey.shade600,
@@ -950,35 +957,35 @@ void _showEmailVerificationModal(
                                           for (var focusNode in otpFocusNodes) {
                                             focusNode.dispose();
                                           }
+                                          _currentModalSetState = null;
                                           _emailResendTimer?.cancel();
                                           _pendingEmailChange = null;
                                           
                                           Navigator.of(context).pop();
                                           
                                           // Only show success if other changes were made
-                                        // Only show success if other changes were made
-                                        if (profileChanged) {
-                                          // Show saved state briefly
-                                      if (onStateChange != null) {
-                                        onStateChange(() {
-                                          _saveButtonState = SaveButtonState.saved;
-                                        });
-                                        
-                                        _buttonStateTimer?.cancel();
-                                        _buttonStateTimer = Timer(const Duration(seconds: 1), () {
-                                          _isEditingProfile = false;
-                                          onSuccess();
-                                          
-                                          onStateChange(() {
-                                            _saveButtonState = SaveButtonState.normal;
-                                          });
-                                        });
-                                      }
-                                        } else {
-                                          // No other changes were made, just exit edit mode
-                                          _isEditingProfile = false;
-                                          onSuccess();
-                                        }
+                                          if (profileChanged) {
+                                            // Show saved state briefly
+                                            if (onStateChange != null) {
+                                              onStateChange(() {
+                                                _saveButtonState = SaveButtonState.saved;
+                                              });
+                                              
+                                              _buttonStateTimer?.cancel();
+                                              _buttonStateTimer = Timer(const Duration(seconds: 1), () {
+                                                _isEditingProfile = false;
+                                                onSuccess();
+                                                
+                                                onStateChange(() {
+                                                  _saveButtonState = SaveButtonState.normal;
+                                                });
+                                              });
+                                            }
+                                          } else {
+                                            // No other changes were made, just exit edit mode
+                                            _isEditingProfile = false;
+                                            onSuccess();
+                                          }
                                         },
                                         style: OutlinedButton.styleFrom(
                                           foregroundColor: Colors.grey.shade600,
@@ -1000,7 +1007,7 @@ void _showEmailVerificationModal(
                                   ],
                                 ),
                           
-                          SizedBox(height: isDesktopOrWeb ? 20 : 16),
+                          SizedBox(height: useDesktopLayout ? 20 : 16),
                           
                           // Resend section
                           Row(
@@ -1029,7 +1036,7 @@ void _showEmailVerificationModal(
                                       style: GoogleFonts.poppins(
                                         color: _canResendEmailOTP ? Colors.blue.shade600 : Colors.grey.shade400,
                                         fontWeight: FontWeight.w500,
-                                        fontSize: isDesktopOrWeb ? 14 : 13,
+                                        fontSize: useDesktopLayout ? 14 : 13,
                                       ),
                                     ),
                                   ],
@@ -1046,7 +1053,7 @@ void _showEmailVerificationModal(
             ),
           );
 
-          if (isDesktopOrWeb) {
+          if (useDesktopLayout) {
             // Center the modal within the profile view area
             final profileLeft = isSidebarVisible ? 285.0 : 80.0;
             final profileWidth = 450.0;
@@ -1219,35 +1226,30 @@ Future<void> _verifyEmailChangeFromModal(
 }
 
 
-
-
 void _showEmailVerificationSuccessDialog(
   BuildContext context, 
   String verifiedEmail, 
   {VoidCallback? onOkPressed, required bool isSidebarVisible, String? customMessage}
 ) {
-  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
+  final useDesktopLayout = _shouldUseDesktopLayout(context);
 
   showDialog(
     context: context,
     barrierDismissible: false,
-    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    barrierColor: useDesktopLayout ? Colors.black.withOpacity(0.3) : null,
     builder: (context) {
       Widget dialogContent = AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         contentPadding: EdgeInsets.zero,
         backgroundColor: Colors.white,
         insetPadding: EdgeInsets.symmetric(
-          horizontal: isDesktopOrWeb ? 40 : 16,
+          horizontal: useDesktopLayout ? 40 : 16,
           vertical: 24,
         ),
         content: Container(
-          width: isDesktopOrWeb ? 450 : double.maxFinite, // Match profile view width
+          width: useDesktopLayout ? 450 : double.maxFinite, // Match profile view width
           constraints: BoxConstraints(
-            maxWidth: isDesktopOrWeb ? 450 : MediaQuery.of(context).size.width - 32, // Match profile view
+            maxWidth: useDesktopLayout ? 450 : MediaQuery.of(context).size.width - 32, // Match profile view
           ),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -1267,7 +1269,7 @@ void _showEmailVerificationSuccessDialog(
               // Header section with success gradient
               Container(
                 width: double.infinity,
-                padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 24),
+                padding: EdgeInsets.all(useDesktopLayout ? 32 : 24),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
@@ -1293,15 +1295,15 @@ void _showEmailVerificationSuccessDialog(
                       ),
                       child: Icon(
                         Icons.check_circle_rounded,
-                        size: isDesktopOrWeb ? 48 : 40,
+                        size: useDesktopLayout ? 48 : 40,
                         color: Colors.white,
                       ),
                     ),
-                    SizedBox(height: isDesktopOrWeb ? 16 : 12),
+                    SizedBox(height: useDesktopLayout ? 16 : 12),
                     Text(
                       'Email Verified Successfully!',
                       style: GoogleFonts.poppins(
-                        fontSize: isDesktopOrWeb ? 22 : 18,
+                        fontSize: useDesktopLayout ? 22 : 18,
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
                       ),
@@ -1313,7 +1315,7 @@ void _showEmailVerificationSuccessDialog(
               
               // Content section
               Container(
-                padding: EdgeInsets.all(isDesktopOrWeb ? 32 : 24),
+                padding: EdgeInsets.all(useDesktopLayout ? 32 : 24),
                 child: Column(
                   children: [
                     // Success message
@@ -1321,7 +1323,7 @@ void _showEmailVerificationSuccessDialog(
                       customMessage ?? 'Your email has been successfully updated to:',
                       style: GoogleFonts.poppins(
                         color: Colors.grey.shade600,
-                        fontSize: isDesktopOrWeb ? 15 : 14,
+                        fontSize: useDesktopLayout ? 15 : 14,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -1337,18 +1339,18 @@ void _showEmailVerificationSuccessDialog(
                         verifiedEmail,
                         style: GoogleFonts.poppins(
                           fontWeight: FontWeight.bold,
-                          fontSize: isDesktopOrWeb ? 16 : 14,
+                          fontSize: useDesktopLayout ? 16 : 14,
                           color: Colors.green.shade700,
                         ),
                         textAlign: TextAlign.center,
                       ),
                     ),
                     
-                    SizedBox(height: isDesktopOrWeb ? 24 : 20),
+                    SizedBox(height: useDesktopLayout ? 24 : 20),
                     
                     // Success details
                     Container(
-                      padding: EdgeInsets.all(isDesktopOrWeb ? 16 : 12),
+                      padding: EdgeInsets.all(useDesktopLayout ? 16 : 12),
                       decoration: BoxDecoration(
                         color: Colors.blue.shade50,
                         borderRadius: BorderRadius.circular(12),
@@ -1366,7 +1368,7 @@ void _showEmailVerificationSuccessDialog(
                             child: Text(
                               'Your profile has been updated with the new verified email address.',
                               style: GoogleFonts.poppins(
-                                fontSize: isDesktopOrWeb ? 13 : 12,
+                                fontSize: useDesktopLayout ? 13 : 12,
                                 color: Colors.blue.shade700,
                               ),
                             ),
@@ -1375,7 +1377,7 @@ void _showEmailVerificationSuccessDialog(
                       ),
                     ),
                     
-                    SizedBox(height: isDesktopOrWeb ? 32 : 24),
+                    SizedBox(height: useDesktopLayout ? 32 : 24),
                     
                     // OK button
                     SizedBox(
@@ -1424,7 +1426,7 @@ void _showEmailVerificationSuccessDialog(
         ),
       );
 
-      if (isDesktopOrWeb) {
+      if (useDesktopLayout) {
         // Center the modal within the profile view area
         final profileLeft = isSidebarVisible ? 285.0 : 80.0;
         final profileWidth = 450.0;
@@ -1450,7 +1452,6 @@ void _showEmailVerificationSuccessDialog(
   );
 }
 
-
 // 2. Add a method to refresh user profile from database
 Future<void> refreshUserProfile() async {
   try {
@@ -1473,27 +1474,24 @@ Future<void> refreshUserProfile() async {
   }
 }
 void _showErrorDialog(BuildContext context, String message, {required bool isSidebarVisible}) {
-  final isDesktopOrWeb = Theme.of(context).platform == TargetPlatform.macOS ||
-      Theme.of(context).platform == TargetPlatform.linux ||
-      Theme.of(context).platform == TargetPlatform.windows ||
-      kIsWeb;
+  final useDesktopLayout = _shouldUseDesktopLayout(context);
 
   showDialog(
     context: context,
-    barrierColor: isDesktopOrWeb ? Colors.black.withOpacity(0.3) : null,
+    barrierColor: useDesktopLayout ? Colors.black.withOpacity(0.3) : null,
     builder: (context) {
       Widget dialogContent = AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         contentPadding: EdgeInsets.zero,
         backgroundColor: Colors.white,
         insetPadding: EdgeInsets.symmetric(
-          horizontal: isDesktopOrWeb ? 40 : 16,
+          horizontal: useDesktopLayout ? 40 : 16,
           vertical: 24,
         ),
         content: Container(
-          width: isDesktopOrWeb ? 400 : double.maxFinite,
+          width: useDesktopLayout ? 400 : double.maxFinite,
           constraints: BoxConstraints(
-            maxWidth: isDesktopOrWeb ? 400 : MediaQuery.of(context).size.width - 32,
+            maxWidth: useDesktopLayout ? 400 : MediaQuery.of(context).size.width - 32,
           ),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -1513,7 +1511,7 @@ void _showErrorDialog(BuildContext context, String message, {required bool isSid
               // Header section
               Container(
                 width: double.infinity,
-                padding: EdgeInsets.all(isDesktopOrWeb ? 24 : 20),
+                padding: EdgeInsets.all(useDesktopLayout ? 24 : 20),
                 decoration: BoxDecoration(
                   color: Colors.red.shade50,
                   borderRadius: const BorderRadius.only(
@@ -1540,7 +1538,7 @@ void _showErrorDialog(BuildContext context, String message, {required bool isSid
                     Text(
                       'Error',
                       style: GoogleFonts.poppins(
-                        fontSize: isDesktopOrWeb ? 18 : 16,
+                        fontSize: useDesktopLayout ? 18 : 16,
                         fontWeight: FontWeight.w600,
                         color: Colors.red.shade700,
                       ),
@@ -1552,20 +1550,20 @@ void _showErrorDialog(BuildContext context, String message, {required bool isSid
               // Content section
               Container(
                 width: double.infinity,
-                padding: EdgeInsets.all(isDesktopOrWeb ? 24 : 20),
+                padding: EdgeInsets.all(useDesktopLayout ? 24 : 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       message,
                       style: GoogleFonts.poppins(
-                        fontSize: isDesktopOrWeb ? 14 : 14,
+                        fontSize: useDesktopLayout ? 14 : 14,
                         color: Colors.grey.shade700,
                         height: 1.4,
                       ),
                     ),
                     
-                    SizedBox(height: isDesktopOrWeb ? 24 : 20),
+                    SizedBox(height: useDesktopLayout ? 24 : 20),
                     
                     // OK Button
                     SizedBox(
@@ -1598,7 +1596,7 @@ void _showErrorDialog(BuildContext context, String message, {required bool isSid
         ),
       );
 
-      if (isDesktopOrWeb) {
+      if (useDesktopLayout) {
         // Center the modal within the profile view area (same as email verification modal)
         final profileLeft = isSidebarVisible ? 285.0 : 80.0;
         final profileWidth = 450.0;
@@ -1630,7 +1628,7 @@ void _showErrorDialog(BuildContext context, String message, {required bool isSid
 Future<void> _resendEmailChangeOTP(
   BuildContext context, 
   StateSetter setModalState, 
-  {required bool isSidebarVisible} // Add this parameter
+  {required bool isSidebarVisible}
 ) async {
   try {
     if (_isVerifyingCurrentEmail) {
@@ -1641,15 +1639,17 @@ Future<void> _resendEmailChangeOTP(
       await _authService.resendEmailChangeOTP(email: _pendingEmailChange!);
     }
     
-    setModalState(() {
-      _startEmailResendTimer();
-    });
+    // Start timer with modal setState callback
+    _startEmailResendTimer(modalSetState: setModalState);
+    
+    // Update modal immediately
+    setModalState(() {});
     
     _showSnackBar(
       context, 
       'Verification code sent again!',
       isSuccess: true,
-      isSidebarVisible: isSidebarVisible, // Add this parameter
+      isSidebarVisible: isSidebarVisible,
     );
     
   } catch (e) {
@@ -1657,27 +1657,32 @@ Future<void> _resendEmailChangeOTP(
       context, 
       'Failed to resend code. Please try again.',
       isError: true,
-      isSidebarVisible: isSidebarVisible, // Add this parameter
+      isSidebarVisible: isSidebarVisible,
     );
   }
 }
 
 
 
-void _startEmailResendTimer() {
+void _startEmailResendTimer({StateSetter? modalSetState}) {
   _canResendEmailOTP = false;
   _emailResendCountdown = 60;
+  _currentModalSetState = modalSetState; // Store the modal's setState
   
+  _emailResendTimer?.cancel(); // Cancel any existing timer
   _emailResendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
     if (_emailResendCountdown > 0) {
       _emailResendCountdown--;
+      // Update the modal UI every second
+      _currentModalSetState?.call(() {});
     } else {
       _canResendEmailOTP = true;
+      _currentModalSetState?.call(() {}); // Final update
+      _currentModalSetState = null; // Clear the reference
       timer.cancel();
     }
   });
 }
-
 
 
 

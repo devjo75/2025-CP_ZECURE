@@ -10,8 +10,8 @@ class HotspotFilterService with ChangeNotifier {
   // Status filters
   bool _showPending = true;
   bool _showRejected = true;
-  bool _showActive = true;    // New active filter
-  bool _showInactive = true;  // New inactive filter
+  bool _showActive = true;
+  bool _showInactive = true;
   
   // Category filters
   bool _showProperty = true;
@@ -45,6 +45,12 @@ class HotspotFilterService with ChangeNotifier {
   // Safe Spot Verification filters
   bool _showVerifiedSafeSpots = true;
   bool _showUnverifiedSafeSpots = true;
+
+  // Separate Time Frame filters
+  DateTime? _crimeStartDate;
+  DateTime? _crimeEndDate;
+  DateTime? _safeSpotStartDate;
+  DateTime? _safeSpotEndDate;
 
   // Track current user to reset filters when user changes
   String? _currentUserId;
@@ -85,6 +91,16 @@ class HotspotFilterService with ChangeNotifier {
   
   bool get showVerifiedSafeSpots => _showVerifiedSafeSpots;
   bool get showUnverifiedSafeSpots => _showUnverifiedSafeSpots;
+
+  // Separate Time Frame getters
+  DateTime? get crimeStartDate => _crimeStartDate;
+  DateTime? get crimeEndDate => _crimeEndDate;
+  DateTime? get safeSpotStartDate => _safeSpotStartDate;
+  DateTime? get safeSpotEndDate => _safeSpotEndDate;
+
+  // Backward compatibility getters (deprecated but kept for existing code)
+  DateTime? get startDate => _isShowingCrimes ? _crimeStartDate : _safeSpotStartDate;
+  DateTime? get endDate => _isShowingCrimes ? _crimeEndDate : _safeSpotEndDate;
 
   // Method to reset filters when user changes or logs out
   void resetFiltersForUser(String? newUserId) {
@@ -127,6 +143,12 @@ class HotspotFilterService with ChangeNotifier {
       
       _showVerifiedSafeSpots = true;
       _showUnverifiedSafeSpots = true;
+
+      // Reset separate time frame filters
+      _crimeStartDate = null;
+      _crimeEndDate = null;
+      _safeSpotStartDate = null;
+      _safeSpotEndDate = null;
       
       notifyListeners();
     }
@@ -136,6 +158,45 @@ class HotspotFilterService with ChangeNotifier {
   void setFilterMode(bool showCrimes) {
     _isShowingCrimes = showCrimes;
     notifyListeners();
+  }
+
+  // Crime Time Frame methods
+  void setCrimeStartDate(DateTime? date) {
+    _crimeStartDate = date;
+    notifyListeners();
+  }
+
+  void setCrimeEndDate(DateTime? date) {
+    _crimeEndDate = date;
+    notifyListeners();
+  }
+
+  // Safe Spot Time Frame methods
+  void setSafeSpotStartDate(DateTime? date) {
+    _safeSpotStartDate = date;
+    notifyListeners();
+  }
+
+  void setSafeSpotEndDate(DateTime? date) {
+    _safeSpotEndDate = date;
+    notifyListeners();
+  }
+
+  // Backward compatibility methods (deprecated but kept for existing code)
+  void setStartDate(DateTime? date) {
+    if (_isShowingCrimes) {
+      setCrimeStartDate(date);
+    } else {
+      setSafeSpotStartDate(date);
+    }
+  }
+
+  void setEndDate(DateTime? date) {
+    if (_isShowingCrimes) {
+      setCrimeEndDate(date);
+    } else {
+      setSafeSpotEndDate(date);
+    }
   }
 
   // Existing severity toggle methods
@@ -294,8 +355,24 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
-  // Existing hotspot filtering logic
+  // Updated hotspot filtering logic
   bool shouldShowHotspot(Map<String, dynamic> hotspot) {
+    // Time frame filtering - use crime dates
+    if (_crimeStartDate != null || _crimeEndDate != null) {
+      final hotspotDateStr = hotspot['created_at'] ?? hotspot['date'];
+      if (hotspotDateStr != null) {
+        final hotspotDate = DateTime.tryParse(hotspotDateStr);
+        if (hotspotDate != null) {
+          if (_crimeStartDate != null && hotspotDate.isBefore(_crimeStartDate!)) {
+            return false;
+          }
+          if (_crimeEndDate != null && hotspotDate.isAfter(_crimeEndDate!)) {
+            return false;
+          }
+        }
+      }
+    }
+
     final status = hotspot['status'] ?? 'approved';
     final crimeType = hotspot['crime_type'];
     final level = crimeType['level'];
@@ -309,14 +386,11 @@ class HotspotFilterService with ChangeNotifier {
     }
 
     // For approved hotspots, check active/inactive filters
-    // Only apply active/inactive filters for approved hotspots
     if (status == 'approved' || status == null) {
       final activeStatus = hotspot['active_status'] ?? 'active';
       final isActive = activeStatus == 'active';
       
-      // If hotspot is active but we're not showing active ones, hide it
       if (isActive && !_showActive) return false;
-      // If hotspot is inactive but we're not showing inactive ones, hide it
       if (!isActive && !_showInactive) return false;
     }
     
@@ -360,8 +434,24 @@ class HotspotFilterService with ChangeNotifier {
     }
   }
 
-  // New safe spot filtering logic
+  // Updated safe spot filtering logic
   bool shouldShowSafeSpot(Map<String, dynamic> safeSpot) {
+    // Time frame filtering - use safe spot dates
+    if (_safeSpotStartDate != null || _safeSpotEndDate != null) {
+      final safeSpotDateStr = safeSpot['created_at'] ?? safeSpot['date'];
+      if (safeSpotDateStr != null) {
+        final safeSpotDate = DateTime.tryParse(safeSpotDateStr);
+        if (safeSpotDate != null) {
+          if (_safeSpotStartDate != null && safeSpotDate.isBefore(_safeSpotStartDate!)) {
+            return false;
+          }
+          if (_safeSpotEndDate != null && safeSpotDate.isAfter(_safeSpotEndDate!)) {
+            return false;
+          }
+        }
+      }
+    }
+
     // Status filtering
     final status = safeSpot['status'] ?? 'pending';
     if (status == 'pending' && !_showSafeSpotsPending) return false;
@@ -412,6 +502,10 @@ class HotspotFilterService with ChangeNotifier {
     
     _showVerifiedSafeSpots = true;
     _showUnverifiedSafeSpots = true;
+
+    // Reset safe spot time frame filters
+    _safeSpotStartDate = null;
+    _safeSpotEndDate = null;
     
     notifyListeners();
   }

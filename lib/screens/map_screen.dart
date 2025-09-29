@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_final_fields, constant_identifier_names, avoid_print, unrelated_type_equality_checks, prefer_is_not_operator, use_build_context_synchronously, deprecated_member_use
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -113,6 +115,15 @@ class _MapScreenState extends State<MapScreen> {
     
   };
 
+    Map<String, dynamic> getRoutingStatistics() {
+    return {
+      'total_failed_attempts': _failedRoutingAttempts.length,
+      'recent_attempts': _failedRoutingAttempts.take(5).toList(),
+      'current_retry_count': _routingRetryCount,
+      'max_retries': MAX_RETRY_ATTEMPTS,
+    };
+  }
+
 
 bool _markersLoaded = false;
 int _maxMarkersToShow = 50; // Progressive loading
@@ -193,7 +204,26 @@ late ProfileScreen _profileScreen;
   Map<String, dynamic>? _selectedHotspot;
   RealtimeChannel? _hotspotsChannel;
 
-  
+  //HEATMAP
+List<HeatmapCluster> _heatmapClusters = [];
+List<Map<String, dynamic>> _heatmapCrimes = [];
+bool _showHeatmap = true; // Toggle for users
+bool _isCalculatingHeatmap = false;
+Timer? _heatmapUpdateTimer;
+
+// Constants
+// ignore: unused_field
+static const double HEATMAP_RADIUS = 500.0;
+static const double CLUSTER_MERGE_DISTANCE = 300.0;
+static const int MIN_CRIMES_FOR_HOTSPOT = 3;
+static const int HEATMAP_TIME_WINDOW_DAYS = 30;
+
+static const Map<String, double> SEVERITY_WEIGHTS = {
+  'critical': 1.0,
+  'high': 0.75,
+  'medium': 0.5,
+  'low': 0.25,
+};
 
   // NOTIFICATIONS
 List<Map<String, dynamic>> _notifications = [];
@@ -210,6 +240,13 @@ bool _showSafeSpots = true;
 Set<String> _processedUpdateIds = {}; // Track processed updates
 Timer? _updateDebounceTimer;
 Map<String, Timer> _updateTimers = {}; // Per-ID debounce timers
+
+//SAFE ROUTES RETRY
+List<Map<String, dynamic>> _failedRoutingAttempts = [];
+bool _isShowingRouteModal = false;
+List<LatLng>? _lastRegularRoute;
+int _routingRetryCount = 0;
+static const int MAX_RETRY_ATTEMPTS = 3;
 
 
 // SAVE POINTS
@@ -463,7 +500,6 @@ void _getCurrentLocationAsync() async {
 }
 
 bool _deferredInitialized = false; // Prevent multiple deferred loads
-
 // OPTIMIZED: Deferred initialization with staggered loading - PREVENT DUPLICATES
 void _deferredInitialization() async {
   if (!mounted || _deferredInitialized) return;
@@ -535,15 +571,31 @@ void _deferredInitialization() async {
     print('Loading save points...');
     await _loadSavePoints();
     if (!mounted) return;
-}
-
-
+  }
   
   // Mark markers as loaded
   setState(() {
     _markersLoaded = true;
   });
   
+  // ============================================
+  // HEATMAP INITIALIZATION - NEW!
+  // ============================================
+  await Future.delayed(Duration(milliseconds: 300));
+  if (!mounted) return;
+  
+  // Load heatmap data (separate from RLS-filtered crimes)
+  print('Loading heatmap data...');
+  await _loadHeatmapData();
+  if (!mounted) return;
+  
+  // Calculate initial heatmap after heatmap data is loaded
+  print('Initializing crime heatmap...');
+  await _calculateHeatmap();
+  if (!mounted) return;
+  
+  print('✅ Heatmap ready: ${_heatmapClusters.length} hotspots identified');
+  // ============================================
   
   // Setup periodic tasks with initial delays (REDUCED FREQUENCY)
   _setupPeriodicTasksOptimized();
@@ -621,7 +673,7 @@ void dispose() {
   _updateDebounceTimer?.cancel();
   _processedUpdateIds.clear();
   _savePoints.clear();
-
+_heatmapUpdateTimer?.cancel();  
   _timeUpdateTimer?.cancel();
   
   super.dispose();
@@ -1289,6 +1341,8 @@ void _showWelcomeModal() async {
 }
 
 
+
+
 void _startProximityMonitoring() {
   _proximityCheckTimer?.cancel();
   _proximityCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
@@ -1721,7 +1775,7 @@ Future<void> _loadUserProfile() async {
   }
 }
 
-
+//REAL TIME HOTSPOT 
 void _setupRealtimeSubscription() {
   _hotspotsChannel?.unsubscribe();
   _hotspotsChannelConnected = false;
@@ -1801,6 +1855,12 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
           }
         });
       });
+      
+      // ============================================
+      // UPDATE HEATMAP - NEW!
+      // ============================================
+      _updateHeatmapOnInsert(response);
+      // ============================================
     }
   } catch (e) {
     print('Error in _handleHotspotInsert: $e');
@@ -1817,6 +1877,9 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
           }
         });
       });
+      
+      // Still update heatmap even with fallback data
+      _updateHeatmapOnInsert(payload.newRecord);
     }
   }
 }
@@ -1903,6 +1966,24 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
 
       // Show appropriate status change messages
       _handleStatusChangeMessages(previousHotspot, response);
+      
+      // ============================================
+      // UPDATE HEATMAP - NEW!
+      // ============================================
+      // Check if status changed to/from approved+active (affects heatmap visibility)
+      final wasVisible = previousHotspot['status'] == 'approved' && 
+                        previousHotspot['active_status'] == 'active';
+      final isNowVisible = response['status'] == 'approved' && 
+                          response['active_status'] == 'active';
+      
+      // Only recalculate if visibility changed or crime type/location changed
+      if (wasVisible != isNowVisible || 
+          previousHotspot['type_id'] != response['type_id'] ||
+          previousHotspot['location'] != response['location']) {
+        print('🔄 Heatmap affected by update - recalculating...');
+        _updateHeatmapOnUpdate(response);
+      }
+      // ============================================
     }
   } catch (e) {
     print('Error in _handleHotspotUpdate: $e');
@@ -1927,6 +2008,9 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
           print('Fallback update applied');
         }
       });
+      
+      // Update heatmap with fallback data
+      _updateHeatmapOnUpdate(payload.newRecord);
     }
     
     // Force a full reload as a last resort
@@ -1934,9 +2018,69 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
     if (mounted) {
       print('Forcing full reload due to update error');
       await _loadHotspots();
+      // Heatmap will be recalculated after full reload
+      _updateHeatmapOnUpdate({});
     }
   }
 }
+
+// HOTSPOT DELETE
+void _handleHotspotDelete(PostgresChangePayload payload) {
+  if (!mounted) return;
+  
+  final deletedHotspotId = payload.oldRecord['id'];
+  
+  setState(() {
+    // Remove the hotspot from local state
+    _hotspots.removeWhere((hotspot) => hotspot['id'] == deletedHotspotId);
+    
+    // Remove any notifications related to this hotspot
+    _notifications.removeWhere((notification) => 
+      notification['hotspot_id'] == deletedHotspotId);
+    
+    // Update unread notifications count
+    _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
+  });
+  
+  // ============================================
+  // UPDATE HEATMAP - NEW!
+  // ============================================
+  print('🔄 Crime deleted - recalculating heatmap...');
+  _updateHeatmapOnDelete();
+  // ============================================
+}
+
+// ============================================
+// HEATMAP UPDATE HELPER METHODS
+// ============================================
+
+void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) {
+  print('🔥 Crime inserted - scheduling heatmap recalculation...');
+  _scheduleHeatmapUpdate();
+}
+
+void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) {
+  print('🔄 Crime updated - scheduling heatmap recalculation...');
+  _scheduleHeatmapUpdate();
+}
+
+void _updateHeatmapOnDelete() {
+  print('🗑️ Crime deleted - scheduling heatmap recalculation...');
+  _scheduleHeatmapUpdate();
+}
+
+// Centralized debounced update scheduler
+void _scheduleHeatmapUpdate() {
+  _heatmapUpdateTimer?.cancel();
+  _heatmapUpdateTimer = Timer(const Duration(milliseconds: 1500), () {
+    if (mounted) {
+      print('♻️ Recalculating heatmap...');
+      _calculateHeatmap();
+    }
+  });
+}
+
+
 
 void _handleStatusChangeMessages(Map<String, dynamic> previousHotspot, Map<String, dynamic> newHotspot) {
   final previousStatus = previousHotspot['status'] ?? 'approved';
@@ -2810,6 +2954,188 @@ void _showHotspotFilterDialog() {
                               ],
                             ),
                             const SizedBox(height: 16),
+
+                            // Time Frame section
+Column(
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    const Padding(
+      padding: EdgeInsets.only(left: 8.0),
+      child: Text(
+        'Time Frame',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: Colors.grey,
+        ),
+      ),
+    ),
+    const SizedBox(height: 8),
+    
+    // Date Range Row
+    Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () async {
+                final date = await showDatePicker(
+                  context: context,
+                  initialDate: filterService.startDate ?? DateTime.now(),
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime.now(),
+                );
+                if (date != null) {
+                  filterService.setStartDate(date);
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: filterService.startDate != null 
+                        ? Colors.blue.shade300 
+                        : Colors.grey.shade300,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  color: filterService.startDate != null 
+                      ? Colors.blue.shade50 
+                      : Colors.white,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: filterService.startDate != null 
+                          ? Colors.blue.shade600 
+                          : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        filterService.startDate != null
+                            ? '${filterService.startDate!.day}/${filterService.startDate!.month}/${filterService.startDate!.year}'
+                            : 'Start Date',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: filterService.startDate != null 
+                              ? Colors.blue.shade700 
+                              : Colors.grey.shade600,
+                          fontWeight: filterService.startDate != null 
+                              ? FontWeight.w500 
+                              : FontWeight.normal,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Container(
+              width: 20,
+              height: 1,
+              color: Colors.grey.shade400,
+            ),
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: () async {
+                final date = await showDatePicker(
+                  context: context,
+                  initialDate: filterService.endDate ?? DateTime.now(),
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime.now(),
+                );
+                if (date != null) {
+                  filterService.setEndDate(date);
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: filterService.endDate != null 
+                        ? Colors.blue.shade300 
+                        : Colors.grey.shade300,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  color: filterService.endDate != null 
+                      ? Colors.blue.shade50 
+                      : Colors.white,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: filterService.endDate != null 
+                          ? Colors.blue.shade600 
+                          : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        filterService.endDate != null
+                            ? '${filterService.endDate!.day}/${filterService.endDate!.month}/${filterService.endDate!.year}'
+                            : 'End Date',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: filterService.endDate != null 
+                              ? Colors.blue.shade700 
+                              : Colors.grey.shade600,
+                          fontWeight: filterService.endDate != null 
+                              ? FontWeight.w500 
+                              : FontWeight.normal,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+    
+    // Clear dates option - bottom right
+    if (filterService.startDate != null || filterService.endDate != null) ...[
+      const SizedBox(height: 8),
+      Padding(
+        padding: const EdgeInsets.only(right: 8.0),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            GestureDetector(
+              onTap: () {
+                filterService.setStartDate(null);
+                filterService.setEndDate(null);
+              },
+              child: Text(
+                'Clear dates',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.blue.shade600,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  ],
+),
+
+const SizedBox(height: 16),
+                            
                             
                             // Dynamic content based on toggle
                             if (isShowingCrimes) ...[
@@ -3741,16 +4067,15 @@ Future<List<LatLng>> _getRouteFromAPIFallback(LatLng start, LatLng end) async {
 Future<void> _getSafeRoute(LatLng destination) async {
   if (_currentPosition == null) return;
   
-  // NOW set the destination when user explicitly chooses to navigate
   setState(() {
     _destination = destination;
     _currentTab = MainTab.map;
     _selectedHotspot = null;
-    _routeWasCalculatedAsSafe = true; // SET THE FLAG
+    _routeWasCalculatedAsSafe = true;
     _tempPinnedLocation = null;
+    _routingRetryCount = 0; // Reset retry count for new destination
   });
   
-  // Rest of your existing _getSafeRoute code remains the same...
   _mapController.fitCamera(
     CameraFit.bounds(
       bounds: LatLngBounds(_currentPosition!, destination),
@@ -3758,58 +4083,402 @@ Future<void> _getSafeRoute(LatLng destination) async {
     ),
   );
   
-  _showSnackBar('Calculating safest route...');
+  await _attemptSafeRouting(destination, showProgressMessage: true);
+}
 
+// Core safe routing logic with retry handling
+Future<void> _attemptSafeRouting(LatLng destination, {bool showProgressMessage = false}) async {
+  if (showProgressMessage) {
+    _showSnackBar('Calculating safest route...');
+  }
+
+  try {
+    final regularRoute = await _getRouteFromAPI(_currentPosition!, destination);
+    _lastRegularRoute = regularRoute; // Store for fallback
+    
+    final unsafeSegments = _findUnsafeSegments(regularRoute);
+    
+    if (unsafeSegments.isEmpty) {
+      // Route is already safe
+      await _applySuccessfulRoute(regularRoute, destination, 'Route is already safe!');
+      return;
+    }
+    
+    // Try to find a safer route
+    final safeRoute = await _findBestSafeRoute(_currentPosition!, destination, unsafeSegments);
+    final newUnsafeSegments = _findUnsafeSegments(safeRoute);
+    
+    if (newUnsafeSegments.isEmpty) {
+      await _applySuccessfulRoute(safeRoute, destination, 'Safe route found!');
+    } else if (newUnsafeSegments.length < unsafeSegments.length * 0.7) { // 30% improvement
+      await _applySuccessfulRoute(safeRoute, destination, 'Safer route found!');
+    } else {
+      // Could not find significantly safer route
+      await _handleFailedSafeRouting(destination, unsafeSegments.length, newUnsafeSegments.length);
+    }
+    
+  } catch (e) {
+    print('Safe route error: $e');
+    await _handleFailedSafeRouting(destination, -1, -1, error: e.toString());
+  }
+}
+
+// Handle successful route application
+Future<void> _applySuccessfulRoute(List<LatLng> route, LatLng destination, String message) async {
+  final distance = _calculateRouteDistance(route);
+  final duration = _estimateRouteDuration(distance);
+  
+  setState(() {
+    _routePoints = route;
+    _distance = distance / 1000;
+    _duration = _formatDuration(duration);
+    _hasActiveRoute = true;
+    _routingRetryCount = 0; // Reset on success
+  });
+  
+  _showSnackBar(message);
+  _startRouteUpdates();
+}
+
+// Handle failed safe routing with modal confirmation
+Future<void> _handleFailedSafeRouting(LatLng destination, int originalUnsafe, int newUnsafe, {String? error}) async {
+  if (_isShowingRouteModal) return; // Prevent multiple modals
+  
+  // Record this failed attempt
+  _recordFailedRoutingAttempt(destination, originalUnsafe, newUnsafe, error);
+  
+  // Show confirmation modal
+  _isShowingRouteModal = true;
+  
+  final shouldProceed = await _showRouteConfirmationModal(
+    destination: destination,
+    originalUnsafeCount: originalUnsafe,
+    newUnsafeCount: newUnsafe,
+    error: error,
+  );
+  
+  _isShowingRouteModal = false;
+  
+  if (shouldProceed == true) {
+    // User chose to proceed with regular route
+    if (_lastRegularRoute != null) {
+      await _applySuccessfulRoute(_lastRegularRoute!, destination, 'Using regular route as requested');
+    } else {
+      // Fallback: get regular route
+      try {
+        final regularRoute = await _getRouteFromAPI(_currentPosition!, destination);
+        await _applySuccessfulRoute(regularRoute, destination, 'Using regular route as requested');
+      } catch (e) {
+        _showSnackBar('Unable to get any route. Please try again.');
+      }
+    }
+  } else if (shouldProceed == false) {
+    // User chose to retry or cancel
+    setState(() {
+      _hasActiveRoute = false;
+      _routePoints = [];
+      _destination = null;
+    });
+  }
+  // If shouldProceed is null, user dismissed modal - keep current state
+}
+
+// Record failed routing attempt for analysis
+void _recordFailedRoutingAttempt(LatLng destination, int originalUnsafe, int newUnsafe, String? error) {
+  final attempt = {
+    'destination': destination,
+    'timestamp': DateTime.now(),
+    'original_unsafe_segments': originalUnsafe,
+    'new_unsafe_segments': newUnsafe,
+    'error': error,
+    'retry_count': _routingRetryCount,
+  };
+  
+  _failedRoutingAttempts.add(attempt);
+  
+  // Keep only last 10 attempts to prevent memory issues
+  if (_failedRoutingAttempts.length > 10) {
+    _failedRoutingAttempts.removeAt(0);
+  }
+  
+  print('Recorded failed routing attempt: $attempt');
+}
+
+// Show route confirmation modal
+Future<bool?> _showRouteConfirmationModal({
+  required LatLng destination,
+  required int originalUnsafeCount,
+  required int newUnsafeCount,
+  String? error,
+}) async {
+  return showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext context) {
+      return AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber, color: Colors.orange, size: 24),
+            SizedBox(width: 8),
+            Text('Safe Route Challenge'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (error != null) ...[
+              Text('Error occurred: $error'),
+              const SizedBox(height: 12),
+            ],
+            if (originalUnsafeCount > 0 && newUnsafeCount > 0) ...[
+              Text('Found route with ${newUnsafeCount} unsafe areas (vs ${originalUnsafeCount} in direct route).'),
+              const SizedBox(height: 8),
+            ],
+            const Text(
+              'We couldn\'t find a significantly safer route to your destination. This might be due to:',
+              style: TextStyle(fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 8),
+            const Text('• Limited alternative roads in the area'),
+            const Text('• Multiple hotspots along possible routes'),
+            const Text('• API routing limitations'),
+            const SizedBox(height: 12),
+            if (_routingRetryCount < MAX_RETRY_ATTEMPTS) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Try Again Options:',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text('• Extended detour search (may be much longer)'),
+                    Text('• Alternative routing strategies'),
+                    Text('• Attempt ${_routingRetryCount + 1} of $MAX_RETRY_ATTEMPTS'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            const Text(
+              'What would you like to do?',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+        actions: [
+          if (_routingRetryCount < MAX_RETRY_ATTEMPTS)
+            TextButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop(null); // Close modal
+                _retryWithExtendedSearch(destination);
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Harder'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.blue,
+              ),
+            ),
+          TextButton.icon(
+            onPressed: () => Navigator.of(context).pop(false), // Cancel
+            icon: const Icon(Icons.cancel),
+            label: const Text('Cancel'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.grey,
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.of(context).pop(true), // Proceed
+            icon: const Icon(Icons.warning),
+            label: const Text('Use Regular Route'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+// Retry with extended search parameters
+Future<void> _retryWithExtendedSearch(LatLng destination) async {
+  _routingRetryCount++;
+  _showSnackBar('Attempting extended route search... (${_routingRetryCount}/$MAX_RETRY_ATTEMPTS)');
+  
   try {
     final regularRoute = await _getRouteFromAPI(_currentPosition!, destination);
     final unsafeSegments = _findUnsafeSegments(regularRoute);
     
-    List<LatLng> finalRoute;
-    
     if (unsafeSegments.isEmpty) {
-      finalRoute = regularRoute;
-      _showSnackBar('Route is already safe!');
+      await _applySuccessfulRoute(regularRoute, destination, 'Route is now safe!');
+      return;
+    }
+    
+    // Use more aggressive safe routing with extended parameters
+    final safeRoute = await _findBestSafeRouteExtended(_currentPosition!, destination, unsafeSegments);
+    final newUnsafeSegments = _findUnsafeSegments(safeRoute);
+    
+    if (newUnsafeSegments.length < unsafeSegments.length * 0.8) { // Accept 20% improvement
+      await _applySuccessfulRoute(safeRoute, destination, 'Extended search found safer route!');
     } else {
-      finalRoute = await _findBestSafeRoute(_currentPosition!, destination, unsafeSegments);
+      // Still couldn't find better route
+      await _handleFailedSafeRouting(destination, unsafeSegments.length, newUnsafeSegments.length);
+    }
+    
+  } catch (e) {
+    print('Extended search error: $e');
+    await _handleFailedSafeRouting(destination, -1, -1, error: 'Extended search failed: $e');
+  }
+}
+
+// Extended safe route finding with more aggressive parameters
+Future<List<LatLng>> _findBestSafeRouteExtended(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  print('Extended safe route search: ${unsafeSegments.length} unsafe segments');
+  
+  // More aggressive strategies with wider detours
+  final strategies = [
+    () => _tryVeryWideDetourStrategy(start, destination, unsafeSegments),
+    () => _tryMultipleWaypointStrategy(start, destination, unsafeSegments),
+    () => _tryAlternativeCorridorStrategy(start, destination, unsafeSegments),
+    () => _tryPerpendicularDetourStrategy(start, destination, unsafeSegments),
+    () => _tryRadialAvoidanceStrategy(start, destination, unsafeSegments),
+  ];
+  
+  for (final strategy in strategies) {
+    try {
+      final route = await strategy();
+      if (route.isNotEmpty) {
+        final newUnsafeSegments = _findUnsafeSegments(route);
+        print('Extended strategy result: ${newUnsafeSegments.length} remaining unsafe segments');
+        
+        // More lenient acceptance criteria for extended search
+        if (newUnsafeSegments.length < unsafeSegments.length * 0.8) {
+          return route;
+        }
+      }
+    } catch (e) {
+      print('Extended strategy failed: $e');
+      continue;
+    }
+  }
+  
+  // If still no luck, return the best route we found
+  return await _getRouteFromAPI(start, destination);
+}
+
+// Very wide detour strategy for extended search
+Future<List<LatLng>> _tryVeryWideDetourStrategy(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  final mainBearing = _calculateBearing(start, destination);
+  final routeDistance = _calculateDistance(start, destination);
+  final waypoints = <LatLng>[];
+  
+  // Much wider detour - up to 3km offset
+  final detourDistances = [1500.0, 2000.0, 3000.0];
+  final numWaypoints = routeDistance > 10000 ? 4 : 3;
+  
+  for (final detourDistance in detourDistances) {
+    waypoints.clear();
+    
+    for (int i = 1; i <= numWaypoints; i++) {
+      final fraction = i / (numWaypoints + 1.0);
+      final baseLat = start.latitude + (destination.latitude - start.latitude) * fraction;
+      final baseLng = start.longitude + (destination.longitude - start.longitude) * fraction;
+      final basePoint = LatLng(baseLat, baseLng);
       
-      final newUnsafeSegments = _findUnsafeSegments(finalRoute);
-      if (newUnsafeSegments.isEmpty) {
-        _showSnackBar('Safe route found!');
-      } else if (newUnsafeSegments.length < unsafeSegments.length) {
-        _showSnackBar('Safer route found!');
-      } else {
-        _showSnackBar('Could not find safer route - using regular route.');
-        finalRoute = regularRoute;
+      final perpBearing = (mainBearing + 90) % 360;
+      final waypoint1 = _calculateDestination(basePoint, perpBearing, detourDistance);
+      final waypoint2 = _calculateDestination(basePoint, (perpBearing + 180) % 360, detourDistance);
+      
+      final safety1 = _evaluateWaypointSafety(waypoint1);
+      final safety2 = _evaluateWaypointSafety(waypoint2);
+      
+      if (safety1 > safety2 && safety1 > 200) {
+        waypoints.add(waypoint1);
+      } else if (safety2 > 200) {
+        waypoints.add(waypoint2);
       }
     }
     
-    final distance = _calculateRouteDistance(finalRoute);
-    final duration = _estimateRouteDuration(distance);
-    
-    setState(() {
-      _routePoints = finalRoute;
-      _distance = distance / 1000;
-      _duration = _formatDuration(duration);
-      _hasActiveRoute = true;
-    });
-    
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds(_currentPosition!, destination),
-        padding: const EdgeInsets.all(50.0),
-      ),
-    );
-    
-    _startRouteUpdates();
-  } catch (e) {
-    print('Safe route error: $e');
-    _showSnackBar('Error calculating safe route: ${e.toString()}');
-    try {
-      _getDirections(destination);
-    } catch (fallbackError) {
-      _showSnackBar('Unable to get any route. Please try again.');
+    if (waypoints.length >= 2) {
+      try {
+        return await _getRouteWithWaypoints(start, destination, waypoints);
+      } catch (e) {
+        continue; // Try next detour distance
+      }
     }
   }
+  
+  throw Exception('Very wide detour strategy failed');
+}
+
+// Multiple waypoint strategy using more waypoints
+Future<List<LatLng>> _tryMultipleWaypointStrategy(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  final hotspotClusters = _clusterHotspots(unsafeSegments);
+  final waypoints = <LatLng>[];
+  
+  // Try to create waypoints for each cluster
+  for (final cluster in hotspotClusters.take(4)) { // Up to 4 clusters
+    final clusterCenter = _getClusterCenter(cluster);
+    final avoidanceDistance = 800.0; // Increased avoidance distance
+    
+    // Try multiple directions for each cluster
+    final directions = [30, 60, 120, 150, 210, 240, 300, 330];
+    
+    for (final direction in directions) {
+      final candidate = _calculateDestination(clusterCenter, direction.toDouble(), avoidanceDistance);
+      final safety = _evaluateWaypointSafety(candidate);
+      
+      if (safety > 300) { // Higher safety requirement
+        waypoints.add(candidate);
+        break;
+      }
+    }
+  }
+  
+  if (waypoints.length >= 2) {
+    return await _getRouteWithWaypoints(start, destination, waypoints.take(3).toList());
+  }
+  
+  throw Exception('Multiple waypoint strategy failed');
+}
+
+// Alternative corridor strategy - try completely different route corridors
+Future<List<LatLng>> _tryAlternativeCorridorStrategy(LatLng start, LatLng destination, List<LatLng> unsafeSegments) async {
+  // Create waypoints that force the route through different corridors
+  final mainBearing = _calculateBearing(start, destination);
+  final waypoints = <LatLng>[];
+  
+  // Try different corridor angles
+  final corridorOffsets = [45.0, -45.0, 90.0, -90.0, 135.0, -135.0];
+  
+  for (final offset in corridorOffsets) {
+    final corridorBearing = (mainBearing + offset) % 360;
+    final corridorDistance = _calculateDistance(start, destination) * 0.7; // 70% of direct distance
+    
+    final corridorWaypoint = _calculateDestination(start, corridorBearing, corridorDistance);
+    final safety = _evaluateWaypointSafety(corridorWaypoint);
+    
+    if (safety > 400) { // Even higher safety requirement for corridor
+      waypoints.add(corridorWaypoint);
+      break;
+    }
+  }
+  
+  if (waypoints.isNotEmpty) {
+    return await _getRouteWithWaypoints(start, destination, waypoints);
+  }
+  
+  throw Exception('Alternative corridor strategy failed');
 }
 
 // Enhanced safe routing with multiple strategies to find alternative routes
@@ -6874,26 +7543,7 @@ String _getTimeAgo(DateTime dateTime, {bool compact = false}) {
   }
 }
 
-// HOTSPOT DELETE
-void _handleHotspotDelete(PostgresChangePayload payload) {
-  if (!mounted) return;
-  
-  final deletedHotspotId = payload.oldRecord['id'];
-  
-  setState(() {
-    // Remove the hotspot from local state
-    _hotspots.removeWhere((hotspot) => hotspot['id'] == deletedHotspotId);
-    
-    // Remove any notifications related to this hotspot
-    _notifications.removeWhere((notification) => 
-      notification['hotspot_id'] == deletedHotspotId);
-    
-    // Update unread notifications count
-    _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
-  });
-  
 
-}
 
 
 //SHARE LOCATION
@@ -9581,6 +10231,7 @@ onLongPress: (tapPosition, latLng) {
       ),
   ],
 ),
+_buildHeatmapLayer(),
               
 // FIXED: Hotspots layer with stable markers and labels
 Consumer<HotspotFilterService>(
@@ -9723,7 +10374,7 @@ Consumer<HotspotFilterService>(
 ),
 
 
-
+_buildHeatmapMarkers(),
          
 // Safe Spots Marker Layer 
 if (_showSafeSpots)
@@ -13627,6 +14278,423 @@ Widget _buildProfileScreen() {
   );
 }
 
+//HEAT MAP 
+
+// NEW: Load ALL approved crimes for heatmap (bypasses individual crime RLS)
+Future<void> _loadHeatmapData() async {
+  try {
+    final cutoffDate = DateTime.now().subtract(
+      const Duration(days: HEATMAP_TIME_WINDOW_DAYS)
+    );
+    
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .select('''
+          id,
+          type_id,
+          location,
+          time,
+          status,
+          active_status,
+          created_by,
+          reported_by,
+          created_at,
+          crime_type: type_id (id, name, level, category, description)
+        ''')
+        .eq('status', 'approved')
+        .gte('time', cutoffDate.toIso8601String());
+    
+    setState(() {
+      _heatmapCrimes = (response as List).map((crime) {
+        final crimeType = crime['crime_type'] ?? {};
+        return <String, dynamic>{  // ← ADD THIS TYPE ANNOTATION
+          ...crime,
+          'crime_type': {
+            'id': crimeType['id'] ?? crime['type_id'],
+            'name': crimeType['name'] ?? 'Unknown',
+            'level': crimeType['level'] ?? 'unknown',
+            'category': crimeType['category'] ?? 'General',
+            'description': crimeType['description'],
+          }
+        };
+      }).toList();
+    });
+    
+    print('Loaded ${_heatmapCrimes.length} crimes for heatmap (including inactive)');
+  } catch (e) {
+    print('Error loading heatmap data: $e');
+  }
+}
+
+// ============================================
+// HEATMAP CALCULATION
+// ============================================
+Future<void> _calculateHeatmap() async {
+  if (_isCalculatingHeatmap) return;
+  
+  setState(() => _isCalculatingHeatmap = true);
+  
+  try {
+    print('Calculating heatmap from ${_heatmapCrimes.length} approved crimes...');
+    
+    if (_heatmapCrimes.length < MIN_CRIMES_FOR_HOTSPOT) {
+      setState(() {
+        _heatmapClusters = [];
+        _isCalculatingHeatmap = false;
+      });
+      return;
+    }
+    
+    final clusters = _buildCrimeClusters(_heatmapCrimes);
+    final validClusters = clusters.where((c) => c.crimeCount >= MIN_CRIMES_FOR_HOTSPOT).toList();
+    
+    if (validClusters.isNotEmpty) {
+      final maxIntensity = validClusters
+          .map((c) => c.intensity)
+          .reduce((a, b) => a > b ? a : b);
+      
+      final normalized = validClusters.map((cluster) => HeatmapCluster(
+        center: cluster.center,
+        radius: cluster.radius,
+        intensity: cluster.intensity / maxIntensity,
+        crimeCount: cluster.crimeCount,
+        crimeBreakdown: cluster.crimeBreakdown,
+        topCrimeTypes: cluster.topCrimeTypes,
+        crimes: cluster.crimes,
+      )).toList();
+      
+      setState(() {
+        _heatmapClusters = normalized;
+      });
+    } else {
+      setState(() {
+        _heatmapClusters = [];
+      });
+    }
+    
+    print('✅ Heatmap calculated: ${validClusters.length} hotspots identified');
+    
+  } catch (e) {
+    print('❌ Heatmap calculation error: $e');
+  } finally {
+    setState(() => _isCalculatingHeatmap = false);
+  }
+}
+
+// Build clusters from crimes using spatial proximity
+List<HeatmapCluster> _buildCrimeClusters(List<Map<String, dynamic>> crimes) {
+  if (crimes.isEmpty) return [];
+  
+  // Convert crimes to points with metadata
+  final crimePoints = crimes.map((crime) {
+    final coords = crime['location']['coordinates'];
+    return {
+      'point': LatLng(coords[1].toDouble(), coords[0].toDouble()),
+      'crime': crime,
+    };
+  }).toList();
+  
+  // Simple clustering: group crimes within CLUSTER_MERGE_DISTANCE
+  final clusters = <List<Map<String, dynamic>>>[];
+  final processed = Set<int>();
+  
+  for (int i = 0; i < crimePoints.length; i++) {
+    if (processed.contains(i)) continue;
+    
+    final cluster = <Map<String, dynamic>>[crimePoints[i]];
+    processed.add(i);
+    
+    // Find all nearby crimes
+    for (int j = i + 1; j < crimePoints.length; j++) {
+      if (processed.contains(j)) continue;
+      
+      final distance = _calculateDistance(
+        crimePoints[i]['point'] as LatLng,
+        crimePoints[j]['point'] as LatLng,
+      );
+      
+      if (distance <= CLUSTER_MERGE_DISTANCE) {
+        cluster.add(crimePoints[j]);
+        processed.add(j);
+      }
+    }
+    
+    clusters.add(cluster);
+  }
+  
+  // Convert clusters to HeatmapCluster objects
+  return clusters.map((clusterPoints) {
+    final clusterCrimes = clusterPoints.map((p) => p['crime'] as Map<String, dynamic>).toList();
+    return _createClusterFromCrimes(clusterCrimes);
+  }).toList();
+}
+
+// Create a single cluster from a group of crimes
+HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
+  double totalLat = 0;
+  double totalLng = 0;
+  double totalWeight = 0;
+  final breakdown = <String, int>{
+    'critical': 0,
+    'high': 0,
+    'medium': 0,
+    'low': 0,
+  };
+  final crimeTypeCount = <String, int>{};
+  double intensity = 0.0;
+  
+  // Calculate weighted center and statistics
+  for (final crime in crimes) {
+    final coords = crime['location']['coordinates'];
+    final point = LatLng(coords[1].toDouble(), coords[0].toDouble());
+    final level = crime['crime_type']['level'] ?? 'low';
+    final weight = SEVERITY_WEIGHTS[level] ?? 0.25;
+    
+    totalLat += point.latitude * weight;
+    totalLng += point.longitude * weight;
+    totalWeight += weight;
+    intensity += weight;
+    
+    breakdown[level] = (breakdown[level] ?? 0) + 1;
+    
+    final crimeType = crime['crime_type']['name'] ?? 'Unknown';
+    crimeTypeCount[crimeType] = (crimeTypeCount[crimeType] ?? 0) + 1;
+  }
+  
+  // Weighted center
+  final center = LatLng(
+    totalLat / totalWeight,
+    totalLng / totalWeight,
+  );
+  
+  // Calculate radius that covers all crimes
+  double maxDistance = 0;
+  for (final crime in crimes) {
+    final coords = crime['location']['coordinates'];
+    final point = LatLng(coords[1].toDouble(), coords[0].toDouble());
+    final distance = _calculateDistance(center, point);
+    if (distance > maxDistance) maxDistance = distance;
+  }
+  
+  // Add padding to radius
+  final radius = maxDistance + 50; // 50m padding
+  
+  // Get top 3 crime types
+  final sortedTypes = crimeTypeCount.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  final topTypes = sortedTypes.take(3).map((e) => e.key).toList();
+  
+  return HeatmapCluster(
+    center: center,
+    radius: radius,
+    intensity: intensity,
+    crimeCount: crimes.length,
+    crimeBreakdown: breakdown,
+    topCrimeTypes: topTypes,
+    crimes: crimes,
+  );
+}
+
+// Calculate distance between two points (Haversine formula)
+
+// ============================================
+// HEATMAP VISUALIZATION
+// ============================================
+
+// Color gradient for heatmap
+Color _getHeatmapColor(double intensity) {
+  if (intensity < 0.25) {
+    return Color.lerp(Colors.blue, Colors.yellow, intensity * 4)!;
+  } else if (intensity < 0.5) {
+    return Color.lerp(Colors.yellow, Colors.orange, (intensity - 0.25) * 4)!;
+  } else if (intensity < 0.75) {
+    return Color.lerp(Colors.orange, Colors.deepOrange, (intensity - 0.5) * 4)!;
+  } else {
+    return Color.lerp(Colors.deepOrange, Colors.red, (intensity - 0.75) * 4)!;
+  }
+}
+
+// Build heatmap layer for map
+Widget _buildHeatmapLayer() {
+  if (!_showHeatmap || _heatmapClusters.isEmpty) {
+    return const SizedBox.shrink();
+  }
+  
+  return CircleLayer(
+    circles: _heatmapClusters.map((cluster) {
+      final color = _getHeatmapColor(cluster.intensity);
+      
+      return CircleMarker(
+        point: cluster.center,
+        radius: cluster.radius, // Use actual cluster radius
+        color: color.withOpacity(0.25),
+        borderColor: color.withOpacity(0.5),
+        borderStrokeWidth: 2,
+        useRadiusInMeter: true, // Important: use meters not pixels
+      );
+    }).toList(),
+  );
+}
+
+// Build heatmap markers (for interaction)
+Widget _buildHeatmapMarkers() {
+  if (!_showHeatmap || _heatmapClusters.isEmpty || _currentZoom < 13.0) {
+    return const SizedBox.shrink();
+  }
+  
+  return MarkerLayer(
+    markers: _heatmapClusters.map((cluster) {
+      final color = _getHeatmapColor(cluster.intensity);
+      
+      return Marker(
+        point: cluster.center,
+        width: 60,
+        height: 60,
+        child: GestureDetector(
+          onTap: () => _showHeatmapDetails(cluster),
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color.withOpacity(0.1),
+              border: Border.all(color: color, width: 2),
+            ),
+            child: Center(
+              child: Text(
+                '${cluster.crimeCount}',
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }).toList(),
+  );
+}
+
+// Show heatmap details dialog (read-only)
+void _showHeatmapDetails(HeatmapCluster cluster) {
+  showDialog(
+    context: context,
+    builder: (context) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 340,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.whatshot, color: _getHeatmapColor(cluster.intensity)),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Crime Hotspot',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '${cluster.crimeCount} crimes in the last $HEATMAP_TIME_WINDOW_DAYS days',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text(
+              'Within ${cluster.radius.round()}m radius',
+              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            const Text('Crime Severity Breakdown:', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            ...cluster.crimeBreakdown.entries.where((e) => e.value > 0).map((entry) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('${entry.key.toUpperCase()}:'),
+                    Text(
+                      '${entry.value}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            if (cluster.topCrimeTypes.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text('Most Common Crimes:', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              ...cluster.topCrimeTypes.asMap().entries.map((entry) {
+                final crimeType = entry.value;
+                
+                // Find the most recent crime of this type
+                final crimesOfType = cluster.crimes.where(
+                  (c) => (c['crime_type']['name'] ?? 'Unknown') == crimeType
+                ).toList();
+                
+                if (crimesOfType.isEmpty) return const SizedBox.shrink();
+                
+                // Get the most recent one
+                crimesOfType.sort((a, b) {
+                  final timeA = DateTime.parse(a['time']);
+                  final timeB = DateTime.parse(b['time']);
+                  return timeB.compareTo(timeA);
+                });
+                
+                final mostRecentTime = DateTime.parse(crimesOfType.first['time']);
+                final timeAgo = _getTimeAgo(mostRecentTime, compact: true);
+                
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '• $crimeType',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      Text(
+                        timeAgo,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+
+
 
 
 Future<List<LocationSuggestion>> _searchLocations(String query) async {
@@ -13858,6 +14926,27 @@ void _showSafeSpotDetails(Map<String, dynamic> safeSpot) {
 
   _shouldNonAdminOfficerSeeHotspot(PostgrestMap response) {}
 }
+
+class HeatmapCluster {
+  final LatLng center; // Weighted center of the cluster
+  final double radius; // Actual radius covering all crimes
+  final double intensity; // 0.0 to 1.0
+  final int crimeCount;
+  final Map<String, int> crimeBreakdown;
+  final List<String> topCrimeTypes;
+  final List<Map<String, dynamic>> crimes; // Individual crimes in this cluster
+  
+  HeatmapCluster({
+    required this.center,
+    required this.radius,
+    required this.intensity,
+    required this.crimeCount,
+    required this.crimeBreakdown,
+    required this.topCrimeTypes,
+    required this.crimes,
+  });
+}
+
 
 extension on MapController {
 }
