@@ -165,66 +165,62 @@ Widget build(BuildContext context) {
   final screenWidth = MediaQuery.of(context).size.width;
 
   return Scaffold(
-    // Prevent resizing when the keyboard appears
     resizeToAvoidBottomInset: false,
-    body: Stack(
-      children: [
-        // Background image
-        Positioned.fill(
-          child: Image.asset(
-            'assets/images/LIGHT.jpg',
-            fit: BoxFit.cover, // Cover the entire screen
-            alignment: Alignment.center, // Keep image centered
-          ),
+    body: Container(
+      decoration: BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/LIGHT.jpg'),
+          fit: BoxFit.cover,
+          alignment: Alignment.center,
         ),
-        // Blue tinted overlay
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.blue.shade50.withOpacity(0.2),
-          ),
-          child: SafeArea(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isWeb ? 40.0 : 16.0,
-                  vertical: 12.0,
-                ),
-                child: Column(
-                  children: [
-                    // Hero Section
-                    FadeTransition(
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50.withOpacity(0.2),
+        ),
+        child: SafeArea(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: isWeb ? 40.0 : 16.0,
+                vertical: 12.0,
+              ),
+              child: Column(
+                children: [
+                  // Hero Section
+                  FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: SlideTransition(
+                      position: _slideAnimation,
+                      child: _buildHeroSection(isWeb, screenWidth),
+                    ),
+                  ),
+                  SizedBox(height: isWeb ? 60 : 40),
+                  // Enhanced Features Section with Carousel
+                  ScaleTransition(
+                    scale: _featureScaleAnimation,
+                    child: FadeTransition(
                       opacity: _fadeAnimation,
-                      child: SlideTransition(
-                        position: _slideAnimation,
-                        child: _buildHeroSection(isWeb, screenWidth),
-                      ),
+                      child: _buildEnhancedFeaturesSection(isWeb, screenWidth),
                     ),
-                    SizedBox(height: isWeb ? 60 : 40),
-                    // Enhanced Features Section with Carousel
-                    ScaleTransition(
-                      scale: _featureScaleAnimation,
-                      child: FadeTransition(
-                        opacity: _fadeAnimation,
-                        child: _buildEnhancedFeaturesSection(isWeb, screenWidth),
-                      ),
-                    ),
-                    SizedBox(height: isWeb ? 60 : 40),
-                    // Call to Action
-                    FadeTransition(
-                      opacity: _fadeAnimation,
-                      child: _buildCallToAction(isWeb, screenWidth),
-                    ),
-                    const SizedBox(height: 20),
-                  ],
-                ),
+                  ),
+                  SizedBox(height: isWeb ? 60 : 40),
+                  // Call to Action
+                  FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: _buildCallToAction(isWeb, screenWidth),
+                  ),
+                  const SizedBox(height: 20),
+                ],
               ),
             ),
           ),
         ),
-      ],
+      ),
     ),
   );
 }
+
   Widget _buildHeroSection(bool isWeb, double screenWidth) {
     final double maxWidth = isWeb ? 700 : screenWidth * 0.95;
     

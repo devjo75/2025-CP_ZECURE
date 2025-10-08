@@ -2012,7 +2012,7 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
         ),
 
         // Admin dashboard button
-        if (isAdmin) ...[
+        if (hasAdminPermissions) ...[
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -2033,7 +2033,7 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
                   ),
                 ),
                 child: Text(
-                  'Admin Dashboard',
+                  'System Dashboard',
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 16,
@@ -3213,7 +3213,7 @@ Widget buildDesktopProfileView(
                                     ),
                                   ),
                                 ),
-                                if (isAdmin) ...[
+                                if (hasAdminPermissions) ...[
                                   const SizedBox(height: 12),
                                   SizedBox(
                                     width: double.infinity,
@@ -3232,7 +3232,7 @@ Widget buildDesktopProfileView(
                                         ),
                                       ),
                                       child: Text(
-                                        'Admin Dashboard',
+                                        'System Dashboard',
                                         style: TextStyle(
                                           fontWeight: FontWeight.w600,
                                           fontSize: 16,

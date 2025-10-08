@@ -257,26 +257,57 @@ bool _showSavePointSelector = false; // New state for savepoint button
 
 Timer? _timeUpdateTimer;
 
+
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
   if (!_markersLoaded) return []; // Don't show markers until loaded
 
-  if (_currentZoom < 10.0) {
-    // Very zoomed out: show only critical hotspots
+  if (_currentZoom < 8.0) {
+    // Very far zoom: show dots for all active approved crimes
     return _hotspots
-        .where((h) =>
-            h['crime_type']?['level'] == 'critical' &&
-            h['status'] == 'approved' &&
-            h['active_status'] == 'active')
-        .take(20)
+        .where((h) {
+          final status = h['status'] ?? 'approved';
+          final activeStatus = h['active_status'] ?? 'active';
+          return status == 'approved' && activeStatus == 'active';
+        })
+        .take(100)
+        .toList();
+  } else if (_currentZoom < 10.0) {
+    // Very zoomed out: show all active approved crimes + own pending
+    return _hotspots
+        .where((h) {
+          final status = h['status'] ?? 'approved';
+          final activeStatus = h['active_status'] ?? 'active';
+          final currentUserId = _userProfile?['id'];
+          final createdBy = h['created_by'];
+          final reportedBy = h['reported_by'];
+          final isOwnHotspot = currentUserId != null &&
+              (currentUserId == createdBy || currentUserId == reportedBy);
+          
+          // Show approved + active, or own pending hotspots
+          return (status == 'approved' && activeStatus == 'active') ||
+                 (status == 'pending' && isOwnHotspot);
+        })
+        .take(50)
         .toList();
   } else if (_currentZoom < 13.0) {
-    // Medium zoom: show critical and high priority hotspots
+    // Medium zoom: show all active + pending hotspots
     return _hotspots
-        .where((h) =>
-            ['critical', 'high'].contains(h['crime_type']?['level']) &&
-            h['status'] == 'approved' &&
-            h['active_status'] == 'active')
+        .where((h) {
+          final status = h['status'] ?? 'approved';
+          final activeStatus = h['active_status'] ?? 'active';
+          final currentUserId = _userProfile?['id'];
+          final createdBy = h['created_by'];
+          final reportedBy = h['reported_by'];
+          final isOwnHotspot = currentUserId != null &&
+              (currentUserId == createdBy || currentUserId == reportedBy);
+          
+          // Show approved + active, pending (all or own), or admin sees all
+          return _hasAdminPermissions ||
+                 (status == 'approved' && activeStatus == 'active') ||
+                 status == 'pending' ||
+                 (isOwnHotspot && currentUserId != null);
+        })
         .take(_maxMarkersToShow)
         .toList();
   } else {
@@ -293,12 +324,12 @@ List<Map<String, dynamic>> get _visibleHotspots {
 
           // Include all hotspots (approved, pending, rejected, active, inactive)
           // Admins see all, users see approved/active, own hotspots, or pending
-return _hasAdminPermissions ||
-    status == 'approved' ||
-    status == 'pending' ||
-    (status == 'rejected' && isOwnHotspot) ||
-    activeStatus == 'active' ||
-    (activeStatus == 'inactive' && isOwnHotspot);
+          return _hasAdminPermissions ||
+              status == 'approved' ||
+              status == 'pending' ||
+              (status == 'rejected' && isOwnHotspot) ||
+              activeStatus == 'active' ||
+              (activeStatus == 'inactive' && isOwnHotspot);
         })
         .take(_maxMarkersToShow * 2)
         .toList();
@@ -309,25 +340,30 @@ return _hasAdminPermissions ||
 List<Map<String, dynamic>> get _visibleSafeSpots {
   if (!_markersLoaded || !_showSafeSpots) return [];
   
-  if (_currentZoom < 12.0) {
+  if (_currentZoom < 8.0) {
+    // Very far zoom: show dots for verified safe spots only
+    return _safeSpots.where((s) => s['verified'] == true).take(50).toList();
+  } else if (_currentZoom < 12.0) {
     // Only show verified safe spots when zoomed out
     return _safeSpots.where((s) => s['verified'] == true).take(30).toList();
   } else {
     // Show all relevant safe spots when zoomed in
-return _safeSpots.where((safeSpot) {
-  final status = safeSpot['status'] ?? 'pending';
-  final currentUserId = _userProfile?['id'];
-  final createdBy = safeSpot['created_by'];
-  final isOwnSpot = currentUserId != null && currentUserId == createdBy;
-  
-  if (status == 'approved') return true;
-  if (status == 'pending' && currentUserId != null) return true;
-  if (isOwnSpot && status == 'rejected') return true;
-  if (_hasAdminPermissions) return true;
-  return false;
-}).toList();
+    return _safeSpots.where((safeSpot) {
+      final status = safeSpot['status'] ?? 'pending';
+      final currentUserId = _userProfile?['id'];
+      final createdBy = safeSpot['created_by'];
+      final isOwnSpot = currentUserId != null && currentUserId == createdBy;
+      
+      if (status == 'approved') return true;
+      if (status == 'pending' && currentUserId != null) return true;
+      if (isOwnSpot && status == 'rejected') return true;
+      if (_hasAdminPermissions) return true;
+      return false;
+    }).toList();
   }
 }
+
+
 
 List<Map<String, dynamic>> _getFilteredNotifications() {
   switch (_notificationFilter) {
@@ -578,18 +614,16 @@ void _deferredInitialization() async {
     _markersLoaded = true;
   });
   
-  // ============================================
-  // HEATMAP INITIALIZATION - NEW!
-  // ============================================
+ // HEATMAP INITIALIZATION
   await Future.delayed(Duration(milliseconds: 300));
   if (!mounted) return;
   
-  // Load heatmap data (separate from RLS-filtered crimes)
+  // Load heatmap data (already filtered by 30-day window)
   print('Loading heatmap data...');
   await _loadHeatmapData();
   if (!mounted) return;
   
-  // Calculate initial heatmap after heatmap data is loaded
+  // Calculate initial heatmap
   print('Initializing crime heatmap...');
   await _calculateHeatmap();
   if (!mounted) return;
@@ -633,11 +667,14 @@ void _setupPeriodicTasksOptimized() {
       Timer.periodic(const Duration(minutes: 5), (_) => _checkRealtimeConnection()); // Increased from 2 minutes
     }
   });
+
+    Timer.periodic(const Duration(minutes: 5), (timer) {
+    if (mounted) {
+      _cleanupExpiredHeatmapCrimes();
+    }
+  });
 }
 
-// NEW: Setup periodic tasks with optimized intervals
-
-// NEW: Deferred location services startup
 void _startLiveLocationDeferred() {
   // Start with longer intervals, then optimize based on usage
   Timer(Duration(milliseconds: 500), () {
@@ -2034,6 +2071,9 @@ void _handleHotspotDelete(PostgresChangePayload payload) {
     // Remove the hotspot from local state
     _hotspots.removeWhere((hotspot) => hotspot['id'] == deletedHotspotId);
     
+    // Remove from heatmap dataset too
+    _heatmapCrimes.removeWhere((crime) => crime['id'] == deletedHotspotId);
+    
     // Remove any notifications related to this hotspot
     _notifications.removeWhere((notification) => 
       notification['hotspot_id'] == deletedHotspotId);
@@ -2042,32 +2082,145 @@ void _handleHotspotDelete(PostgresChangePayload payload) {
     _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
   });
   
-  // ============================================
-  // UPDATE HEATMAP - NEW!
-  // ============================================
   print('🔄 Crime deleted - recalculating heatmap...');
   _updateHeatmapOnDelete();
-  // ============================================
 }
 
 // ============================================
 // HEATMAP UPDATE HELPER METHODS
 // ============================================
 
-void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) {
-  print('🔥 Crime inserted - scheduling heatmap recalculation...');
-  _scheduleHeatmapUpdate();
+
+
+void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
+  // Only add if approved AND within time window
+  if (newCrime['status'] != 'approved') {
+    print('❌ Crime not approved - not adding to heatmap');
+    return;
+  }
+  
+  // Fetch complete crime data to ensure we have crime_type
+  try {
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .select('''
+          id,
+          type_id,
+          location,
+          time,
+          status,
+          active_status,
+          created_by,
+          reported_by,
+          created_at,
+          crime_type: type_id (id, name, level, category, description)
+        ''')
+        .eq('id', newCrime['id'])
+        .single();
+    
+    final formattedCrime = _formatCrimeForHeatmap(response);
+    
+    // Validate time window
+    if (!_isWithinHeatmapTimeWindow(formattedCrime)) {
+      print('❌ Crime outside ${HEATMAP_TIME_WINDOW_DAYS}-day window - not adding to heatmap');
+      return;
+    }
+    
+    setState(() {
+      _heatmapCrimes.add(formattedCrime);
+    });
+    
+    print('✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']})');
+    _scheduleHeatmapUpdate();
+    
+  } catch (e) {
+    print('Error fetching complete crime data for heatmap insert: $e');
+  }
 }
 
-void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) {
-  print('🔄 Crime updated - scheduling heatmap recalculation...');
-  _scheduleHeatmapUpdate();
+// ============================================
+// MODIFIED: Update handler with time validation
+// ============================================
+
+void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
+  if (updatedCrime.isEmpty) {
+    // Fallback: just recalculate
+    _scheduleHeatmapUpdate();
+    return;
+  }
+  
+  final crimeId = updatedCrime['id'];
+  final index = _heatmapCrimes.indexWhere((c) => c['id'] == crimeId);
+  
+  // Fetch complete crime data
+  try {
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .select('''
+          id,
+          type_id,
+          location,
+          time,
+          status,
+          active_status,
+          created_by,
+          reported_by,
+          created_at,
+          crime_type: type_id (id, name, level, category, description)
+        ''')
+        .eq('id', crimeId)
+        .single();
+    
+    final formattedCrime = _formatCrimeForHeatmap(response);
+    
+    // Check if crime should be in heatmap
+    final shouldBeInHeatmap = formattedCrime['status'] == 'approved' && 
+                              _isWithinHeatmapTimeWindow(formattedCrime);
+    
+    if (shouldBeInHeatmap) {
+      if (index != -1) {
+        // Update existing
+        setState(() {
+          _heatmapCrimes[index] = formattedCrime;
+        });
+        print('✅ Updated crime in heatmap (${formattedCrime['crime_type']['name']})');
+      } else {
+        // Add if newly qualified
+        setState(() {
+          _heatmapCrimes.add(formattedCrime);
+        });
+        print('✅ Added crime to heatmap after update (${formattedCrime['crime_type']['name']})');
+      }
+    } else {
+      // Remove if no longer qualified
+      if (index != -1) {
+        setState(() {
+          _heatmapCrimes.removeAt(index);
+        });
+        print('❌ Removed crime from heatmap (expired or not approved)');
+      }
+    }
+    
+    _scheduleHeatmapUpdate();
+    
+  } catch (e) {
+    print('Error fetching complete crime data for heatmap update: $e');
+    // Fallback: just recalculate
+    _scheduleHeatmapUpdate();
+  }
 }
+
 
 void _updateHeatmapOnDelete() {
+  // Note: We don't have the deleted crime ID here in the current implementation
+  // The heatmap will recalculate and naturally exclude the deleted crime
+  // since it won't be in _heatmapCrimes after the next fetch
+  
   print('🗑️ Crime deleted - scheduling heatmap recalculation...');
   _scheduleHeatmapUpdate();
 }
+
+
 
 // Centralized debounced update scheduler
 void _scheduleHeatmapUpdate() {
@@ -2079,6 +2232,7 @@ void _scheduleHeatmapUpdate() {
     }
   });
 }
+
 
 
 
@@ -4203,7 +4357,6 @@ void _recordFailedRoutingAttempt(LatLng destination, int originalUnsafe, int new
   
   print('Recorded failed routing attempt: $attempt');
 }
-
 // Show route confirmation modal
 Future<bool?> _showRouteConfirmationModal({
   required LatLng destination,
@@ -4215,64 +4368,84 @@ Future<bool?> _showRouteConfirmationModal({
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) {
+      final double screenWidth = MediaQuery.of(context).size.width;
       return AlertDialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
         title: const Row(
           children: [
             Icon(Icons.warning_amber, color: Colors.orange, size: 24),
             SizedBox(width: 8),
-            Text('Safe Route Challenge'),
+            Flexible(
+              child: Text(
+                'Safe Route Challenge',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (error != null) ...[
-              Text('Error occurred: $error'),
-              const SizedBox(height: 12),
-            ],
-            if (originalUnsafeCount > 0 && newUnsafeCount > 0) ...[
-              Text('Found route with ${newUnsafeCount} unsafe areas (vs ${originalUnsafeCount} in direct route).'),
-              const SizedBox(height: 8),
-            ],
-            const Text(
-              'We couldn\'t find a significantly safer route to your destination. This might be due to:',
-              style: TextStyle(fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 8),
-            const Text('• Limited alternative roads in the area'),
-            const Text('• Multiple hotspots along possible routes'),
-            const Text('• API routing limitations'),
-            const SizedBox(height: 12),
-            if (_routingRetryCount < MAX_RETRY_ATTEMPTS) ...[
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.blue.shade200),
+        content: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: screenWidth * 0.9, // take up ~90% of screen
+            minWidth: screenWidth * 0.75, // ensure it’s wider than default
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (error != null) ...[
+                  Text('Error occurred: $error'),
+                  const SizedBox(height: 12),
+                ],
+                if (originalUnsafeCount > 0 && newUnsafeCount > 0) ...[
+                  Text(
+                    'Found route with $newUnsafeCount unsafe areas '
+                    '(vs $originalUnsafeCount in direct route).',
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                const Text(
+                  'We couldn\'t find a significantly safer route to your destination. '
+                  'This might be due to:',
+                  style: TextStyle(fontWeight: FontWeight.w500),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Try Again Options:',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                const SizedBox(height: 8),
+                const Text('• Limited alternative roads in the area'),
+                const Text('• Multiple hotspots along possible routes'),
+                const Text('• API routing limitations'),
+                const SizedBox(height: 12),
+                if (_routingRetryCount < MAX_RETRY_ATTEMPTS) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade200),
                     ),
-                    const SizedBox(height: 4),
-                    Text('• Extended detour search (may be much longer)'),
-                    Text('• Alternative routing strategies'),
-                    Text('• Attempt ${_routingRetryCount + 1} of $MAX_RETRY_ATTEMPTS'),
-                  ],
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Try Again Options:',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text('• Extended detour search (may be much longer)'),
+                        const Text('• Alternative routing strategies'),
+                        Text('• Attempt ${_routingRetryCount + 1} of $MAX_RETRY_ATTEMPTS'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                const Text(
+                  'What would you like to do?',
+                  style: TextStyle(fontWeight: FontWeight.w600),
                 ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            const Text(
-              'What would you like to do?',
-              style: TextStyle(fontWeight: FontWeight.w600),
+              ],
             ),
-          ],
+          ),
         ),
         actions: [
           if (_routingRetryCount < MAX_RETRY_ATTEMPTS)
@@ -4309,6 +4482,7 @@ Future<bool?> _showRouteConfirmationModal({
     },
   );
 }
+
 
 // Retry with extended search parameters
 Future<void> _retryWithExtendedSearch(LatLng destination) async {
@@ -6241,22 +6415,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
     final descriptionController = TextEditingController(text: hotspot['description'] ?? '');
     
     // FIXED: Consistent timezone handling for edit form
-    DateTime hotspotDateTime;
-    try {
-      final timeString = hotspot['time'];
-      final parsedTime = DateTime.parse(timeString);
-      
-      if (timeString.endsWith('Z')) {
-        // It's UTC, convert to local
-        hotspotDateTime = parsedTime.toLocal();
-      } else {
-        // It's already local time, don't convert
-        hotspotDateTime = parsedTime;
-      }
-    } catch (e) {
-      print('Error parsing hotspot time for edit form: $e');
-      hotspotDateTime = DateTime.now();
-    }
+    final hotspotDateTime = parseStoredDateTime(hotspot['time']);
 
     final dateController = TextEditingController(
       text: DateFormat('yyyy-MM-dd').format(hotspotDateTime),
@@ -7069,11 +7228,11 @@ Future<bool> _reportHotspot(
         'description': description.trim().isNotEmpty ? description.trim() : null,
         'location': 'POINT(${position.longitude} ${position.latitude})',
         // Fix: Ensure the dateTime is treated as local time
-        'time': dateTime.toLocal().toIso8601String(),
+        'time': dateTime.toUtc().toIso8601String(),
         'status': 'pending',
         'created_by': currentUserId,
         'reported_by': currentUserId,
-        'created_at': DateTime.now().toLocal().toIso8601String(),
+        'created_at': DateTime.now().toUtc().toIso8601String(),
       };
 
       final response = await Supabase.instance.client
@@ -7222,7 +7381,7 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
     'description': description.trim().isNotEmpty ? description.trim() : null,
     'location': 'POINT(${position.longitude} ${position.latitude})',
     // Fix: Ensure the dateTime is treated as local time
-    'time': dateTime.toLocal().toIso8601String(),
+    'time': dateTime.toUtc().toIso8601String(),
     'created_by': currentUserId,
     'status': 'approved',
     'active_status': activeStatus,
@@ -7512,15 +7671,39 @@ Future<bool> _showNearbyHotspotConfirmation(LatLng position, List<dynamic> nearb
   }
 }
 
-// Helper method to format time ago
+DateTime parseStoredDateTime(String timeString) {
+  try {
+    final parsedTime = DateTime.parse(timeString);
+    
+    // ALWAYS treat Supabase timestamps as UTC and convert to Philippine time
+    // Supabase stores in UTC, so we must convert to local timezone
+    return parsedTime.toUtc().toLocal();
+  } catch (e) {
+    print('Error parsing datetime: $e');
+    return DateTime.now();
+  }
+}
+
+// ============================================
+// FIXED: Your _getTimeAgo with safeguard
+// ============================================
 
 String _getTimeAgo(DateTime dateTime, {bool compact = false}) {
-  final now = DateTime.now();
-  final difference = now.difference(dateTime);
+  // Ensure we're comparing in local time (Philippine time)
+  final now = DateTime.now(); // This is in device's local time
+  final localDateTime = dateTime.toLocal(); // Ensure input is also local
+  final difference = now.difference(localDateTime);
+  
+  // Safeguard against negative durations (timezone issues)
+  if (difference.isNegative) {
+    print('⚠️ Warning: Negative time difference detected for $dateTime');
+    return compact ? 'now' : 'Just now';
+  }
   
   if (compact) {
-    // Remove the "NEW" check since it's handled in _buildTimeText
-    if (difference.inMinutes < 60) {
+    if (difference.inMinutes < 1) {
+      return 'now';
+    } else if (difference.inMinutes < 60) {
       return '${difference.inMinutes}min ago';
     } else if (difference.inHours < 24) {
       return '${difference.inHours}h ago';
@@ -7530,7 +7713,6 @@ String _getTimeAgo(DateTime dateTime, {bool compact = false}) {
       return '${(difference.inDays / 7).floor()}w ago';
     }
   } else {
-    // Original format for details
     if (difference.inMinutes < 1) {
       return 'Just now';
     } else if (difference.inMinutes < 60) {
@@ -7542,7 +7724,6 @@ String _getTimeAgo(DateTime dateTime, {bool compact = false}) {
     }
   }
 }
-
 
 
 
@@ -10038,6 +10219,18 @@ Widget _buildSimpleHotspotMarker({
   );
 }
 
+// NEW: Simple dot marker for far zoom levels
+Widget _buildDotMarker(Color color, double opacity) {
+  return Container(
+    width: 8,
+    height: 8,
+    decoration: BoxDecoration(
+      color: color.withOpacity(opacity),
+      shape: BoxShape.circle,
+    ),
+  );
+}
+
 // MAP MAP MAP
 
 Widget _buildMap() {
@@ -10199,7 +10392,8 @@ onLongPress: (tapPosition, latLng) {
                   ],
                 ),
               ],
-
+_buildHeatmapLayer(),
+_buildHeatmapMarkers(),      
               // Enhanced Main markers layer (current position and destination) - MINIMIZED
            MarkerLayer(
   markers: [
@@ -10231,8 +10425,7 @@ onLongPress: (tapPosition, latLng) {
       ),
   ],
 ),
-_buildHeatmapLayer(),
-              
+
 // FIXED: Hotspots layer with stable markers and labels
 Consumer<HotspotFilterService>(
   builder: (context, filterService, child) {
@@ -10278,6 +10471,7 @@ Consumer<HotspotFilterService>(
         
         // Determine marker complexity based on zoom
         final useSimpleMarker = _currentZoom < 13.0;
+        final useDotMarker = _currentZoom < 12.0;
         
         // Color and icon logic (cached)
         Color markerColor;
@@ -10341,13 +10535,15 @@ Consumer<HotspotFilterService>(
           }
         }
         
-        return Marker(
-          key: ValueKey('hotspot_optimized_$hotspotId\_$status\_$activeStatus\_$isSelected\_$useSimpleMarker'),
-          point: point,
-          width: useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 120 : 100),
-          height: useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 70 : 60),
-          child: RepaintBoundary(
-            child: useSimpleMarker
+      return Marker(
+        key: ValueKey('hotspot_optimized_$hotspotId\_$status\_$activeStatus\_$isSelected\_$useDotMarker\_$useSimpleMarker'),
+        point: point,
+        width: useDotMarker ? 8 : (useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 120 : 100)),
+        height: useDotMarker ? 8 : (useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 70 : 60)),
+        child: RepaintBoundary(
+          child: useDotMarker
+            ? _buildDotMarker(markerColor, opacity)
+            : useSimpleMarker
               ? _buildSimpleHotspotMarker(
                   hotspot: hotspot,
                   markerColor: markerColor,
@@ -10374,7 +10570,7 @@ Consumer<HotspotFilterService>(
 ),
 
 
-_buildHeatmapMarkers(),
+
          
 // Safe Spots Marker Layer 
 if (_showSafeSpots)
@@ -10405,6 +10601,7 @@ if (_showSafeSpots)
           
           // Use simple markers when zoomed out
           final useSimpleMarker = _currentZoom < 13.0;
+          final useDotMarker = _currentZoom < 12.0;
           
           Color markerColor;
           IconData markerIcon = _getIconFromString(safeSpotType['icon']);
@@ -10426,15 +10623,17 @@ if (_showSafeSpots)
               markerColor = Colors.blue;
           }
           
-return Marker(
-  key: ValueKey('safe_spot_filtered_$safeSpotId\_$status\_$verified\_$index\_$isSelected\_$useSimpleMarker'),
-  point: point,
-  width: useSimpleMarker ? 32 : (isSelected ? 140 : 120),
-  height: useSimpleMarker ? 32 : (isSelected ? 60 : 40),
-  alignment: Alignment.center,
-  child: RepaintBoundary(
-    child: useSimpleMarker
-      ? GestureDetector(
+      return Marker(
+        key: ValueKey('safe_spot_filtered_$safeSpotId\_$status\_$verified\_$index\_$isSelected\_$useDotMarker\_$useSimpleMarker'),
+        point: point,
+        width: useDotMarker ? 8 : (useSimpleMarker ? 32 : (isSelected ? 140 : 120)),
+        height: useDotMarker ? 8 : (useSimpleMarker ? 32 : (isSelected ? 60 : 40)),
+        alignment: Alignment.center,
+        child: RepaintBoundary(
+          child: useDotMarker
+            ? _buildDotMarker(Colors.green, opacity)
+            : useSimpleMarker
+              ? GestureDetector(
           onTap: () {
             setState(() {
               _selectedSafeSpot = safeSpot;
@@ -10517,119 +10716,121 @@ if (_userProfile != null)
         final name = savePoint['name'] ?? 'Save Point';
         final isSelected = _selectedSavePoint != null && _selectedSavePoint!['id'] == savePoint['id'];
 
-        // Use simple markers when zoomed out
+        // Use simple markers when zoomed out, dots when very far
         final useSimpleMarker = _currentZoom < 13.0;
+        final useDotMarker = _currentZoom < 12.0; // NEW
 
         // Build marker styling
         return Marker(
-          key: ValueKey('save_point_${savePoint['id']}_$isSelected_$useSimpleMarker'),
+          key: ValueKey('save_point_${savePoint['id']}_$isSelected_$useDotMarker$useSimpleMarker'),
           point: point,
-          width: useSimpleMarker ? 32 : (isSelected ? 140 : 120),
-          height: useSimpleMarker ? 32 : 40,
+          width: useDotMarker ? 8 : (useSimpleMarker ? 32 : (isSelected ? 140 : 120)),
+          height: useDotMarker ? 8 : (useSimpleMarker ? 32 : 40),
           alignment: Alignment.center,
           child: Transform.rotate(
             angle: -_currentMapRotation * pi / 180, // Counteract map rotation
             alignment: Alignment.center,
-            child: Stack(
-              clipBehavior: Clip.none,
-              alignment: Alignment.center,
-              children: [
-                GestureDetector(
-                  onTap: () {
-                    // Update selection state
-                    setState(() {
-                      _destination = point;
-                      _selectedSavePoint = savePoint;
-                      _selectedSafeSpot = null;
-                      _selectedHotspot = null;
-                    });
-                    
-                    // Show save point details
-                    SavePointDetails.showSavePointDetails(
-                      context: context,
-                      savePoint: savePoint,
-                      userProfile: _userProfile,
-                      onUpdate: _loadSavePoints,
-                      onGetSafeRoute: _getSafeRoute,
-                    );
-                  },
-                  child: Stack(
+            child: useDotMarker
+                ? _buildDotMarker(Colors.blue.shade600, 0.9) // NEW: Blue dot for save points
+                : Stack(
+                    clipBehavior: Clip.none,
                     alignment: Alignment.center,
                     children: [
-                      // Selection indicator
-                      if (isSelected)
-                        Container(
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.blue.withOpacity(0.6),
-                              width: 3,
-                            ),
-                          ),
-                        ),
-                      // Main marker (changed to thumbtack/pin)
-                      Container(
-                        width: useSimpleMarker ? 28 : 32,
-                        height: useSimpleMarker ? 28 : 32,
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade600.withOpacity(0.9),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: useSimpleMarker ? 4 : 6,
-                              offset: const Offset(0, 2),
+                      GestureDetector(
+                        onTap: () {
+                          // Update selection state
+                          setState(() {
+                            _destination = point;
+                            _selectedSavePoint = savePoint;
+                            _selectedSafeSpot = null;
+                            _selectedHotspot = null;
+                          });
+                          
+                          // Show save point details
+                          SavePointDetails.showSavePointDetails(
+                            context: context,
+                            savePoint: savePoint,
+                            userProfile: _userProfile,
+                            onUpdate: _loadSavePoints,
+                            onGetSafeRoute: _getSafeRoute,
+                          );
+                        },
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Selection indicator
+                            if (isSelected)
+                              Container(
+                                width: 50,
+                                height: 50,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.blue.withOpacity(0.6),
+                                    width: 3,
+                                  ),
+                                ),
+                              ),
+                            // Main marker
+                            Container(
+                              width: useSimpleMarker ? 28 : 32,
+                              height: useSimpleMarker ? 28 : 32,
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade600.withOpacity(0.9),
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 2),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.2),
+                                    blurRadius: useSimpleMarker ? 4 : 6,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                Icons.bookmark,
+                                color: Colors.white,
+                                size: useSimpleMarker ? 16 : 18,
+                              ),
                             ),
                           ],
                         ),
-                        child: Icon(
-                          Icons.bookmark, // Changed from bookmark to push_pin
-                          color: Colors.white,
-                          size: useSimpleMarker ? 16 : 18,
-                        ),
                       ),
+                      // Label aligned like hotspots and safe spots
+                      if (!useSimpleMarker && _currentZoom >= 14.0)
+                        Positioned(
+                          left: isSelected ? 93 : 78,
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 300),
+                            opacity: 1.0,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade600.withOpacity(0.9),
+                                borderRadius: BorderRadius.circular(8),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.15),
+                                    blurRadius: 3,
+                                    offset: const Offset(1, 1),
+                                  ),
+                                ],
+                              ),
+                              child: Text(
+                                name.length > 15 ? '${name.substring(0, 15)}...' : name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
-                ),
-                // Label aligned like hotspots and safe spots
-                if (!useSimpleMarker && _currentZoom >= 14.0)
-                  Positioned(
-                    left: isSelected ? 93 : 78, // Matches hotspot/safe spot alignment
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 300),
-                      opacity: 1.0,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade600.withOpacity(0.9),
-                          borderRadius: BorderRadius.circular(8),
-            
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.15),
-                              blurRadius: 3,
-                              offset: const Offset(1, 1),
-                            ),
-                          ],
-                        ),
-                        child: Text(
-                          name.length > 15 ? '${name.substring(0, 15)}...' : name,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
           ),
         );
       } catch (e) {
@@ -10833,43 +11034,25 @@ Widget _buildStableHotspotMarker({
 }
 
 
-// Helper widget to build time text with special "NEW" styling
-// Helper widget to build time text with special "NEW" styling
+// FIXED: Helper widget to build time text with special "NEW" styling
 Widget _buildTimeText(Map<String, dynamic> hotspot, Color markerColor) {
-  // Use created_at for "NEW" determination, but incident time for regular display
   DateTime hotspotTime;
   DateTime creationTime;
   
   try {
-    // Parse incident time for regular display
-    final timeString = hotspot['time'];
-    final parsedTime = DateTime.parse(timeString);
-    
-    if (timeString.endsWith('Z')) {
-      hotspotTime = parsedTime.toLocal();
-    } else {
-      hotspotTime = parsedTime;
-    }
-
-    // Parse creation time for "NEW" determination
-    final createdString = hotspot['created_at'] ?? hotspot['time'];
-    final parsedCreated = DateTime.parse(createdString);
-    
-    if (createdString.endsWith('Z')) {
-      creationTime = parsedCreated.toLocal();
-    } else {
-      creationTime = parsedCreated;
-    }
+    // Parse times - they're already converted to local by parseStoredDateTime
+    hotspotTime = parseStoredDateTime(hotspot['time']);
+    creationTime = parseStoredDateTime(hotspot['created_at'] ?? hotspot['time']);
   } catch (e) {
     print('Error parsing hotspot time for marker: $e');
     hotspotTime = DateTime.now();
     creationTime = DateTime.now();
   }
   
-  // Determine if it's "NEW" based on BOTH creation time AND incident time
-  final now = DateTime.now();
-  final creationDifference = now.difference(creationTime);
-  final incidentDifference = now.difference(hotspotTime);
+  // Use local time for all comparisons
+  final now = DateTime.now(); // Device's local time (Philippine time)
+  final creationDifference = now.difference(creationTime.toLocal());
+  final incidentDifference = now.difference(hotspotTime.toLocal());
   
   // Show "NEW" only if both the report was created recently AND the incident time is recent
   final isNew = creationDifference.inHours < 1 && incidentDifference.inHours < 1;
@@ -10878,7 +11061,6 @@ Widget _buildTimeText(Map<String, dynamic> hotspot, Color markerColor) {
   final timeText = isNew ? 'NEW' : _getTimeAgo(hotspotTime, compact: true);
   
   if (isNew) {
-    // Blue text with white background for maximum visibility
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
       decoration: BoxDecoration(
@@ -10903,7 +11085,6 @@ Widget _buildTimeText(Map<String, dynamic> hotspot, Color markerColor) {
       ),
     );
   } else {
-    // Regular time text styling
     return Text(
       timeText,
       style: TextStyle(
@@ -11435,20 +11616,11 @@ void _showHotspotDetails(Map<String, dynamic> hotspot) async {
     fullLocation = "$address\n$coordinatesString";
   }
 
-// Fix the time parsing section (around line 47 in your code)
+// Use the same parseStoredDateTime helper for consistency
 DateTime time;
 try {
   final timeString = hotspot['time'] ?? DateTime.now().toIso8601String();
-  final parsedTime = DateTime.parse(timeString);
-  
-  // Check if the parsed time is in UTC (has 'Z' suffix) or local
-  if (timeString.endsWith('Z')) {
-    // It's UTC, convert to local
-    time = parsedTime.toLocal();
-  } else {
-    // It's already local time, don't convert
-    time = parsedTime;
-  }
+  time = parseStoredDateTime(timeString);
 } catch (e) {
   print('Error parsing time: $e');
   time = DateTime.now();
@@ -13300,9 +13472,9 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
     final updateData = {
       'type_id': typeId,
       'description': description.trim().isNotEmpty ? description.trim() : null,
-      'time': dateTime.toLocal().toIso8601String(), // Fix: Use local time
+      'time': dateTime.toUtc().toIso8601String(), // Fix: Use local time
       if (activeStatus != null) 'active_status': activeStatus,
-      'updated_at': DateTime.now().toLocal().toIso8601String(), // Fix: Use local time
+      'updated_at': DateTime.now().toUtc().toIso8601String(), // Fix: Use local time
       'last_updated_by': _userProfile?['id'],
     };
 
@@ -14280,7 +14452,47 @@ Widget _buildProfileScreen() {
 
 //HEAT MAP 
 
-// NEW: Load ALL approved crimes for heatmap (bypasses individual crime RLS)
+// ============================================
+// HEATMAP HELPER: Validate if crime is within time window
+// ============================================
+
+bool _isWithinHeatmapTimeWindow(Map<String, dynamic> crime) {
+  try {
+    final crimeTime = parseStoredDateTime(crime['time']); // Use helper
+    final cutoffDate = DateTime.now().subtract(
+      const Duration(days: HEATMAP_TIME_WINDOW_DAYS)
+    );
+    return crimeTime.isAfter(cutoffDate);
+  } catch (e) {
+    print('Error parsing crime time: $e');
+    return false;
+  }
+}
+
+
+
+// ============================================
+// HEATMAP HELPER: Format crime with proper structure
+// ============================================
+
+Map<String, dynamic> _formatCrimeForHeatmap(Map<String, dynamic> crime) {
+  final crimeType = crime['crime_type'] ?? {};
+  return {
+    ...crime,
+    'crime_type': {
+      'id': crimeType['id'] ?? crime['type_id'],
+      'name': crimeType['name'] ?? 'Unknown',
+      'level': crimeType['level'] ?? 'unknown',
+      'category': crimeType['category'] ?? 'General',
+      'description': crimeType['description'],
+    }
+  };
+}
+
+// ============================================
+// MODIFIED: Load heatmap data with proper filtering
+// ============================================
+
 Future<void> _loadHeatmapData() async {
   try {
     final cutoffDate = DateTime.now().subtract(
@@ -14305,39 +14517,52 @@ Future<void> _loadHeatmapData() async {
         .gte('time', cutoffDate.toIso8601String());
     
     setState(() {
-      _heatmapCrimes = (response as List).map((crime) {
-        final crimeType = crime['crime_type'] ?? {};
-        return <String, dynamic>{  // ← ADD THIS TYPE ANNOTATION
-          ...crime,
-          'crime_type': {
-            'id': crimeType['id'] ?? crime['type_id'],
-            'name': crimeType['name'] ?? 'Unknown',
-            'level': crimeType['level'] ?? 'unknown',
-            'category': crimeType['category'] ?? 'General',
-            'description': crimeType['description'],
-          }
-        };
-      }).toList();
+      _heatmapCrimes = (response as List)
+          .map((crime) => _formatCrimeForHeatmap(crime))
+          .toList();
     });
     
-    print('Loaded ${_heatmapCrimes.length} crimes for heatmap (including inactive)');
+    print('Loaded ${_heatmapCrimes.length} crimes for heatmap (within $HEATMAP_TIME_WINDOW_DAYS days)');
   } catch (e) {
     print('Error loading heatmap data: $e');
   }
 }
+// ============================================
+// NEW: Periodic cleanup of expired crimes
+// ============================================
+
+void _cleanupExpiredHeatmapCrimes() {
+  final beforeCount = _heatmapCrimes.length;
+  
+  setState(() {
+    _heatmapCrimes.removeWhere((crime) => !_isWithinHeatmapTimeWindow(crime));
+  });
+  
+  final removedCount = beforeCount - _heatmapCrimes.length;
+  
+  if (removedCount > 0) {
+    print('🧹 Cleaned up $removedCount expired crimes from heatmap');
+    _scheduleHeatmapUpdate();
+  }
+}
 
 // ============================================
-// HEATMAP CALCULATION
+// MODIFIED: Calculation with re-validation
 // ============================================
+
 Future<void> _calculateHeatmap() async {
   if (_isCalculatingHeatmap) return;
   
   setState(() => _isCalculatingHeatmap = true);
   
   try {
-    print('Calculating heatmap from ${_heatmapCrimes.length} approved crimes...');
+    final validCrimes = _heatmapCrimes.where((crime) {
+      return crime['status'] == 'approved' && _isWithinHeatmapTimeWindow(crime);
+    }).toList();
     
-    if (_heatmapCrimes.length < MIN_CRIMES_FOR_HOTSPOT) {
+    print('Calculating heatmap from ${validCrimes.length} valid crimes');
+    
+    if (validCrimes.length < MIN_CRIMES_FOR_HOTSPOT) {
       setState(() {
         _heatmapClusters = [];
         _isCalculatingHeatmap = false;
@@ -14345,37 +14570,17 @@ Future<void> _calculateHeatmap() async {
       return;
     }
     
-    final clusters = _buildCrimeClusters(_heatmapCrimes);
+    final clusters = _buildCrimeClusters(validCrimes);
     final validClusters = clusters.where((c) => c.crimeCount >= MIN_CRIMES_FOR_HOTSPOT).toList();
     
-    if (validClusters.isNotEmpty) {
-      final maxIntensity = validClusters
-          .map((c) => c.intensity)
-          .reduce((a, b) => a > b ? a : b);
-      
-      final normalized = validClusters.map((cluster) => HeatmapCluster(
-        center: cluster.center,
-        radius: cluster.radius,
-        intensity: cluster.intensity / maxIntensity,
-        crimeCount: cluster.crimeCount,
-        crimeBreakdown: cluster.crimeBreakdown,
-        topCrimeTypes: cluster.topCrimeTypes,
-        crimes: cluster.crimes,
-      )).toList();
-      
-      setState(() {
-        _heatmapClusters = normalized;
-      });
-    } else {
-      setState(() {
-        _heatmapClusters = [];
-      });
-    }
+    setState(() {
+      _heatmapClusters = validClusters; // Use raw intensity values
+    });
     
-    print('✅ Heatmap calculated: ${validClusters.length} hotspots identified');
+    print('Heatmap calculated: ${validClusters.length} hotspots identified');
     
   } catch (e) {
-    print('❌ Heatmap calculation error: $e');
+    print('Heatmap calculation error: $e');
   } finally {
     setState(() => _isCalculatingHeatmap = false);
   }
@@ -14476,8 +14681,13 @@ HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
     if (distance > maxDistance) maxDistance = distance;
   }
   
-  // Add padding to radius
-  final radius = maxDistance + 50; // 50m padding
+  // UPDATED: Smaller base radius, multiplier happens in display layer
+  final baseRadius = 200.0; // Smaller base (was 500)
+  final countMultiplier = crimes.length * 20.0; // Smaller multiplier (was 50)
+  final intensityMultiplier = intensity * 50.0; // Smaller multiplier (was 200)
+  
+  final calculatedRadius = maxDistance + baseRadius + countMultiplier + intensityMultiplier;
+  final radius = calculatedRadius.clamp(300.0, 1000.0); // Smaller range: 300m-1km (was 800m-5km)
   
   // Get top 3 crime types
   final sortedTypes = crimeTypeCount.entries.toList()
@@ -14501,38 +14711,118 @@ HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
 // HEATMAP VISUALIZATION
 // ============================================
 
-// Color gradient for heatmap
+// Color gradient for heatmap - UPDATED for better color distribution
 Color _getHeatmapColor(double intensity) {
-  if (intensity < 0.25) {
-    return Color.lerp(Colors.blue, Colors.yellow, intensity * 4)!;
-  } else if (intensity < 0.5) {
-    return Color.lerp(Colors.yellow, Colors.orange, (intensity - 0.25) * 4)!;
-  } else if (intensity < 0.75) {
-    return Color.lerp(Colors.orange, Colors.deepOrange, (intensity - 0.5) * 4)!;
+  // Normalize intensity to 0-1 range for better color distribution
+  final normalized = (intensity / 5.0).clamp(0.0, 1.0); // Assuming max intensity ~5
+
+  if (normalized < 0.25) {
+    return Color.lerp(Colors.yellow, Colors.orange, normalized * 4)!;
+  } else if (normalized < 0.5) {
+    return Color.lerp(Colors.orange, Colors.deepOrange, (normalized - 0.25) * 4)!;
+  } else if (normalized < 0.75) {
+    return Color.lerp(Colors.deepOrange, Colors.red, (normalized - 0.5) * 4)!;
   } else {
-    return Color.lerp(Colors.deepOrange, Colors.red, (intensity - 0.75) * 4)!;
+    return Color.lerp(Colors.red, Colors.red.shade900, (normalized - 0.75) * 4)!;
   }
 }
 
-// Build heatmap layer for map
 Widget _buildHeatmapLayer() {
   if (!_showHeatmap || _heatmapClusters.isEmpty) {
     return const SizedBox.shrink();
   }
   
-  return CircleLayer(
-    circles: _heatmapClusters.map((cluster) {
-      final color = _getHeatmapColor(cluster.intensity);
+  // Zoom-dependent scaling - MORE AGGRESSIVE for far zoom
+  double fillOpacity;
+  double borderOpacity;
+  double radiusMultiplier;
+  double borderWidth;
+  bool useTripleLayer = false;
+  
+  if (_currentZoom < 8.0) {
+    // Very far zoom: MASSIVE multiplier
+    fillOpacity = 0.7;
+    borderOpacity = 0.9;
+    radiusMultiplier = 8.0; // 8x (300m becomes 2.4km)
+    borderWidth = 6;
+    useTripleLayer = true;
+  } else if (_currentZoom < 10.0) {
+    // Far zoom: Large multiplier
+    fillOpacity = 0.6;
+    borderOpacity = 0.8;
+    radiusMultiplier = 5.0; // 5x
+    borderWidth = 5;
+    useTripleLayer = true;
+  } else if (_currentZoom < 12.0) {
+    // Medium zoom: Moderate multiplier
+    fillOpacity = 0.5;
+    borderOpacity = 0.7;
+    radiusMultiplier = 2.5; // 2.5x
+    borderWidth = 4;
+  } else if (_currentZoom < 15.0) {
+    // Close zoom: Small multiplier
+    fillOpacity = 0.4;
+    borderOpacity = 0.6;
+    radiusMultiplier = 1.5; // 1.5x
+    borderWidth = 3;
+  } else {
+    // Very close zoom: Minimal/no multiplier
+    fillOpacity = 0.3;
+    borderOpacity = 0.5;
+    radiusMultiplier = 1.0; // 1x (original size)
+    borderWidth = 2;
+  }
+  
+  return Stack(
+    children: [
+      // Outer glow layer (largest)
+      if (useTripleLayer)
+        CircleLayer(
+          circles: _heatmapClusters.map((cluster) {
+            final color = _getHeatmapColor(cluster.intensity);
+            return CircleMarker(
+              point: cluster.center,
+              radius: cluster.radius * radiusMultiplier * 2.0,
+              color: color.withOpacity(fillOpacity * 0.3),
+              borderColor: Colors.transparent,
+              borderStrokeWidth: 0,
+              useRadiusInMeter: true,
+            );
+          }).toList(),
+        ),
       
-      return CircleMarker(
-        point: cluster.center,
-        radius: cluster.radius, // Use actual cluster radius
-        color: color.withOpacity(0.25),
-        borderColor: color.withOpacity(0.5),
-        borderStrokeWidth: 2,
-        useRadiusInMeter: true, // Important: use meters not pixels
-      );
-    }).toList(),
+      // Middle glow layer
+      if (useTripleLayer)
+        CircleLayer(
+          circles: _heatmapClusters.map((cluster) {
+            final color = _getHeatmapColor(cluster.intensity);
+            return CircleMarker(
+              point: cluster.center,
+              radius: cluster.radius * radiusMultiplier * 1.5,
+              color: color.withOpacity(fillOpacity * 0.5),
+              borderColor: Colors.transparent,
+              borderStrokeWidth: 0,
+              useRadiusInMeter: true,
+            );
+          }).toList(),
+        ),
+      
+      // Main heatmap layer
+      CircleLayer(
+        circles: _heatmapClusters.map((cluster) {
+          final color = _getHeatmapColor(cluster.intensity);
+          
+          return CircleMarker(
+            point: cluster.center,
+            radius: cluster.radius * radiusMultiplier,
+            color: color.withOpacity(fillOpacity),
+            borderColor: color.withOpacity(borderOpacity),
+            borderStrokeWidth: borderWidth,
+            useRadiusInMeter: true,
+          );
+        }).toList(),
+      ),
+    ],
   );
 }
 
@@ -14575,7 +14865,10 @@ Widget _buildHeatmapMarkers() {
   );
 }
 
-// Show heatmap details dialog (read-only)
+// ============================================
+// FIXED: Heatmap details with proper parsing
+// ============================================
+
 void _showHeatmapDetails(HeatmapCluster cluster) {
   showDialog(
     context: context,
@@ -14647,14 +14940,16 @@ void _showHeatmapDetails(HeatmapCluster cluster) {
                 
                 if (crimesOfType.isEmpty) return const SizedBox.shrink();
                 
-                // Get the most recent one
+                // Sort by time (most recent first)
                 crimesOfType.sort((a, b) {
-                  final timeA = DateTime.parse(a['time']);
-                  final timeB = DateTime.parse(b['time']);
+                  // FIXED: Use parseStoredDateTime for consistent parsing
+                  final timeA = parseStoredDateTime(a['time']);
+                  final timeB = parseStoredDateTime(b['time']);
                   return timeB.compareTo(timeA);
                 });
                 
-                final mostRecentTime = DateTime.parse(crimesOfType.first['time']);
+                // FIXED: Parse the most recent time properly
+                final mostRecentTime = parseStoredDateTime(crimesOfType.first['time']);
                 final timeAgo = _getTimeAgo(mostRecentTime, compact: true);
                 
                 return Container(
@@ -14696,11 +14991,34 @@ void _showHeatmapDetails(HeatmapCluster cluster) {
 
 
 
-
 Future<List<LocationSuggestion>> _searchLocations(String query) async {
   if (query.isEmpty || query.length < 2) return [];
   
   try {
+    // Check if query is lat/long coordinates (e.g., "6.8044,122.1218" or "6.8044, 122.1218")
+    final latLongPattern = RegExp(r'^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$');
+    final match = latLongPattern.firstMatch(query.trim());
+    
+    if (match != null) {
+      // Parse coordinates
+      final lat = double.tryParse(match.group(1)!);
+      final lon = double.tryParse(match.group(2)!);
+      
+      if (lat != null && lon != null && 
+          lat >= -90 && lat <= 90 && 
+          lon >= -180 && lon <= 180) {
+        // Return a direct coordinate suggestion
+        return [
+          LocationSuggestion(
+            displayName: 'Go to exact location ($lat, $lon)',
+            lat: lat,
+            lon: lon,
+            isInZamboanga: LocationSuggestion._isInZamboangaCity(lat, lon),
+          )
+        ];
+      }
+    }
+    
     // Enhanced query processing with local knowledge
     final processedQueries = _processQueryWithLocalKnowledge(query);
     

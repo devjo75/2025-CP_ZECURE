@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:zecure/auth/register_screen.dart';
+import 'package:zecure/main.dart';
 import 'package:zecure/screens/map_screen.dart';
-import 'package:zecure/screens/landing_screen.dart';
 import 'package:zecure/auth/auth_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -1656,14 +1656,16 @@ child: _showOTPVerification
         Align(
           alignment: Alignment.centerLeft,
           child: IconButton(
-            onPressed: () {
-              // Navigate directly to landing page, clearing the navigation stack
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (context) => const LandingScreen()),
-                (route) => false,
-              );
-            },
+          onPressed: () {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const ResponsiveLandingScreen(),
+            ),
+            (route) => false,
+          );
+        },
+
             icon: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(

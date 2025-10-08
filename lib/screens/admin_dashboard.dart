@@ -100,6 +100,8 @@ String _reportSortBy = 'date';
 bool _reportSortAscending = false;
 List<Map<String, dynamic>> _filteredReportsData = [];
 
+//AUTHORIZATION
+bool _isAdmin = false;
 
 // Dynamic filter options
 List<String> _availableRoles = ['All Roles'];
@@ -136,6 +138,7 @@ Map<String, dynamic> _safeSpotStats = {};
     
     _initAnimations();
     _loadDashboardData();
+    _loadCurrentUserProfile();
     
     // Add listeners for search controllers
     _userSearchController.addListener(_filterUsers);
@@ -248,6 +251,26 @@ void _clearOfficerFilters() {
     _officerSortAscending = false;
   });
   _filterOfficers();
+}
+
+
+Future<void> _loadCurrentUserProfile() async {
+  try {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+
+    final response = await Supabase.instance.client
+        .from('users')  // Changed from 'profiles' to 'users'
+        .select()
+        .eq('id', userId)
+        .single();
+
+    setState(() {
+      _isAdmin = response['role']?.toString().toLowerCase() == 'admin';
+    });
+  } catch (e) {
+    print('Error loading user profile: $e');
+  }
 }
 
 Future<void> _loadOfficersData() async {
@@ -1062,7 +1085,7 @@ String _getPageTitle() {
       case 'officers':
   return 'Officer Management';
     default:
-      return 'Admin Dashboard';
+      return 'System Dashboard';
   }
 }
 
@@ -2141,10 +2164,10 @@ Widget _buildUsersPage() {
 
 // Add this state variable to track expanded cards
 Set<String> _expandedUserCards = <String>{};
-
 Widget _buildUserCard(Map<String, dynamic> user) {
   final userId = user['id'] ?? 0;
   final isExpanded = _expandedUserCards.contains(userId);
+  final isCurrentUser = user['id'] == Supabase.instance.client.auth.currentUser?.id;
   
   return Container(
     margin: const EdgeInsets.only(bottom: 12),
@@ -2162,7 +2185,6 @@ Widget _buildUserCard(Map<String, dynamic> user) {
     ),
     child: Column(
       children: [
-        // Main Card Content
         InkWell(
           onTap: () {
             setState(() {
@@ -2178,7 +2200,6 @@ Widget _buildUserCard(Map<String, dynamic> user) {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                // User Avatar
                 Container(
                   width: 48,
                   height: 48,
@@ -2201,8 +2222,6 @@ Widget _buildUserCard(Map<String, dynamic> user) {
                   ),
                 ),
                 const SizedBox(width: 16),
-                
-                // Main User Info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2219,7 +2238,6 @@ Widget _buildUserCard(Map<String, dynamic> user) {
                               ),
                             ),
                           ),
-                          // Role Badge
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
@@ -2344,85 +2362,83 @@ Widget _buildUserCard(Map<String, dynamic> user) {
                       : 'Unknown',
                 ),
                 
-                // Action Buttons Section
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8F9FA),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Actions',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF374151),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-
-                      // If it's the current user, show note instead of buttons
-                      if (user['id'] == Supabase.instance.client.auth.currentUser?.id)
+                // Action Buttons Section - Only visible to admins
+                if (_isAdmin) ...[
+                  const SizedBox(height: 20),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8F9FA),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         const Text(
-                          "You cannot change your own role or delete your own account.",
+                          'Actions',
                           style: TextStyle(
-                            fontSize: 13,
-                            fontStyle: FontStyle.italic,
-                            color: Color(0xFF6B7280),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151),
                           ),
-                        )
-                      else
-                        Row(
-                          children: [
-                            // Change Role Button
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _showChangeRoleDialog(user),
-                                icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
-                                label: const Text('Change Role'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Colors.grey[800],
-                                  side: BorderSide(
-                                    color: Colors.grey.withOpacity(0.5),
-                                    width: 1.5,
+                        ),
+                        const SizedBox(height: 12),
+                        if (isCurrentUser)
+                          const Text(
+                            "You cannot change your own role or delete your own account.",
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontStyle: FontStyle.italic,
+                              color: Color(0xFF6B7280),
+                            ),
+                          )
+                        else
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () => _showChangeRoleDialog(user),
+                                  icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
+                                  label: const Text('Change Role'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.grey[800],
+                                    side: BorderSide(
+                                      color: Colors.grey.withOpacity(0.5),
+                                      width: 1.5,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                                   ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            // Delete User Button
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _showDeleteUserDialog(user),
-                                icon: const Icon(Icons.delete_outlined, size: 16),
-                                label: const Text('Delete User'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Colors.red[700],
-                                  side: BorderSide(
-                                    color: Colors.red.withOpacity(0.5),
-                                    width: 1.5,
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () => _showDeleteUserDialog(user),
+                                  icon: const Icon(Icons.delete_outlined, size: 16),
+                                  label: const Text('Delete User'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.red[700],
+                                    side: BorderSide(
+                                      color: Colors.red.withOpacity(0.5),
+                                      width: 1.5,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                                   ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                                ),
                               ),
-                            ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ) : const SizedBox(),
@@ -2627,7 +2643,7 @@ Widget _buildUsersPageDesktop() {
       ),
       
       // Data Table
-      Expanded(
+    Expanded(
         child: Container(
           width: double.infinity,
           color: const Color(0xFFFAFAFA),
@@ -2639,99 +2655,22 @@ Widget _buildUsersPageDesktop() {
               dataRowHeight: 56,
               horizontalMargin: 24,
               headingRowColor: MaterialStateProperty.all(const Color(0xFFF5F7FA)),
-              columns: const [
-                DataColumn(
-                  label: Text(
-                    'Name',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Email',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Role',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Gender',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Birthday',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Age',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Contact #',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Member Since',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                DataColumn(
-                  label: Text(
-                    'Actions',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
+              columns: [
+                const DataColumn(label: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                const DataColumn(label: Text('Email', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                const DataColumn(label: Text('Role', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                const DataColumn(label: Text('Gender', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                const DataColumn(label: Text('Birthday', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                const DataColumn(label: Text('Age', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                const DataColumn(label: Text('Contact #', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                const DataColumn(label: Text('Member Since', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
+                // Only show Actions column if user is admin
+                if (_isAdmin)
+                  const DataColumn(label: Text('Actions', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF374151), fontSize: 14))),
               ],
               rows: _filteredUsersData.map((user) {
+                final isCurrentUser = user['id'] == Supabase.instance.client.auth.currentUser?.id;
+                
                 return DataRow(
                   cells: [
                     DataCell(
@@ -2758,23 +2697,12 @@ Widget _buildUsersPageDesktop() {
                           const SizedBox(width: 8),
                           Text(
                             '${user['first_name'] ?? ''} ${user['last_name'] ?? ''}'.trim(),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF374151),
-                            ),
+                            style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
                           ),
                         ],
                       ),
                     ),
-                    DataCell(
-                      Text(
-                        user['email'] ?? 'No email',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
+                    DataCell(Text(user['email'] ?? 'No email', style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)))),
                     DataCell(
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -2785,11 +2713,7 @@ Widget _buildUsersPageDesktop() {
                         ),
                         child: Text(
                           (user['role'] ?? 'USER').toUpperCase(),
-                          style: TextStyle(
-                            color: _getRoleColor(user['role']),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: TextStyle(color: _getRoleColor(user['role']), fontSize: 12, fontWeight: FontWeight.w600),
                         ),
                       ),
                     ),
@@ -2803,89 +2727,44 @@ Widget _buildUsersPageDesktop() {
                         ),
                         child: Text(
                           user['gender'] ?? 'N/A',
-                          style: TextStyle(
-                            color: _getGenderColor(user['gender']),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: TextStyle(color: _getGenderColor(user['gender']), fontSize: 12, fontWeight: FontWeight.w600),
                         ),
                       ),
                     ),
-                    DataCell(
-                      Text(
-                        user['bday'] != null
-                            ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['bday']))
-                            : 'Not provided',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
-                    DataCell(
-                      Text(
-                        user['bday'] != null
-                            ? '${_calculateAge(user['bday']) ?? 'Unknown'} years'
-                            : 'Not provided',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
-                    DataCell(
-                      Text(
-                        user['contact_number'] ?? 'Not provided',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
-                    DataCell(
-                      Text(
-                        user['created_at'] != null
-                            ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['created_at']))
-                            : 'Unknown',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
-                    DataCell(
-                      user['id'] == Supabase.instance.client.auth.currentUser?.id
-                          ? const Text(
-                              'No actions available',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF6B7280),
+                    DataCell(Text(
+                      user['bday'] != null ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['bday'])) : 'Not provided',
+                      style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+                    )),
+                    DataCell(Text(
+                      user['bday'] != null ? '${_calculateAge(user['bday']) ?? 'Unknown'} years' : 'Not provided',
+                      style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+                    )),
+                    DataCell(Text(user['contact_number'] ?? 'Not provided', style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)))),
+                    DataCell(Text(
+                      user['created_at'] != null ? DateFormat('MMM d, yyyy').format(DateTime.parse(user['created_at'])) : 'Unknown',
+                      style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+                    )),
+                    // Only show Actions cell if user is admin
+                    if (_isAdmin)
+                      DataCell(
+                        isCurrentUser
+                            ? const Text('No actions available', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    onPressed: () => _showChangeRoleDialog(user),
+                                    icon: const Icon(Icons.admin_panel_settings_outlined, size: 20, color: Color(0xFF374151)),
+                                    tooltip: 'Change Role',
+                                  ),
+                                  IconButton(
+                                    onPressed: () => _showDeleteUserDialog(user),
+                                    icon: const Icon(Icons.delete_outlined, size: 20, color: Color(0xFFEF4444)),
+                                    tooltip: 'Delete User',
+                                  ),
+                                ],
                               ),
-                            )
-                          : Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  onPressed: () => _showChangeRoleDialog(user),
-                                  icon: const Icon(
-                                    Icons.admin_panel_settings_outlined,
-                                    size: 20,
-                                    color: Color(0xFF374151),
-                                  ),
-                                  tooltip: 'Change Role',
-                                ),
-                                IconButton(
-                                  onPressed: () => _showDeleteUserDialog(user),
-                                  icon: const Icon(
-                                    Icons.delete_outlined,
-                                    size: 20,
-                                    color: Color(0xFFEF4444),
-                                  ),
-                                  tooltip: 'Delete User',
-                                ),
-                              ],
-                            ),
-                    ),
+                      ),
                   ],
                 );
               }).toList(),

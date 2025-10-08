@@ -6,6 +6,7 @@ import 'package:zecure/screens/map_screen.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
 import 'package:zecure/screens/landing_screen.dart';
 import 'package:zecure/auth/login_screen.dart';
+import 'package:zecure/desktop/desktop_landing_screen.dart'; // Added import for desktop landing
 // import 'package:zecure/utils/url_handler.dart'; // Temporarily commented out
 
 // Global flag to detect logout
@@ -67,9 +68,25 @@ class ZecureApp extends StatelessWidget {
       case '/confirm':
         return MaterialPageRoute(builder: (_) => const EmailConfirmationScreen());
       case '/landing':
-        return MaterialPageRoute(builder: (_) => const LandingScreen());
+        return MaterialPageRoute(builder: (_) => const ResponsiveLandingScreen());
       default:
         return MaterialPageRoute(builder: (_) => const AuthWrapper());
+    }
+  }
+}
+
+/// ✅ New Responsive Landing wrapper
+class ResponsiveLandingScreen extends StatelessWidget {
+  const ResponsiveLandingScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+
+    if (screenWidth > 1200) {
+      return const DesktopLandingScreen();
+    } else {
+      return const LandingScreen();
     }
   }
 }
@@ -126,8 +143,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
           return const LoginScreen();
         }
 
-        // Default: not logged in → LandingScreen
-        return const LandingScreen();
+        // ✅ Default: not logged in → use Responsive Landing
+        return const ResponsiveLandingScreen();
       },
     );
   }

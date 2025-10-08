@@ -780,6 +780,49 @@ Widget _buildOfficerContent(bool isWeb) {
             ),
             const SizedBox(height: 12),
           ],
+
+          // Add this right after the admin dashboard button section in your WelcomeMessageModal
+        if (widget.userType == UserType.officer) ...[
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                _animationController.reverse().then((_) {
+                  if (mounted) {
+                    Navigator.of(context).pop(); // Close modal
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const AdminDashboardScreen()),
+                    );
+                  }
+                });
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.indigo.shade600, // Officer color
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.dashboard_rounded, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Check Out Dashboard',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
           
           // Continue Button
           SizedBox(
