@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../services/search_filter_service.dart';
@@ -38,6 +42,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   // Initialize _endDate to the current date
   DateTime _startDate = DateTime(DateTime.now().year, DateTime.now().month - 1, 1);
   DateTime _endDate = DateTime.now();
+  // Separate date ranges for different pages
+  DateTime _dashboardStartDate = DateTime(DateTime.now().year, DateTime.now().month - 1, 1);
+  DateTime _dashboardEndDate = DateTime.now();
+
+  DateTime _reportsStartDate = DateTime(DateTime.now().year, DateTime.now().month - 1, 1);
+  DateTime _reportsEndDate = DateTime.now();
   
   Map<String, dynamic> _userStats = {};
   Map<String, dynamic> _crimeStats = {};
@@ -132,9 +142,18 @@ Map<String, dynamic> _safeSpotStats = {};
   void initState() {
     super.initState();
     
-    // Ensure dates are set to midnight local time to avoid time-based discrepancies
-    _startDate = DateTime(_startDate.year, _startDate.month, _startDate.day);
-    _endDate = DateTime(_endDate.year, _endDate.month, _endDate.day);
+    // Initialize dashboard dates
+    _dashboardStartDate = DateTime(_dashboardStartDate.year, _dashboardStartDate.month, _dashboardStartDate.day);
+    _dashboardEndDate = DateTime(_dashboardEndDate.year, _dashboardEndDate.month, _dashboardEndDate.day);
+
+    // Initialize reports dates
+    _reportsStartDate = DateTime(_reportsStartDate.year, _reportsStartDate.month, _reportsStartDate.day);
+    _reportsEndDate = DateTime(_reportsEndDate.year, _reportsEndDate.month, _reportsEndDate.day);
+
+    // Keep old variables for backward compatibility (initially same as dashboard)
+    _startDate = _dashboardStartDate;
+    _endDate = _dashboardEndDate;
+    
     
     _initAnimations();
     _loadDashboardData();
@@ -545,8 +564,8 @@ Future<void> _loadSafeSpotsData() async {
 // ADD METHOD TO LOAD SAFESPOT STATS
 Future<void> _loadSafeSpotStats() async {
   try {
-    String startDateStr = DateFormat('yyyy-MM-dd').format(_startDate);
-    String endDateStr = DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1)));
+String startDateStr = DateFormat('yyyy-MM-dd').format(_dashboardStartDate);
+String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const Duration(days: 1)));
 
     final response = await Supabase.instance.client
         .from('safe_spots')
@@ -609,18 +628,18 @@ Future<void> _loadSafeSpotStats() async {
 
   void _filterReports() {
     setState(() {
-      _filteredReportsData = SearchAndFilterService.filterReports(
-        reports: _reportsData,
-        searchQuery: _reportSearchController.text,
-        statusFilter: _selectedReportStatus,
-        levelFilter: _selectedReportLevel,
-        categoryFilter: _selectedReportCategory,
-        activityFilter: _selectedActivityStatus,
-        sortBy: _reportSortBy,
-        ascending: _reportSortAscending,
-        startDate: _startDate,
-        endDate: _endDate,
-      );
+_filteredReportsData = SearchAndFilterService.filterReports(
+  reports: _reportsData,
+  searchQuery: _reportSearchController.text,
+  statusFilter: _selectedReportStatus,
+  levelFilter: _selectedReportLevel,
+  categoryFilter: _selectedReportCategory,
+  activityFilter: _selectedActivityStatus,
+  sortBy: _reportSortBy,
+  ascending: _reportSortAscending,
+  startDate: _reportsStartDate,
+  endDate: _reportsEndDate,
+);
     });
   }
 
@@ -700,8 +719,8 @@ Future<void> _loadSafeSpotStats() async {
 
 Future<void> _loadUserStats() async {
     try {
-      String startDateStr = DateFormat('yyyy-MM-dd').format(_startDate);
-      String endDateStr = DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1)));
+String startDateStr = DateFormat('yyyy-MM-dd').format(_dashboardStartDate);
+String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const Duration(days: 1)));
 
       final response = await Supabase.instance.client
           .from('users')
@@ -753,8 +772,8 @@ Future<void> _loadUserStats() async {
 
   Future<void> _loadUsersData() async {
     try {
-      String startDateStr = DateFormat('yyyy-MM-dd').format(_startDate);
-      String endDateStr = DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1)));
+String startDateStr = DateFormat('yyyy-MM-dd').format(_dashboardStartDate);
+String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const Duration(days: 1)));
 
       final response = await Supabase.instance.client
           .from('users')
@@ -789,6 +808,7 @@ Future<void> _loadUserStats() async {
   Future<void> _loadDashboardData() async {
     setState(() {
       _isLoading = true;
+      _addressCache.clear();
     });
     try {
       await Future.wait([
@@ -817,17 +837,127 @@ Future<void> _loadUserStats() async {
     }
   }
 
+final Map<String, String> _addressCache = {};
+
+// Simplified function to get FULL address (not shortened)
+Future<String> _getAddressFromCoordinates(dynamic location) async {
+  if (location == null) return 'Unknown Location';
+  
+  try {
+    if (location is Map && location.containsKey('coordinates')) {
+      final coords = location['coordinates'];
+      if (coords is List && coords.length >= 2) {
+        final lng = coords[0];
+        final lat = coords[1];
+        
+        // Create a cache key
+        final cacheKey = '${lat}_${lng}';
+        
+        // Return cached address if available
+        if (_addressCache.containsKey(cacheKey)) {
+          return _addressCache[cacheKey]!;
+        }
+        
+        // Add a small delay to respect Nominatim's usage policy
+        await Future.delayed(const Duration(milliseconds: 1000));
+        
+        final response = await http.get(
+          Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1'),
+        );
+
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          final address = data['address'] as Map<String, dynamic>?;
+          
+          if (address != null) {
+            // Build detailed address similar to your example
+            final List<String> addressParts = [];
+            
+            // Add road/street
+            if (address['road'] != null) {
+              addressParts.add(address['road'].toString());
+            }
+            
+            // Add suburb/neighbourhood
+            if (address['suburb'] != null) {
+              addressParts.add(address['suburb'].toString());
+            } else if (address['neighbourhood'] != null) {
+              addressParts.add(address['neighbourhood'].toString());
+            }
+            
+            // Add city/municipality
+            if (address['city'] != null) {
+              addressParts.add(address['city'].toString());
+            } else if (address['municipality'] != null) {
+              addressParts.add(address['municipality'].toString());
+            } else if (address['town'] != null) {
+              addressParts.add(address['town'].toString());
+            }
+            
+            // Add state/province with postal code if available
+            final state = address['state'] ?? address['province'];
+            final postcode = address['postcode'];
+            if (state != null) {
+              if (postcode != null) {
+                addressParts.add('$state ($postcode)');
+              } else {
+                addressParts.add(state.toString());
+              }
+            }
+            
+            // Add country
+            if (address['country'] != null) {
+              addressParts.add(address['country'].toString());
+            }
+            
+            final fullAddress = addressParts.join(', ');
+            
+            // Cache and return
+            _addressCache[cacheKey] = fullAddress.isNotEmpty ? fullAddress : data['display_name'] ?? 'Unknown Location';
+            return _addressCache[cacheKey]!;
+          }
+          
+          // Fallback to display_name if address parsing fails
+          final displayName = data['display_name']?.toString() ?? 'Unknown Location';
+          _addressCache[cacheKey] = displayName;
+          return displayName;
+        }
+      }
+    }
+  } catch (e) {
+    print('Error fetching address: $e');
+  }
+  return 'Unknown Location';
+}
+
+String _getLocationCoordinates(dynamic location) {
+  if (location == null) return 'N/A';
+  
+  try {
+    if (location is Map && location.containsKey('coordinates')) {
+      final coords = location['coordinates'];
+      if (coords is List && coords.length >= 2) {
+        final lng = coords[0];
+        final lat = coords[1];
+        return '(${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)})';
+      }
+    }
+  } catch (e) {
+    print('Error parsing location: $e');
+  }
+  return 'Invalid location';
+}
 
   Future<void> _loadCrimeStats() async {
     try {
-      String startDateStr = DateFormat('yyyy-MM-dd').format(_startDate);
-      String endDateStr = DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1)));
+String startDateStr = DateFormat('yyyy-MM-dd').format(_dashboardStartDate);
+String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const Duration(days: 1)));
 
-      final crimeResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('type_id, crime_type(name, level, category)')
-          .gte('created_at', startDateStr)
-          .lt('created_at', endDateStr);
+    final crimeResponse = await Supabase.instance.client
+        .from('hotspot')
+        .select('type_id, crime_type(name, level, category)')
+        .gte('time', startDateStr)
+        .lt('time', endDateStr);
 
       Map<String, int> crimeCounts = {};
       Map<String, int> levelCounts = {};
@@ -860,22 +990,22 @@ Future<void> _loadUserStats() async {
 
   Future<void> _loadHotspotData() async {
     try {
-      String startDateStr = DateFormat('yyyy-MM-dd').format(_startDate);
-      String endDateStr = DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1)));
+String startDateStr = DateFormat('yyyy-MM-dd').format(_dashboardStartDate);
+String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const Duration(days: 1)));
 
-      final hotspotResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('created_at, crime_type(name)')
-          .gte('created_at', startDateStr)
-          .lt('created_at', endDateStr)
-          .eq('status', 'approved')
-          .order('created_at');
+    final hotspotResponse = await Supabase.instance.client
+        .from('hotspot')
+        .select('time, crime_type(name)')
+        .gte('time', startDateStr)
+        .lt('time', endDateStr)
+        .eq('status', 'approved')
+        .order('time');
 
       Map<String, int> dailyCounts = {};
 
       for (var hotspot in hotspotResponse) {
         String date = DateFormat('yyyy-MM-dd').format(
-          DateTime.parse(hotspot['created_at'])
+          DateTime.parse(hotspot['time'])
         );
         dailyCounts[date] = (dailyCounts[date] ?? 0) + 1;
       }
@@ -900,11 +1030,11 @@ Future<void> _loadUserStats() async {
 
   Future<void> _loadReportStats() async {
     try {
-      final reportResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('status')
-          .gte('created_at', DateFormat('yyyy-MM-dd').format(_startDate))
-          .lt('created_at', DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1))));
+    final reportResponse = await Supabase.instance.client
+        .from('hotspot')
+        .select('status')
+        .gte('time', DateFormat('yyyy-MM-dd').format(_startDate))
+        .lt('time', DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1))));
 
       Map<String, int> statusCounts = {
         'approved': 0,
@@ -930,11 +1060,11 @@ Future<void> _loadUserStats() async {
 
   Future<void> _loadActivityStats() async {
     try {
-      final activityResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('active_status')
-          .gte('created_at', DateFormat('yyyy-MM-dd').format(_startDate))
-          .lt('created_at', DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1))));
+    final activityResponse = await Supabase.instance.client
+        .from('hotspot')
+        .select('active_status')
+        .gte('time', DateFormat('yyyy-MM-dd').format(_startDate))
+        .lt('time', DateFormat('yyyy-MM-dd').format(_endDate.add(const Duration(days: 1))));
 
       Map<String, int> activityCounts = {
         'active': 0,
@@ -957,6 +1087,61 @@ Future<void> _loadUserStats() async {
     }
   }
 
+    int? _calculateAge(String? bdayString) {
+  if (bdayString == null) return null;
+  
+  try {
+    final bday = DateTime.parse(bdayString);
+    final today = DateTime.now();
+    int age = today.year - bday.year;
+    
+    // Check if birthday hasn't occurred this year yet
+    if (today.month < bday.month || 
+        (today.month == bday.month && today.day < bday.day)) {
+      age--;
+    }
+    
+    return age;
+  } catch (e) {
+    return null;
+  }
+}
+
+Future<void> _loadReportsData() async {
+  try {
+String startDateStr = DateFormat('yyyy-MM-dd').format(_reportsStartDate);
+String endDateStr = DateFormat('yyyy-MM-dd').format(_reportsEndDate.add(const Duration(days: 1)));
+    
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .select('''
+          *,
+          crime_type(name, level, category),
+          users!hotspot_created_by_fkey(first_name, last_name, email),
+          reporter:users!hotspot_reported_by_fkey(first_name, last_name, email)
+        ''')
+        .gte('time', startDateStr)
+        .lt('time', endDateStr)
+        .order('time', ascending: false);
+      
+      setState(() {
+        _reportsData = List<Map<String, dynamic>>.from(response);
+        
+        // Update available filter options
+        _availableStatuses = SearchAndFilterService.getUniqueStatuses(_reportsData);
+        _availableLevels = SearchAndFilterService.getUniqueLevels(_reportsData);
+        _availableCategories = SearchAndFilterService.getUniqueCategories(_reportsData);
+        _availableActivityStatuses = SearchAndFilterService.getUniqueActivityStatuses(_reportsData);
+        
+        // Initialize filtered data
+        _filteredReportsData = List.from(_reportsData);
+      });
+      
+      _filterReports();
+    } catch (e) {
+      print('Error loading reports data: $e');
+    }
+  }
 Future<void> _selectDateRange() async {
   DateTime firstDate = DateTime(2020, 1, 1);
   DateTime lastDate = DateTime.now();
@@ -965,7 +1150,7 @@ Future<void> _selectDateRange() async {
     context: context,
     firstDate: firstDate,
     lastDate: lastDate,
-    initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
+    initialDateRange: DateTimeRange(start: _dashboardStartDate, end: _dashboardEndDate),
     builder: (context, child) {
       final isDesktop = MediaQuery.of(context).size.width > 600;
       final size = MediaQuery.of(context).size;
@@ -979,11 +1164,11 @@ Future<void> _selectDateRange() async {
         ),
         child: isDesktop
             ? Center(
-                child: IntrinsicHeight( // 👈 lets the picker shrink/expand naturally
+                child: IntrinsicHeight(
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
-                      maxWidth: 470,          // fixed modal width
-                      maxHeight: size.height * 0.9, // safety cap
+                      maxWidth: 470,
+                      maxHeight: size.height * 0.9,
                     ),
                     child: Material(
                       elevation: 10,
@@ -1013,18 +1198,88 @@ Future<void> _selectDateRange() async {
     }
 
     setState(() {
-      _startDate = DateTime(picked.start.year, picked.start.month, picked.start.day);
-      _endDate = DateTime(picked.end.year, picked.end.month, picked.end.day);
+      _dashboardStartDate = DateTime(picked.start.year, picked.start.month, picked.start.day);
+      _dashboardEndDate = DateTime(picked.end.year, picked.end.month, picked.end.day);
+      
+      // Update old variables for backward compatibility
+      _startDate = _dashboardStartDate;
+      _endDate = _dashboardEndDate;
     });
 
     _fadeController.reset();
     _slideController.reset();
     _chartController.reset();
+    _addressCache.clear();
 
     _loadDashboardData();
   }
 }
 
+Future<void> _selectReportsDateRange() async {
+  DateTime firstDate = DateTime(2020, 1, 1);
+  DateTime lastDate = DateTime.now();
+
+  DateTimeRange? picked = await showDateRangePicker(
+    context: context,
+    firstDate: firstDate,
+    lastDate: lastDate,
+    initialDateRange: DateTimeRange(start: _reportsStartDate, end: _reportsEndDate),
+    builder: (context, child) {
+      final isDesktop = MediaQuery.of(context).size.width > 600;
+      final size = MediaQuery.of(context).size;
+
+      return Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF6366F1),
+            brightness: Brightness.light,
+          ),
+        ),
+        child: isDesktop
+            ? Center(
+                child: IntrinsicHeight(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: 470,
+                      maxHeight: size.height * 0.9,
+                    ),
+                    child: Material(
+                      elevation: 10,
+                      borderRadius: BorderRadius.circular(20),
+                      clipBehavior: Clip.antiAlias,
+                      child: child,
+                    ),
+                  ),
+                ),
+              )
+            : child!,
+      );
+    },
+  );
+
+  if (picked != null) {
+    if (picked.start.isAfter(picked.end)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Start date must be before end date'),
+          backgroundColor: Colors.red.shade400,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _reportsStartDate = DateTime(picked.start.year, picked.start.month, picked.start.day);
+      _reportsEndDate = DateTime(picked.end.year, picked.end.month, picked.end.day);
+    });
+
+    // Reload only reports data
+    await _loadReportsData();
+    _filterReports();
+  }
+}
 
 
 @override
@@ -1487,6 +1742,7 @@ void _navigateToPage(String page) {
   setState(() {
     _currentPage = page;
     _isSidebarOpen = false;
+    _addressCache.clear();
   });
   _sidebarController.reverse();
   
@@ -1527,56 +1783,7 @@ Widget _buildCurrentPage() {
 
 
 
-  int? _calculateAge(String? bdayString) {
-  if (bdayString == null) return null;
-  
-  try {
-    final bday = DateTime.parse(bdayString);
-    final today = DateTime.now();
-    int age = today.year - bday.year;
-    
-    // Check if birthday hasn't occurred this year yet
-    if (today.month < bday.month || 
-        (today.month == bday.month && today.day < bday.day)) {
-      age--;
-    }
-    
-    return age;
-  } catch (e) {
-    return null;
-  }
-}
 
-  Future<void> _loadReportsData() async {
-    try {
-      final response = await Supabase.instance.client
-          .from('hotspot')
-          .select('''
-            *,
-            crime_type(name, level, category),
-            users!hotspot_created_by_fkey(first_name, last_name, email),
-            reporter:users!hotspot_reported_by_fkey(first_name, last_name, email)
-          ''')
-          .order('created_at', ascending: false);
-      
-      setState(() {
-        _reportsData = List<Map<String, dynamic>>.from(response);
-        
-        // Update available filter options
-        _availableStatuses = SearchAndFilterService.getUniqueStatuses(_reportsData);
-        _availableLevels = SearchAndFilterService.getUniqueLevels(_reportsData);
-        _availableCategories = SearchAndFilterService.getUniqueCategories(_reportsData);
-        _availableActivityStatuses = SearchAndFilterService.getUniqueActivityStatuses(_reportsData);
-        
-        // Initialize filtered data
-        _filteredReportsData = List.from(_reportsData);
-      });
-      
-      _filterReports();
-    } catch (e) {
-      print('Error loading reports data: $e');
-    }
-  }
 
 
 void _showChangeRoleDialog(Map<String, dynamic> user) {
@@ -2447,11 +2654,11 @@ Widget _buildUserCard(Map<String, dynamic> user) {
     ),
   );
 }
-
 Widget _buildDetailItem({
   required IconData icon,
   required String label,
-  required String value, String? subtitle,
+  required String value,
+  String? subtitle,
 }) {
   return Row(
     children: [
@@ -2484,11 +2691,21 @@ Widget _buildDetailItem({
             Text(
               value,
               style: const TextStyle(
-                fontSize: 14,
+                fontSize: 14, // Changed from 14 to 15 to match location section
                 color: Color(0xFF111827),
                 fontWeight: FontWeight.w600,
               ),
             ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF6B7280),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -3219,7 +3436,7 @@ Widget _buildReportCard(Map<String, dynamic> report) {
                           
                           Text(
                             report['created_at'] != null
-                                ? _getTimeAgo(DateTime.parse(report['created_at']))
+                                ? _getTimeAgo(_convertToPhilippinesTime(report['created_at']))
                                 : 'Unknown',
                             style: const TextStyle(
                               fontSize: 12,
@@ -3281,9 +3498,13 @@ Widget _buildReportCard(Map<String, dynamic> report) {
                             ),
                             child: Center(
                               child: Text(
-                                _getInitials(report['reporter'] != null
-                                    ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'
-                                    : 'Admin'),
+                                _getInitials(
+                                  (report['reporter'] != null && report['reported_by'] != null)
+                                      ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'
+                                      : (report['users'] != null 
+                                          ? '${report['users']['first_name'] ?? ''} ${report['users']['last_name'] ?? ''}'
+                                          : 'Admin')
+                              ),
                                 style: const TextStyle(
                                   color: Color(0xFF6366F1),
                                   fontWeight: FontWeight.bold,
@@ -3307,9 +3528,12 @@ Widget _buildReportCard(Map<String, dynamic> report) {
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  report['reporter'] != null
+                                  // Check if reported_by exists, otherwise use created_by
+                                  (report['reporter'] != null && report['reported_by'] != null)
                                       ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'.trim()
-                                      : 'Administrator',
+                                      : (report['users'] != null 
+                                          ? '${report['users']['first_name'] ?? ''} ${report['users']['last_name'] ?? ''}'.trim()
+                                          : 'Administrator'),
                                   style: const TextStyle(
                                     fontSize: 15,
                                     color: Color(0xFF111827),
@@ -3340,8 +3564,8 @@ Widget _buildReportCard(Map<String, dynamic> report) {
                                   icon: Icons.access_time, 
                                   label: 'Time of Incident',
                                   value: report['time'] != null
-                                      ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['time']))} at ${DateFormat('h:mm a').format(DateTime.parse(report['time']))}'
-                                      : 'Unknown time',
+                                  ? '${DateFormat('MMM d, yyyy').format(_convertToPhilippinesTime(report['time']))} at ${DateFormat('h:mm a').format(_convertToPhilippinesTime(report['time']))}'
+                                  : 'Unknown time',
                                 ),
                                 const SizedBox(height: 12),
                                 _buildDetailItem(
@@ -3351,11 +3575,62 @@ Widget _buildReportCard(Map<String, dynamic> report) {
                                       ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['created_at']))} at ${DateFormat('h:mm a').format(DateTime.parse(report['created_at']))}'
                                       : 'Unknown date',
                                 ),
+
                               ],
                             ),
                           ),
+
+                          
                         ],
+                        
                       ),
+const SizedBox(height: 12),
+FutureBuilder<String>(
+  future: _getAddressFromCoordinates(report['location']),
+  builder: (context, snapshot) {
+    String address;
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      address = 'Loading address...';
+    } else if (snapshot.hasError) {
+      address = 'Error loading address';
+    } else {
+      address = snapshot.data ?? 'Unknown Location';
+    }
+    
+    final coordinates = _getLocationCoordinates(report['location']);
+    
+    return Row(
+      children: [
+        Expanded(
+          child: _buildDetailItem(
+            icon: Icons.location_on,
+            label: 'Location',
+            value: address,
+            subtitle: coordinates,
+          ),
+        ),
+        IconButton(
+          icon: const Icon(
+            Icons.content_copy,
+            size: 18,
+            color: Color(0xFF6B7280),
+          ),
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: coordinates));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Coordinates copied to clipboard'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          tooltip: 'Copy coordinates',
+        ),
+      ],
+    );
+  },
+),
+                      
                     ],
                   ),
                 ),
@@ -3633,7 +3908,7 @@ Widget _buildReportsPageDesktop() {
                 ),
                 DataColumn(
                   label: Text(
-                    'Status',
+                    'Activity Status',
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF374151),
@@ -3643,7 +3918,7 @@ Widget _buildReportsPageDesktop() {
                 ),
                 DataColumn(
                   label: Text(
-                    'Activity',
+                    'Location',
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF374151),
@@ -3721,46 +3996,127 @@ Widget _buildReportsPageDesktop() {
                         ),
                       ),
                     ),
-                    DataCell(
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _getStatusColor(report['status']).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: _getStatusColor(report['status'])),
-                        ),
-                        child: Text(
-                          (report['status'] ?? 'PENDING').toUpperCase(),
-                          style: TextStyle(
-                            color: _getStatusColor(report['status']),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                // Combined Status & Activity Cell (side by side)
+DataCell(
+  Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      // Status Badge
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: _getStatusColor(report['status']).withOpacity(0.1),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: _getStatusColor(report['status'])),
+        ),
+        child: Text(
+          (report['status'] ?? 'PENDING').toUpperCase(),
+          style: TextStyle(
+            color: _getStatusColor(report['status']),
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      const SizedBox(width: 8),
+      // Activity Badge
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: _getActivityColor(report['active_status']).withOpacity(0.1),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: _getActivityColor(report['active_status'])),
+        ),
+        child: Text(
+          (report['active_status'] ?? 'ACTIVE').toUpperCase(),
+          style: TextStyle(
+            color: _getActivityColor(report['active_status']),
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    ],
+  ),
+),
+
+DataCell(
+  FutureBuilder<String>(
+    future: _getAddressFromCoordinates(report['location']),
+    builder: (context, snapshot) {
+      final coordinates = _getLocationCoordinates(report['location']);
+      
+      String address;
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        address = 'Loading...';
+      } else if (snapshot.hasError) {
+        address = 'Error loading address';
+      } else {
+        address = snapshot.data ?? 'Unknown Location';
+      }
+      
+      return Tooltip(
+        message: '$address\n$coordinates',
+        child: SizedBox(
+          width: 250,
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      address,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF374151),
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      coordinates,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6B7280),
                       ),
                     ),
-                    DataCell(
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _getActivityColor(report['active_status']).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: _getActivityColor(report['active_status'])),
-                        ),
-                        child: Text(
-                          (report['active_status'] ?? 'ACTIVE').toUpperCase(),
-                          style: TextStyle(
-                            color: _getActivityColor(report['active_status']),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(
+                  Icons.content_copy,
+                  size: 16,
+                  color: Color(0xFF6B7280),
+                ),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: coordinates));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Coordinates copied to clipboard'),
+                      duration: Duration(seconds: 2),
                     ),
+                  );
+                },
+                tooltip: 'Copy coordinates',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  ),
+),
                     DataCell(
                       Text(
                         report['time'] != null
-                            ? '${DateFormat('MMM d, yyyy').format(DateTime.parse(report['time']))} at ${DateFormat('h:mm a').format(DateTime.parse(report['time']))}'
+                            ? '${DateFormat('MMM d, yyyy').format(_convertToPhilippinesTime(report['time']))} at ${DateFormat('h:mm a').format(_convertToPhilippinesTime(report['time']))}'
                             : 'Unknown time',
                         style: const TextStyle(
                           fontSize: 14,
@@ -3791,9 +4147,13 @@ Widget _buildReportsPageDesktop() {
                             ),
                             child: Center(
                               child: Text(
-                                _getInitials(report['reporter'] != null
-                                    ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'
-                                    : 'Admin'),
+                                _getInitials(
+                                      (report['reporter'] != null && report['reported_by'] != null)
+                                          ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'
+                                          : (report['users'] != null 
+                                              ? '${report['users']['first_name'] ?? ''} ${report['users']['last_name'] ?? ''}'
+                                              : 'Admin')
+                                  ),
                                 style: const TextStyle(
                                   color: Color(0xFF6366F1),
                                   fontWeight: FontWeight.bold,
@@ -3804,9 +4164,12 @@ Widget _buildReportsPageDesktop() {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            report['reporter'] != null
-                                ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'.trim()
-                                : 'Administrator',
+                            // Check if reported_by exists, otherwise use created_by
+                          (report['reporter'] != null && report['reported_by'] != null)
+                              ? '${report['reporter']['first_name'] ?? ''} ${report['reporter']['last_name'] ?? ''}'.trim()
+                              : (report['users'] != null 
+                                  ? '${report['users']['first_name'] ?? ''} ${report['users']['last_name'] ?? ''}'.trim()
+                                  : 'Administrator'),
                             style: const TextStyle(
                               fontSize: 14,
                               color: Color(0xFF374151),
@@ -4403,7 +4766,52 @@ Widget _buildSafeSpotCard(Map<String, dynamic> safeSpot) {
                           ),
                         ],
                       ),
-
+                      const SizedBox(height: 12),
+FutureBuilder<String>(
+  future: _getAddressFromCoordinates(safeSpot['location']),
+  builder: (context, snapshot) {
+    String address;
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      address = 'Loading address...';
+    } else if (snapshot.hasError) {
+      address = 'Error loading address';
+    } else {
+      address = snapshot.data ?? 'Unknown Location';
+    }
+    
+    final coordinates = _getLocationCoordinates(safeSpot['location']);
+    
+    return Row(
+      children: [
+        Expanded(
+          child: _buildDetailItem(
+            icon: Icons.location_on,
+            label: 'Location',
+            value: address,
+            subtitle: coordinates,
+          ),
+        ),
+        IconButton(
+          icon: const Icon(
+            Icons.content_copy,
+            size: 18,
+            color: Color(0xFF6B7280),
+          ),
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: coordinates));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Coordinates copied to clipboard'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          tooltip: 'Copy coordinates',
+        ),
+      ],
+    );
+  },
+),
                     ],
                   ),
                 ),
@@ -4681,6 +5089,16 @@ Widget _buildSafeSpotsPageDesktop() {
                         ),
                       ),
                       DataColumn(
+                      label: Text(
+                        'Location',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF374151),
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                      DataColumn(
                         label: Text(
                           'Description',
                           style: TextStyle(
@@ -4770,6 +5188,82 @@ Widget _buildSafeSpotsPageDesktop() {
                               ),
                             ),
                           ),
+
+                       
+DataCell(
+  FutureBuilder<String>(
+    future: _getAddressFromCoordinates(safeSpot['location']),
+    builder: (context, snapshot) {
+      final coordinates = _getLocationCoordinates(safeSpot['location']);
+      
+      String address;
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        address = 'Loading...';
+      } else if (snapshot.hasError) {
+        address = 'Error loading address';
+      } else {
+        address = snapshot.data ?? 'Unknown Location';
+      }
+      
+      return Tooltip(
+        message: '$address\n$coordinates',
+        child: SizedBox(
+          width: 250,
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      address,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF374151),
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      coordinates,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(
+                  Icons.content_copy,
+                  size: 16,
+                  color: Color(0xFF6B7280),
+                ),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: coordinates));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Coordinates copied to clipboard'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+                tooltip: 'Copy coordinates',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  ),
+),
                           DataCell(
                             Text(
                               safeSpot['description']?.toString() ?? 'No description',
@@ -5987,6 +6481,8 @@ Widget _buildModernAppBar() {
             ],
           ),
         ),
+        
+        // Dashboard Refresh Button
         if (_currentPage == 'dashboard')
           Container(
             decoration: BoxDecoration(
@@ -6009,6 +6505,53 @@ Widget _buildModernAppBar() {
                 _loadDashboardData();
               },
               tooltip: 'Refresh Data',
+            ),
+          ),
+        
+        // Reports Page Calendar Button
+        if (_currentPage == 'reports')
+          GestureDetector(
+            onTap: _selectReportsDateRange,
+            child: Container(
+              padding: MediaQuery.of(context).size.width > 768
+                  ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10)
+                  : const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6366F1),
+                borderRadius: BorderRadius.circular(15),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF6366F1).withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: MediaQuery.of(context).size.width > 768
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.calendar_today,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${DateFormat('MMM d').format(_reportsStartDate)} - ${DateFormat('MMM d').format(_reportsEndDate)}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    )
+                  : const Icon(
+                      Icons.calendar_today,
+                      color: Colors.white,
+                      size: 20,
+                    ),
             ),
           ),
       ],
@@ -9744,6 +10287,12 @@ Color _getCrimeLevelColor(String? level) {
   }
   
   _getMaxWidth() {}
+  
+DateTime _convertToPhilippinesTime(String utcTimeString) {
+  final utcTime = DateTime.parse(utcTimeString);
+  // Philippines is UTC+8
+  return utcTime.add(const Duration(hours: 8));
+}
 }
 
 IconData? _getActivityIcon(String key) {

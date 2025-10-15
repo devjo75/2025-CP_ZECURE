@@ -169,17 +169,17 @@ class SearchAndFilterService {
       }).toList();
     }
 
-    // Apply date range filter
-    if (startDate != null && endDate != null) {
-      filteredReports = filteredReports.where((report) {
-        if (report['created_at'] != null) {
-          DateTime reportDate = DateTime.parse(report['created_at'].toString());
-          return reportDate.isAfter(startDate.subtract(const Duration(days: 1))) &&
-                 reportDate.isBefore(endDate.add(const Duration(days: 1)));
-        }
-        return false;
-      }).toList();
+// Apply date range filter
+if (startDate != null && endDate != null) {
+  filteredReports = filteredReports.where((report) {
+    if (report['time'] != null) {
+      DateTime reportDate = DateTime.parse(report['time'].toString());
+      return reportDate.isAfter(startDate.subtract(const Duration(days: 1))) &&
+             reportDate.isBefore(endDate.add(const Duration(days: 1)));
     }
+    return false;
+  }).toList();
+}
 
     // Apply sorting
     if (sortBy != null) {
@@ -324,8 +324,8 @@ class SearchAndFilterService {
           bValue = bReporter.toLowerCase();
           break;
         case 'date':
-          aValue = a['created_at'] != null ? DateTime.parse(a['created_at'].toString()) : DateTime.now();
-          bValue = b['created_at'] != null ? DateTime.parse(b['created_at'].toString()) : DateTime.now();
+          aValue = a['time'] != null ? DateTime.parse(a['time'].toString()) : DateTime.now();
+          bValue = b['time'] != null ? DateTime.parse(b['time'].toString()) : DateTime.now();
           break;
         case 'activity_status':
           // Active reports should come first

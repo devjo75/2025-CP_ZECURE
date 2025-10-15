@@ -431,10 +431,7 @@ final centerOffset = leftOffset + (availableWidth - modalWidth) / 2;
                                 padding: const EdgeInsets.all(20),
                                 decoration: BoxDecoration(
                                   gradient: LinearGradient(
-                                    colors: [
-                                      Colors.red.shade500,
-                                      Colors.red.shade600,
-                                    ],
+                                  colors: [Color(0xFF1e3a8a), Color(0xFF3b82f6)],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   ),

@@ -136,7 +136,7 @@ Timer? _deferredLoadTimer;
 
 
   //MAP ZOOM FOR LABEL
-  double _currentZoom = 15.0;
+  double _currentZoom = 15.5;
 
   //MAP ROTATION
   double _currentMapRotation = 0.0;
@@ -211,12 +211,17 @@ bool _showHeatmap = true; // Toggle for users
 bool _isCalculatingHeatmap = false;
 Timer? _heatmapUpdateTimer;
 
-// Constants
-// ignore: unused_field
-static const double HEATMAP_RADIUS = 500.0;
 static const double CLUSTER_MERGE_DISTANCE = 300.0;
 static const int MIN_CRIMES_FOR_HOTSPOT = 3;
-static const int HEATMAP_TIME_WINDOW_DAYS = 30;
+static const Map<String, int> SEVERITY_TIME_WINDOWS = {
+  'critical': 60,  // 60 days for critical crimes
+  'high': 45,      // 45 days for high severity
+  'medium': 30,    // 30 days for medium
+  'low': 30,       // 30 days for low
+};
+
+// Get the maximum time window for initial data loading
+static int get MAX_TIME_WINDOW => SEVERITY_TIME_WINDOWS.values.reduce((a, b) => a > b ? a : b);
 
 static const Map<String, double> SEVERITY_WEIGHTS = {
   'critical': 1.0,
@@ -257,13 +262,13 @@ bool _showSavePointSelector = false; // New state for savepoint button
 
 Timer? _timeUpdateTimer;
 
-
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
-  if (!_markersLoaded) return []; // Don't show markers until loaded
+  if (!_markersLoaded) return [];
+
+  final currentUserId = _userProfile?['id'];
 
   if (_currentZoom < 8.0) {
-    // Very far zoom: show dots for all active approved crimes
     return _hotspots
         .where((h) {
           final status = h['status'] ?? 'approved';
@@ -273,57 +278,65 @@ List<Map<String, dynamic>> get _visibleHotspots {
         .take(100)
         .toList();
   } else if (_currentZoom < 10.0) {
-    // Very zoomed out: show all active approved crimes + own pending
     return _hotspots
         .where((h) {
           final status = h['status'] ?? 'approved';
           final activeStatus = h['active_status'] ?? 'active';
-          final currentUserId = _userProfile?['id'];
           final createdBy = h['created_by'];
           final reportedBy = h['reported_by'];
           final isOwnHotspot = currentUserId != null &&
               (currentUserId == createdBy || currentUserId == reportedBy);
           
-          // Show approved + active, or own pending hotspots
           return (status == 'approved' && activeStatus == 'active') ||
-                 (status == 'pending' && isOwnHotspot);
+                 (status == 'pending' && (_hasAdminPermissions || isOwnHotspot));
         })
         .take(50)
         .toList();
   } else if (_currentZoom < 13.0) {
-    // Medium zoom: show all active + pending hotspots
     return _hotspots
         .where((h) {
           final status = h['status'] ?? 'approved';
           final activeStatus = h['active_status'] ?? 'active';
-          final currentUserId = _userProfile?['id'];
           final createdBy = h['created_by'];
           final reportedBy = h['reported_by'];
           final isOwnHotspot = currentUserId != null &&
               (currentUserId == createdBy || currentUserId == reportedBy);
           
-          // Show approved + active, pending (all or own), or admin sees all
           return _hasAdminPermissions ||
                  (status == 'approved' && activeStatus == 'active') ||
-                 status == 'pending' ||
-                 (isOwnHotspot && currentUserId != null);
+                 (status == 'pending' && (_hasAdminPermissions || isOwnHotspot));
         })
         .take(_maxMarkersToShow)
         .toList();
-  } else {
-    // Close zoom: show all hotspots, including rejected and inactive, with limit
+  } else if (_currentZoom < 16.0) {
+    // Below zoom 16: Only show approved+active and pending (NO rejected or inactive)
     return _hotspots
         .where((h) {
           final status = h['status'] ?? 'approved';
           final activeStatus = h['active_status'] ?? 'active';
-          final currentUserId = _userProfile?['id'];
           final createdBy = h['created_by'];
           final reportedBy = h['reported_by'];
           final isOwnHotspot = currentUserId != null &&
               (currentUserId == createdBy || currentUserId == reportedBy);
 
-          // Include all hotspots (approved, pending, rejected, active, inactive)
-          // Admins see all, users see approved/active, own hotspots, or pending
+          // Show approved+active OR pending (for admins OR own reports)
+          return _hasAdminPermissions ||
+              (status == 'approved' && activeStatus == 'active') ||
+              (status == 'pending' && (_hasAdminPermissions || isOwnHotspot));
+        })
+        .take(_maxMarkersToShow)
+        .toList();
+  } else {
+    // Zoom 16+: Show ALL including rejected and inactive
+    return _hotspots
+        .where((h) {
+          final status = h['status'] ?? 'approved';
+          final activeStatus = h['active_status'] ?? 'active';
+          final createdBy = h['created_by'];
+          final reportedBy = h['reported_by'];
+          final isOwnHotspot = currentUserId != null &&
+              (currentUserId == createdBy || currentUserId == reportedBy);
+
           return _hasAdminPermissions ||
               status == 'approved' ||
               status == 'pending' ||
@@ -336,18 +349,31 @@ List<Map<String, dynamic>> get _visibleHotspots {
   }
 }
 
+
+
 // NEW: Progressive safe spots loading
 List<Map<String, dynamic>> get _visibleSafeSpots {
   if (!_markersLoaded || !_showSafeSpots) return [];
   
+  final markerLimit = _getMarkerLimit();
+  
   if (_currentZoom < 8.0) {
-    // Very far zoom: show dots for verified safe spots only
     return _safeSpots.where((s) => s['verified'] == true).take(50).toList();
   } else if (_currentZoom < 12.0) {
-    // Only show verified safe spots when zoomed out
-    return _safeSpots.where((s) => s['verified'] == true).take(30).toList();
+    return _safeSpots.where((s) => s['verified'] == true).take(markerLimit ~/ 3).toList();
+  } else if (_currentZoom < 16.0) {
+    // Below zoom 16: Only show approved and pending (NO rejected)
+    return _safeSpots.where((safeSpot) {
+      final status = safeSpot['status'] ?? 'pending';
+      final currentUserId = _userProfile?['id'];
+      
+      if (status == 'approved') return true;
+      if (status == 'pending' && currentUserId != null) return true;
+      if (_hasAdminPermissions) return true;
+      return false;
+    }).take(markerLimit).toList();
   } else {
-    // Show all relevant safe spots when zoomed in
+    // Zoom 16+: Show ALL including rejected
     return _safeSpots.where((safeSpot) {
       final status = safeSpot['status'] ?? 'pending';
       final currentUserId = _userProfile?['id'];
@@ -359,11 +385,35 @@ List<Map<String, dynamic>> get _visibleSafeSpots {
       if (isOwnSpot && status == 'rejected') return true;
       if (_hasAdminPermissions) return true;
       return false;
-    }).toList();
+    }).take(markerLimit).toList();
   }
 }
 
 
+int _getMarkerLimit() {
+  if (_currentZoom < 8.0) return 100;
+  if (_currentZoom < 10.0) return 150;
+  if (_currentZoom < 12.0) return 250;
+  if (_currentZoom < 14.0) return 400;
+  if (_currentZoom < 16.0) return 600;
+  return 1000; // Max markers at closest zoom
+}
+
+Timer? _zoomDebounceTimer;
+
+void _onMapZoomChanged(double newZoom) {
+  // Cancel any existing timer
+  _zoomDebounceTimer?.cancel();
+  
+  // Set a new timer to update zoom after 100ms of no changes
+  _zoomDebounceTimer = Timer(const Duration(milliseconds: 100), () {
+    if (mounted && _currentZoom != newZoom) {
+      setState(() {
+        _currentZoom = newZoom;
+      });
+    }
+  });
+}
 
 List<Map<String, dynamic>> _getFilteredNotifications() {
   switch (_notificationFilter) {
@@ -520,7 +570,7 @@ void _getCurrentLocationAsync() async {
         if (mounted && _currentPosition != null) {
           // Safe to use MapController now
           try {
-            _mapController.move(_currentPosition!, 15.0);
+            _mapController.move(_currentPosition!, 15.5);
           } catch (e) {
             // MapController might not be ready yet, that's okay
             print('MapController not ready yet, will retry: $e');
@@ -712,6 +762,7 @@ void dispose() {
   _savePoints.clear();
 _heatmapUpdateTimer?.cancel();  
   _timeUpdateTimer?.cancel();
+ 
   
   super.dispose();
 }
@@ -1863,63 +1914,129 @@ void _setupRealtimeSubscription() {
 }
 
 
+
 void _handleHotspotInsert(PostgresChangePayload payload) async {
   if (!mounted) return;
   
   try {
-    // Fetch the complete hotspot data with proper crime type info
+    // ADD SMALL DELAY to ensure database relationships are fully committed
+    await Future.delayed(const Duration(milliseconds: 300));
+    
+    // Fetch the complete hotspot data with proper crime type info AND user references
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
           *,
-          crime_type: type_id (id, name, level, category, description)
+          crime_type: type_id (id, name, level, category, description),
+          created_by_profile: created_by (id, name, email),
+          reported_by_profile: reported_by (id, name, email)
         ''')
         .eq('id', payload.newRecord['id'])
         .single();
 
     if (mounted) {
       setState(() {
-        // Ensure proper crime_type structure
-        final crimeType = response['crime_type'] ?? {};
-        _hotspots.add({
+        // Ensure proper crime_type structure AND preserve user IDs
+        final crimeType = response['crime_type'];
+        
+        // IMPROVED: Better handling of crime_type data
+        final crimeTypeData = crimeType != null && crimeType is Map ? {
+          'id': crimeType['id'] ?? response['type_id'],
+          'name': crimeType['name'] ?? 'Unknown',
+          'level': crimeType['level'] ?? 'unknown',
+          'category': crimeType['category'] ?? 'General',
+          'description': crimeType['description'],
+        } : {
+          'id': response['type_id'],
+          'name': 'Unknown',
+          'level': 'unknown',
+          'category': 'General',
+          'description': null,
+        };
+        
+        // INSERT AT THE BEGINNING (index 0)
+        _hotspots.insert(0, {
           ...response,
-          'crime_type': {
-            'id': crimeType['id'] ?? response['type_id'],
+          'created_by': response['created_by'],
+          'reported_by': response['reported_by'],
+          'crime_type': crimeTypeData,
+        });
+      });
+      
+      _updateHeatmapOnInsert(response);
+    }
+  } catch (e) {
+    print('Error in _handleHotspotInsert: $e');
+    
+    // IMPROVED FALLBACK: Try one more time after a longer delay
+    try {
+      await Future.delayed(const Duration(milliseconds: 800));
+      
+      final retryResponse = await Supabase.instance.client
+          .from('hotspot')
+          .select('''
+            *,
+            crime_type: type_id (id, name, level, category, description),
+            created_by_profile: created_by (id, name, email),
+            reported_by_profile: reported_by (id, name, email)
+          ''')
+          .eq('id', payload.newRecord['id'])
+          .single();
+      
+      if (mounted) {
+        setState(() {
+          final crimeType = retryResponse['crime_type'];
+          final crimeTypeData = crimeType != null && crimeType is Map ? {
+            'id': crimeType['id'] ?? retryResponse['type_id'],
             'name': crimeType['name'] ?? 'Unknown',
             'level': crimeType['level'] ?? 'unknown',
             'category': crimeType['category'] ?? 'General',
             'description': crimeType['description'],
-          }
-        });
-      });
-      
-      // ============================================
-      // UPDATE HEATMAP - NEW!
-      // ============================================
-      _updateHeatmapOnInsert(response);
-      // ============================================
-    }
-  } catch (e) {
-    print('Error in _handleHotspotInsert: $e');
-    if (mounted) {
-      setState(() {
-        _hotspots.add({
-          ...payload.newRecord,
-          'crime_type': {
-            'id': payload.newRecord['type_id'],
+          } : {
+            'id': retryResponse['type_id'],
             'name': 'Unknown',
             'level': 'unknown',
             'category': 'General',
-            'description': null
-          }
+            'description': null,
+          };
+          
+          _hotspots.insert(0, {
+            ...retryResponse,
+            'created_by': retryResponse['created_by'],
+            'reported_by': retryResponse['reported_by'],
+            'crime_type': crimeTypeData,
+          });
         });
-      });
+        
+        _updateHeatmapOnInsert(retryResponse);
+        print('✅ Retry successful - crime type loaded correctly');
+      }
+    } catch (retryError) {
+      print('Retry also failed: $retryError');
       
-      // Still update heatmap even with fallback data
-      _updateHeatmapOnInsert(payload.newRecord);
+      // Final fallback with payload data
+      if (mounted) {
+        setState(() {
+          _hotspots.insert(0, {
+            ...payload.newRecord,
+            'created_by': payload.newRecord['created_by'],
+            'reported_by': payload.newRecord['reported_by'],
+            'crime_type': {
+              'id': payload.newRecord['type_id'],
+              'name': 'Unknown',
+              'level': 'unknown',
+              'category': 'General',
+              'description': null
+            }
+          });
+        });
+        
+        _updateHeatmapOnInsert(payload.newRecord);
+      }
     }
   }
 }
+
 
 void _handleHotspotUpdate(PostgresChangePayload payload) async {
   if (!mounted) return;
@@ -1928,16 +2045,13 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
   print('Updated record: ${payload.newRecord}');
   
   try {
-    // Add a small delay to ensure database transaction is committed
     await Future.delayed(const Duration(milliseconds: 200));
     
-    // Get the previous hotspot data for comparison
     final previousHotspot = _hotspots.firstWhere(
       (h) => h['id'] == payload.newRecord['id'],
       orElse: () => {},
     );
 
-    // Fetch the COMPLETE updated hotspot data with all relations
     final response = await Supabase.instance.client
         .from('hotspot')
         .select('''
@@ -1951,19 +2065,26 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
 
     print('Fetched complete hotspot data: ${response['id']} - ${response['crime_type']?['name']}');
 
+    // NEW: Check if this is an auto-expiration
+    final wasActive = previousHotspot['active_status'] == 'active';
+    final isNowInactive = response['active_status'] == 'inactive';
+    final hasExpirationTime = response['expires_at'] != null;
+    
+    if (wasActive && isNowInactive && hasExpirationTime) {
+      // This was auto-expired by the cron job
+      _handleAutoExpiration(response, previousHotspot);
+    }
+
     if (mounted) {
       setState(() {
         final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
         
-        // Determine if non-admin users should see this hotspot
         final shouldShowForNonAdminOfficer = _shouldNonAdminOfficerSeeHotspot(response);
         
-        print('Hotspot index: $index, Should show for non-admin: $shouldShowForNonAdminOfficer, Has admin permissions: $_hasAdminPermissions');
+        print('Hotspot index: $index, Should show: $shouldShowForNonAdminOfficer, Is admin: $_hasAdminPermissions');
         
         if (index != -1) {
-          // Hotspot exists in current list
           if (_hasAdminPermissions || shouldShowForNonAdminOfficer) {
-            // Update the existing hotspot with complete data structure
             final crimeType = response['crime_type'] ?? {};
             _hotspots[index] = {
               ...response,
@@ -1977,14 +2098,11 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
             };
             print('Updated existing hotspot at index $index');
           } else {
-            // Non-admin user should no longer see this hotspot
             _hotspots.removeAt(index);
             print('Removed hotspot from non-admin view');
           }
         } else {
-          // Hotspot doesn't exist in current list
           if (_hasAdminPermissions || shouldShowForNonAdminOfficer) {
-            // Add it if user should see it
             final crimeType = response['crime_type'] ?? {};
             _hotspots.add({
               ...response,
@@ -2001,36 +2119,27 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
         }
       });
 
-      // Show appropriate status change messages
       _handleStatusChangeMessages(previousHotspot, response);
       
-      // ============================================
-      // UPDATE HEATMAP - NEW!
-      // ============================================
-      // Check if status changed to/from approved+active (affects heatmap visibility)
       final wasVisible = previousHotspot['status'] == 'approved' && 
                         previousHotspot['active_status'] == 'active';
       final isNowVisible = response['status'] == 'approved' && 
                           response['active_status'] == 'active';
       
-      // Only recalculate if visibility changed or crime type/location changed
       if (wasVisible != isNowVisible || 
           previousHotspot['type_id'] != response['type_id'] ||
           previousHotspot['location'] != response['location']) {
         print('🔄 Heatmap affected by update - recalculating...');
         _updateHeatmapOnUpdate(response);
       }
-      // ============================================
     }
   } catch (e) {
     print('Error in _handleHotspotUpdate: $e');
     
-    // Fallback: Try to update with basic payload data
     if (mounted) {
       setState(() {
         final index = _hotspots.indexWhere((h) => h['id'] == payload.newRecord['id']);
         if (index != -1) {
-          // Merge the new data while preserving existing crime_type if fetch failed
           _hotspots[index] = {
             ..._hotspots[index],
             ...payload.newRecord,
@@ -2046,18 +2155,77 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
         }
       });
       
-      // Update heatmap with fallback data
       _updateHeatmapOnUpdate(payload.newRecord);
     }
     
-    // Force a full reload as a last resort
     await Future.delayed(const Duration(milliseconds: 500));
     if (mounted) {
       print('Forcing full reload due to update error');
       await _loadHotspots();
-      // Heatmap will be recalculated after full reload
       _updateHeatmapOnUpdate({});
     }
+  }
+}
+
+/// Handle auto-expiration notifications and UI updates
+void _handleAutoExpiration(Map<String, dynamic> expiredHotspot, Map<String, dynamic> previousData) {
+  print('⏰ HOTSPOT AUTO-EXPIRED: ${expiredHotspot['id']}');
+  
+  final crimeTypeName = expiredHotspot['crime_type']?['name'] ?? 'Crime incident';
+  
+  // Show notification to admin
+  if (_isAdmin || _isOfficer) {
+    _showSnackBar(
+      '$crimeTypeName investigation period has ended and is now inactive.',
+    );
+  }
+  
+  // Optional: Create a system notification
+  _createExpirationNotification(expiredHotspot);
+  
+  // Update heatmap if needed
+  print('🔄 Heatmap: Removing expired hotspot from active crimes...');
+  _updateHeatmapOnUpdate(expiredHotspot);
+}
+
+
+/// Create a notification when hotspot expires
+Future<void> _createExpirationNotification(Map<String, dynamic> expiredHotspot) async {
+  try {
+    final notification = {
+      'user_id': _userProfile?['id'],
+      'title': 'Investigation Period Ended',
+      'message': 'The investigation for "${expiredHotspot['crime_type']?['name'] ?? 'crime incident'}" has automatically ended.',
+      'type': 'expiration',
+      'hotspot_id': expiredHotspot['id'],
+      'created_at': DateTime.now().toIso8601String(),
+    };
+
+    await Supabase.instance.client
+        .from('notifications')
+        .insert(notification);
+  } catch (e) {
+    print('Error creating expiration notification: $e');
+  }
+}
+
+/// Show remaining time until expiration in hotspot details
+String formatTimeRemaining(DateTime? expiresAt) {
+  if (expiresAt == null) return 'No expiration set';
+  
+  final now = DateTime.now();
+  final remaining = expiresAt.difference(now);
+  
+  if (remaining.isNegative) {
+    return 'Expired';
+  }
+  
+  if (remaining.inDays > 0) {
+    return '${remaining.inDays}d ${remaining.inHours % 24}h remaining';
+  } else if (remaining.inHours > 0) {
+    return '${remaining.inHours}h ${remaining.inMinutes % 60}m remaining';
+  } else {
+    return '${remaining.inMinutes}m remaining';
   }
 }
 
@@ -2092,8 +2260,9 @@ void _handleHotspotDelete(PostgresChangePayload payload) {
 
 
 
+
 void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
-  // Only add if approved AND within time window
+  // Only add if approved
   if (newCrime['status'] != 'approved') {
     print('❌ Crime not approved - not adding to heatmap');
     return;
@@ -2120,9 +2289,11 @@ void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
     
     final formattedCrime = _formatCrimeForHeatmap(response);
     
-    // Validate time window
+    // ⭐ UPDATED: Validate with dynamic time window based on severity
     if (!_isWithinHeatmapTimeWindow(formattedCrime)) {
-      print('❌ Crime outside ${HEATMAP_TIME_WINDOW_DAYS}-day window - not adding to heatmap');
+      final level = formattedCrime['crime_type']['level'] ?? 'low';
+      final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
+      print('❌ Crime outside $timeWindow-day window (${level}) - not adding to heatmap');
       return;
     }
     
@@ -2130,7 +2301,9 @@ void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
       _heatmapCrimes.add(formattedCrime);
     });
     
-    print('✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']})');
+    final level = formattedCrime['crime_type']['level'] ?? 'low';
+    final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
+    print('✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']}, ${level}, ${timeWindow}d window)');
     _scheduleHeatmapUpdate();
     
   } catch (e) {
@@ -2173,9 +2346,12 @@ void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
     
     final formattedCrime = _formatCrimeForHeatmap(response);
     
-    // Check if crime should be in heatmap
+    // ⭐ UPDATED: Check with dynamic time window
     final shouldBeInHeatmap = formattedCrime['status'] == 'approved' && 
                               _isWithinHeatmapTimeWindow(formattedCrime);
+    
+    final level = formattedCrime['crime_type']['level'] ?? 'low';
+    final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
     
     if (shouldBeInHeatmap) {
       if (index != -1) {
@@ -2183,13 +2359,13 @@ void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
         setState(() {
           _heatmapCrimes[index] = formattedCrime;
         });
-        print('✅ Updated crime in heatmap (${formattedCrime['crime_type']['name']})');
+        print('✅ Updated crime in heatmap (${formattedCrime['crime_type']['name']}, ${level}, ${timeWindow}d window)');
       } else {
         // Add if newly qualified
         setState(() {
           _heatmapCrimes.add(formattedCrime);
         });
-        print('✅ Added crime to heatmap after update (${formattedCrime['crime_type']['name']})');
+        print('✅ Added crime to heatmap after update (${formattedCrime['crime_type']['name']}, ${level})');
       }
     } else {
       // Remove if no longer qualified
@@ -2197,7 +2373,7 @@ void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
         setState(() {
           _heatmapCrimes.removeAt(index);
         });
-        print('❌ Removed crime from heatmap (expired or not approved)');
+        print('❌ Removed crime from heatmap (expired ${timeWindow}d window or not approved)');
       }
     }
     
@@ -2210,12 +2386,11 @@ void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
   }
 }
 
+// ============================================
+// Delete handler (no changes needed)
+// ============================================
 
 void _updateHeatmapOnDelete() {
-  // Note: We don't have the deleted crime ID here in the current implementation
-  // The heatmap will recalculate and naturally exclude the deleted crime
-  // since it won't be in _heatmapCrimes after the next fetch
-  
   print('🗑️ Crime deleted - scheduling heatmap recalculation...');
   _scheduleHeatmapUpdate();
 }
@@ -2611,7 +2786,7 @@ void _moveToCurrentLocation() {
   if (_currentPosition != null && mounted) {
     // Check if MapController is ready before using it
     try {
-      _mapController.move(_currentPosition!, 15.0);
+      _mapController.move(_currentPosition!, 15.5);
       setState(() {
         _locationButtonPressed = true;
       });
@@ -2629,7 +2804,7 @@ void _moveToCurrentLocation() {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _currentPosition != null) {
           try {
-            _mapController.move(_currentPosition!, 15.0);
+            _mapController.move(_currentPosition!, 15.5);
             setState(() {
               _locationButtonPressed = true;
             });
@@ -2694,7 +2869,7 @@ Future<void> _getCurrentLocation() async {
         _currentPosition = LatLng(position.latitude, position.longitude);
         _isLoading = false;
       });
-      // REMOVE THIS LINE: _mapController.move(_currentPosition!, 15.0);
+      // REMOVE THIS LINE: _mapController.move(_currentPosition!, 15.5);
     }
   } catch (e) {
     if (mounted) {
@@ -5202,10 +5377,13 @@ Widget _buildFloatingDurationWidget() {
   );
 }
 
+
+// ADD HOTSPOT
+// UPDATED: _showAddHotspotForm with OPTIONAL duration selection
 void _showAddHotspotForm(LatLng position) async {
   final isDesktop = _isDesktopScreen();
   setState(() {
-    _tempPinnedLocation = null; // Clear temp pin
+    _tempPinnedLocation = null;
   });
   try {
     final crimeTypesResponse = await Supabase.instance.client
@@ -5232,7 +5410,12 @@ void _showAddHotspotForm(LatLng position) async {
     String selectedActiveStatus = 'active';
     XFile? selectedPhoto;
     bool isUploadingPhoto = false;
-    bool isTimeValid = true; // Track time validity
+    bool isTimeValid = true;
+    
+    // NEW: Optional duration tracking
+    bool hasDuration = false; // Default: no duration
+    int selectedDurationHours = 24; // Default 24 hours when enabled
+    DateTime? expirationTime;
 
     final now = DateTime.now();
     dateController.text = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
@@ -5265,6 +5448,16 @@ void _showAddHotspotForm(LatLng position) async {
       }
     }
 
+    // Calculate expiration time
+    void updateExpirationTime() {
+      if (hasDuration) {
+        final now = DateTime.now();
+        expirationTime = now.add(Duration(hours: selectedDurationHours));
+      } else {
+        expirationTime = null;
+      }
+    }
+
     void onSubmit() async {
       if (formKey.currentState!.validate() && isTimeValid) {
         try {
@@ -5287,12 +5480,16 @@ void _showAddHotspotForm(LatLng position) async {
             minute,
           );
 
+          // Calculate expiration only if active AND has duration
+          updateExpirationTime();
+
           final hotspotId = await _saveHotspot(
             selectedCrimeId.toString(),
             descriptionController.text,
             position,
             dateTime,
             selectedActiveStatus,
+            expirationTime: (isActiveStatus && hasDuration) ? expirationTime : null,
           );
 
           if (selectedPhoto != null && hotspotId != null) {
@@ -5339,166 +5536,308 @@ void _showAddHotspotForm(LatLng position) async {
                 width: 400,
                 child: Form(
                   key: formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      DropdownButtonFormField<String>(
-                        value: selectedCrimeType,
-                        decoration: const InputDecoration(
-                          labelText: 'Crime Type',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: crimeTypes.map((crimeType) {
-                          return DropdownMenuItem<String>(
-                            value: crimeType['name'],
-                            child: Text(
-                              '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                              style: const TextStyle(fontSize: 14),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            final selected = crimeTypes.firstWhere((c) => c['name'] == value);
-                            setState(() {
-                              selectedCrimeType = value;
-                              selectedCrimeId = selected['id'];
-                            });
-                          }
-                        },
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please select a crime type';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: descriptionController,
-                        decoration: const InputDecoration(
-                          labelText: 'Description (optional)',
-                          border: OutlineInputBorder(),
-                        ),
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 16),
-                      _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
-                        setState(() {
-                          selectedPhoto = photo;
-                          isUploadingPhoto = uploading;
-                        });
-                      }),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextFormField(
-                              controller: dateController,
-                              decoration: const InputDecoration(
-                                labelText: 'Date of Incident',
-                                border: OutlineInputBorder(),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        DropdownButtonFormField<String>(
+                          value: selectedCrimeType,
+                          decoration: const InputDecoration(
+                            labelText: 'Crime Type',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: crimeTypes.map((crimeType) {
+                            return DropdownMenuItem<String>(
+                              value: crimeType['name'],
+                              child: Text(
+                                '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
+                                style: const TextStyle(fontSize: 14),
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              readOnly: true,
-                              onTap: () async {
-                                DateTime? pickedDate = await showDatePicker(
-                                  context: context,
-                                  initialDate: now,
-                                  firstDate: DateTime(2000),
-                                  lastDate: DateTime.now(),
-                                );
-                                if (pickedDate != null) {
-                                  setState(() {
-                                    dateController.text =
-                                        "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                                    isTimeValid = validateDateTime();
-                                  });
-                                }
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextFormField(
-                              controller: timeController,
-                              decoration: const InputDecoration(
-                                labelText: 'Time of Incident',
-                                border: OutlineInputBorder(),
-                              ),
-                              readOnly: true,
-                              onTap: () async {
-                                TimeOfDay? pickedTime = await showTimePicker(
-                                  context: context,
-                                  initialTime: TimeOfDay.now(),
-                                  builder: (context, child) {
-                                    return MediaQuery(
-                                      data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-                                      child: child!,
-                                    );
-                                  },
-                                );
-                                if (pickedTime != null) {
-                                  setState(() {
-                                    timeController.text = pickedTime.format(context);
-                                    isTimeValid = validateDateTime();
-                                  });
-                                }
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (!isTimeValid)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 8),
-                          child: Text(
-                            'Error: Selected time cannot be in the future',
-                            style: TextStyle(color: Colors.red, fontSize: 12),
-                          ),
+                            );
+                          }).toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              final selected = crimeTypes.firstWhere((c) => c['name'] == value);
+                              setState(() {
+                                selectedCrimeType = value;
+                                selectedCrimeId = selected['id'];
+                              });
+                            }
+                          },
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Please select a crime type';
+                            }
+                            return null;
+                          },
                         ),
-                      const SizedBox(height: 16),
-                      if (_hasAdminPermissions)
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey.shade300),
-                            borderRadius: BorderRadius.circular(8),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: descriptionController,
+                          decoration: const InputDecoration(
+                            labelText: 'Description (optional)',
+                            border: OutlineInputBorder(),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Active Status:',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                          maxLines: 3,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildPhotoSection(selectedPhoto, isUploadingPhoto, (photo, uploading) {
+                          setState(() {
+                            selectedPhoto = photo;
+                            isUploadingPhoto = uploading;
+                          });
+                        }),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: dateController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Date of Incident',
+                                  border: OutlineInputBorder(),
+                                ),
+                                readOnly: true,
+                                onTap: () async {
+                                  DateTime? pickedDate = await showDatePicker(
+                                    context: context,
+                                    initialDate: now,
+                                    firstDate: DateTime(2000),
+                                    lastDate: DateTime.now(),
+                                  );
+                                  if (pickedDate != null) {
+                                    setState(() {
+                                      dateController.text =
+                                          "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                      isTimeValid = validateDateTime();
+                                    });
+                                  }
+                                },
                               ),
-                              Row(
-                                children: [
-                                  Switch(
-                                    value: isActiveStatus,
-                                    onChanged: (value) {
-                                      setState(() {
-                                        isActiveStatus = value;
-                                        selectedActiveStatus = value ? 'active' : 'inactive';
-                                      });
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextFormField(
+                                controller: timeController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Time of Incident',
+                                  border: OutlineInputBorder(),
+                                ),
+                                readOnly: true,
+                                onTap: () async {
+                                  TimeOfDay? pickedTime = await showTimePicker(
+                                    context: context,
+                                    initialTime: TimeOfDay.now(),
+                                    builder: (context, child) {
+                                      return MediaQuery(
+                                        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                                        child: child!,
+                                      );
                                     },
-                                    activeColor: Colors.green,
-                                    inactiveThumbColor: Colors.grey,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    isActiveStatus ? 'Active' : 'Inactive',
-                                    style: TextStyle(
-                                      color: isActiveStatus ? Colors.green : Colors.grey,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
+                                  );
+                                  if (pickedTime != null) {
+                                    setState(() {
+                                      timeController.text = pickedTime.format(context);
+                                      isTimeValid = validateDateTime();
+                                    });
+                                  }
+                                },
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
-                    ],
+                        if (!isTimeValid)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text(
+                              'Error: Selected time cannot be in the future',
+                              style: TextStyle(color: Colors.red, fontSize: 12),
+                            ),
+                          ),
+                        const SizedBox(height: 16),
+                        if (_hasAdminPermissions)
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      'Active Status:',
+                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                                    ),
+                                    Row(
+                                      children: [
+                                        Switch(
+                                          value: isActiveStatus,
+                                          onChanged: (value) {
+                                            setState(() {
+                                              isActiveStatus = value;
+                                              selectedActiveStatus = value ? 'active' : 'inactive';
+                                              if (value && hasDuration) {
+                                                updateExpirationTime();
+                                              }
+                                            });
+                                          },
+                                          activeColor: Colors.green,
+                                          inactiveThumbColor: Colors.grey,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          isActiveStatus ? 'Active' : 'Inactive',
+                                          style: TextStyle(
+                                            color: isActiveStatus ? Colors.green : Colors.grey,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                // NEW: Optional duration checkbox and selector for desktop
+                                if (isActiveStatus) ...[
+                                  const SizedBox(height: 16),
+                                  const Divider(),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Checkbox(
+                                        value: hasDuration,
+                                        onChanged: (value) {
+                                          setState(() {
+                                            hasDuration = value ?? false;
+                                            if (hasDuration) {
+                                              updateExpirationTime();
+                                            } else {
+                                              expirationTime = null;
+                                            }
+                                          });
+                                        },
+                                      ),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              'Set investigation duration',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Auto-deactivate this incident after the specified time',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                                height: 1.3,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (hasDuration) ...[
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Slider(
+                                            value: selectedDurationHours.toDouble(),
+                                            min: 1,
+                                            max: 168,
+                                            divisions: 167,
+                                            label: '$selectedDurationHours h',
+                                            onChanged: (value) {
+                                              setState(() {
+                                                selectedDurationHours = value.toInt();
+                                                updateExpirationTime();
+                                              });
+                                            },
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        SizedBox(
+                                          width: 40,
+                                          child: Text(
+                                            '$selectedDurationHours h',
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                            textAlign: TextAlign.right,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    // IMPROVED: Centered expiration display
+                                    Center(
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                          vertical: 14,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.shade50,
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(
+                                            color: Colors.blue.shade300,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          children: [
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  Icons.schedule,
+                                                  size: 18,
+                                                  color: Colors.blue.shade700,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  'Expires at:',
+                                                  style: TextStyle(
+                                                    fontSize: 13,
+                                                    color: Colors.grey[700],
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              expirationTime?.toLocal().toString().split('.')[0] ?? 'Not set',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.blue.shade800,
+                                              ),
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -5534,6 +5873,7 @@ void _showAddHotspotForm(LatLng position) async {
         },
       );
     } else {
+      // MOBILE VERSION
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,
@@ -5739,42 +6079,185 @@ void _showAddHotspotForm(LatLng position) async {
                                           width: 1,
                                         ),
                                       ),
-                                      child: Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
                                           Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                             children: [
-                                              Icon(
-                                                isActiveStatus ? Icons.check_circle : Icons.cancel,
-                                                color: isActiveStatus ? Colors.green : Colors.grey,
-                                                size: 20,
+                                              Row(
+                                                children: [
+                                                  Icon(
+                                                    isActiveStatus ? Icons.check_circle : Icons.cancel,
+                                                    color: isActiveStatus ? Colors.green : Colors.grey,
+                                                    size: 20,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Text(
+                                                    'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w500,
+                                                      color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w500,
-                                                  color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
+                                              Transform.scale(
+                                                scale: 0.8,
+                                                child: Switch(
+                                                  value: isActiveStatus,
+                                                  onChanged: (value) {
+                                                    setState(() {
+                                                      isActiveStatus = value;
+                                                      selectedActiveStatus = value ? 'active' : 'inactive';
+                                                      if (value && hasDuration) {
+                                                        updateExpirationTime();
+                                                      }
+                                                    });
+                                                  },
+                                                  activeColor: Colors.green,
+                                                  inactiveThumbColor: Colors.grey,
+                                                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                                 ),
                                               ),
                                             ],
                                           ),
-                                          Transform.scale(
-                                            scale: 0.8,
-                                            child: Switch(
-                                              value: isActiveStatus,
-                                              onChanged: (value) {
-                                                setState(() {
-                                                  isActiveStatus = value;
-                                                  selectedActiveStatus = value ? 'active' : 'inactive';
-                                                });
-                                              },
-                                              activeColor: Colors.green,
-                                              inactiveThumbColor: Colors.grey,
-                                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          // NEW: Optional duration checkbox and selector for mobile
+                                          if (isActiveStatus) ...[
+                                            const SizedBox(height: 12),
+                                            const Divider(),
+                                            const SizedBox(height: 8),
+                                            Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Checkbox(
+                                                  value: hasDuration,
+                                                  onChanged: (value) {
+                                                    setState(() {
+                                                      hasDuration = value ?? false;
+                                                      if (hasDuration) {
+                                                        updateExpirationTime();
+                                                      } else {
+                                                        expirationTime = null;
+                                                      }
+                                                    });
+                                                  },
+                                                ),
+                                                Expanded(
+                                                  child: Padding(
+                                                    padding: const EdgeInsets.only(top: 12),
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        const Text(
+                                                          'Set investigation duration',
+                                                          style: TextStyle(
+                                                            fontSize: 14,
+                                                            fontWeight: FontWeight.w500,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(height: 4),
+                                                        Text(
+                                                          'Auto-deactivate this incident after the specified time',
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            color: Colors.grey[600],
+                                                            height: 1.3,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                          ),
+                                            if (hasDuration) ...[
+                                              const SizedBox(height: 8),
+                                              Column(
+                                                children: [
+                                                  Slider(
+                                                    value: selectedDurationHours.toDouble(),
+                                                    min: 1,
+                                                    max: 168,
+                                                    divisions: 167,
+                                                    label: '$selectedDurationHours h',
+                                                    onChanged: (value) {
+                                                      setState(() {
+                                                        selectedDurationHours = value.toInt();
+                                                        updateExpirationTime();
+                                                      });
+                                                    },
+                                                  ),
+                                                  Padding(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                                                    child: Row(
+                                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                      children: [
+                                                        Text(
+                                                          '1h',
+                                                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                                        ),
+                                                        Text(
+                                                          '$selectedDurationHours hours',
+                                                          style: const TextStyle(
+                                                            fontSize: 14,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: Colors.blue,
+                                                          ),
+                                                        ),
+                                                        Text(
+                                                          '7d',
+                                                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 12),
+                                              Container(
+                                                padding: const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.blue.shade50,
+                                                  borderRadius: BorderRadius.circular(8),
+                                                  border: Border.all(color: Colors.blue.shade200),
+                                                ),
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.schedule,
+                                                          size: 16,
+                                                          color: Colors.blue.shade700,
+                                                        ),
+                                                        const SizedBox(width: 8),
+                                                        Text(
+                                                          'Will expire at:',
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            color: Colors.grey[600],
+                                                            fontWeight: FontWeight.w500,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Text(
+                                                      expirationTime?.toLocal().toString().split('.')[0] ?? 'Not set',
+                                                      style: const TextStyle(
+                                                        fontSize: 13,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: Colors.blue,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -5784,8 +6267,20 @@ void _showAddHotspotForm(LatLng position) async {
                                     child: ElevatedButton(
                                       onPressed: (isUploadingPhoto || !isTimeValid) ? null : onSubmit,
                                       child: isUploadingPhoto
-                                          ? const CircularProgressIndicator()
+                                          ? const SizedBox(
+                                              height: 20,
+                                              width: 20,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            )
                                           : const Text('Submit'),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: OutlinedButton(
+                                      onPressed: isUploadingPhoto ? null : () => Navigator.pop(context),
+                                      child: const Text('Cancel'),
                                     ),
                                   ),
                                   const SizedBox(height: 20),
@@ -6394,6 +6889,7 @@ Color _getDailyCounterTextColor(int count) {
 }
 
 // EDIT HOTSPOT 
+// EDIT HOTSPOT 
 
 void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
   try {
@@ -6442,7 +6938,21 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
     bool isTimeValid = true;
     String? timeErrorMessage;
 
-    // HELPER FUNCTION: Parse time from controller (MOVED UP)
+    // NEW: Optional duration tracking for edit
+    bool hasDuration = hotspot['expires_at'] != null;
+    int selectedDurationHours = 24;
+    DateTime? expirationTime = hotspot['expires_at'] != null 
+        ? DateTime.parse(hotspot['expires_at']) 
+        : null;
+
+    // Calculate initial duration hours if exists
+    if (hasDuration && expirationTime != null) {
+      final now = DateTime.now();
+      final remaining = expirationTime.difference(now);
+      selectedDurationHours = remaining.inHours.clamp(1, 168);
+    }
+
+    // HELPER FUNCTION: Parse time from controller
     DateTime parseTimeFromControllers() {
       final dateParts = dateController.text.split('-');
       final year = int.parse(dateParts[0]);
@@ -6469,6 +6979,16 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
         }
       } catch (e) {
         return DateTime.now();
+      }
+    }
+
+    // HELPER FUNCTION: Update expiration time
+    void updateExpirationTime() {
+      if (hasDuration) {
+        final now = DateTime.now();
+        expirationTime = now.add(Duration(hours: selectedDurationHours));
+      } else {
+        expirationTime = null;
       }
     }
 
@@ -6502,8 +7022,6 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
         });
       }
     }
-
-    // HELPER FUNCTION: Validate incident time
 
     // Desktop/Web view
     if (_isDesktopScreen()) {
@@ -6653,7 +7171,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                         ],
                       ),
                       
-                      // NEW: Error message display
+                      // Error message display
                       if (!isTimeValid && timeErrorMessage != null) ...[
                         const SizedBox(height: 8),
                         Container(
@@ -6690,36 +7208,175 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                             border: Border.all(color: Colors.grey.shade300),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
-                                'Active Status:',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                              ),
                               Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Switch(
-                                    value: isActiveStatus,
-                                    onChanged: (value) {
-                                      setState(() {
-                                        isActiveStatus = value;
-                                        selectedActiveStatus = value ? 'active' : 'inactive';
-                                      });
-                                    },
-                                    activeColor: Colors.green,
-                                    inactiveThumbColor: Colors.grey,
+                                  const Text(
+                                    'Active Status:',
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                                   ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    isActiveStatus ? 'Active' : 'Inactive',
-                                    style: TextStyle(
-                                      color: isActiveStatus ? Colors.green : Colors.grey,
-                                      fontWeight: FontWeight.bold,
-                                    ),
+                                  Row(
+                                    children: [
+                                      Switch(
+                                        value: isActiveStatus,
+                                        onChanged: (value) {
+                                          setState(() {
+                                            isActiveStatus = value;
+                                            selectedActiveStatus = value ? 'active' : 'inactive';
+                                            if (value && hasDuration) {
+                                              updateExpirationTime();
+                                            }
+                                          });
+                                        },
+                                        activeColor: Colors.green,
+                                        inactiveThumbColor: Colors.grey,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        isActiveStatus ? 'Active' : 'Inactive',
+                                        style: TextStyle(
+                                          color: isActiveStatus ? Colors.green : Colors.grey,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
+                              // Duration section for desktop
+                              if (isActiveStatus) ...[
+                                const SizedBox(height: 16),
+                                const Divider(),
+                                const SizedBox(height: 12),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Checkbox(
+                                      value: hasDuration,
+                                      onChanged: (value) {
+                                        setState(() {
+                                          hasDuration = value ?? false;
+                                          if (hasDuration) {
+                                            updateExpirationTime();
+                                          } else {
+                                            expirationTime = null;
+                                          }
+                                        });
+                                      },
+                                    ),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'Set investigation duration',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Auto-deactivate this incident after the specified time',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[600],
+                                              height: 1.3,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (hasDuration) ...[
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Slider(
+                                          value: selectedDurationHours.toDouble(),
+                                          min: 1,
+                                          max: 168,
+                                          divisions: 167,
+                                          label: '$selectedDurationHours h',
+                                          onChanged: (value) {
+                                            setState(() {
+                                              selectedDurationHours = value.toInt();
+                                              updateExpirationTime();
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      SizedBox(
+                                        width: 40,
+                                        child: Text(
+                                          '$selectedDurationHours h',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                          textAlign: TextAlign.right,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Center(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 20,
+                                        vertical: 14,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.shade50,
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color: Colors.blue.shade300,
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.schedule,
+                                                size: 18,
+                                                color: Colors.blue.shade700,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                'Expires at:',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  color: Colors.grey[700],
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            expirationTime?.toLocal().toString().split('.')[0] ?? 'Not set',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.blue.shade800,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ],
                           ),
                         ),
@@ -6744,6 +7401,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                               descriptionController.text,
                               dateTime,
                               selectedActiveStatus,
+                              expirationTime: (isActiveStatus && hasDuration) ? expirationTime : null,
                             );
 
                             // Handle photo updates
@@ -6787,7 +7445,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
       return;
     }
 
-    // MOBILE VIEW - FIXED
+    // MOBILE VIEW
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -6946,7 +7604,7 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                         ],
                       ),
 
-                      // NEW: Error message display (replaces the blue info container)
+                      // Error message display
                       if (!isTimeValid && timeErrorMessage != null) ...[
                         const SizedBox(height: 8),
                         Container(
@@ -6987,42 +7645,185 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                               width: 1,
                             ),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Icon(
-                                    isActiveStatus ? Icons.check_circle : Icons.cancel,
-                                    color: isActiveStatus ? Colors.green : Colors.grey,
-                                    size: 20,
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        isActiveStatus ? Icons.check_circle : Icons.cancel,
+                                        color: isActiveStatus ? Colors.green : Colors.grey,
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Status: ${isActiveStatus ? 'Active' : 'Inactive'}',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                      color: isActiveStatus ? Colors.green.shade700 : Colors.grey.shade700,
+                                  Transform.scale(
+                                    scale: 0.8,
+                                    child: Switch(
+                                      value: isActiveStatus,
+                                      onChanged: (value) {
+                                        setState(() {
+                                          isActiveStatus = value;
+                                          selectedActiveStatus = value ? 'active' : 'inactive';
+                                          if (value && hasDuration) {
+                                            updateExpirationTime();
+                                          }
+                                        });
+                                      },
+                                      activeColor: Colors.green,
+                                      inactiveThumbColor: Colors.grey,
+                                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                     ),
                                   ),
                                 ],
                               ),
-                              Transform.scale(
-                                scale: 0.8,
-                                child: Switch(
-                                  value: isActiveStatus,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      isActiveStatus = value;
-                                      selectedActiveStatus = value ? 'active' : 'inactive';
-                                    });
-                                  },
-                                  activeColor: Colors.green,
-                                  inactiveThumbColor: Colors.grey,
-                                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              // Duration section for mobile
+                              if (isActiveStatus) ...[
+                                const SizedBox(height: 12),
+                                const Divider(),
+                                const SizedBox(height: 8),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Checkbox(
+                                      value: hasDuration,
+                                      onChanged: (value) {
+                                        setState(() {
+                                          hasDuration = value ?? false;
+                                          if (hasDuration) {
+                                            updateExpirationTime();
+                                          } else {
+                                            expirationTime = null;
+                                          }
+                                        });
+                                      },
+                                    ),
+                                    Expanded(
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(top: 12),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              'Set investigation duration',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Auto-deactivate this incident after the specified time',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                                height: 1.3,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
+                                if (hasDuration) ...[
+                                  const SizedBox(height: 8),
+                                  Column(
+                                    children: [
+                                      Slider(
+                                        value: selectedDurationHours.toDouble(),
+                                        min: 1,
+                                        max: 168,
+                                        divisions: 167,
+                                        label: '$selectedDurationHours h',
+                                        onChanged: (value) {
+                                          setState(() {
+                                            selectedDurationHours = value.toInt();
+                                            updateExpirationTime();
+                                          });
+                                        },
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              '1h',
+                                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                            ),
+                                            Text(
+                                              '$selectedDurationHours hours',
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.blue,
+                                              ),
+                                            ),
+                                            Text(
+                                              '7d',
+                                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.blue.shade200),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              Icons.schedule,
+                                              size: 16,
+                                              color: Colors.blue.shade700,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Will expire at:',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          expirationTime?.toLocal().toString().split('.')[0] ?? 'Not set',
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.blue,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ],
                           ),
                         ),
@@ -7057,13 +7858,14 @@ void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
                                             },
                                           );
                                           
-                                          // Continue with update...
+                                          // Update hotspot
                                           await _updateHotspot(
                                             hotspot['id'],
                                             selectedCrimeId,
                                             descriptionController.text,
                                             dateTime,
                                             selectedActiveStatus,
+                                            expirationTime: (isActiveStatus && hasDuration) ? expirationTime : null,
                                           );
 
                                           // Handle photo updates
@@ -7340,8 +8142,14 @@ void _checkRealtimeConnection() {
 
 
 // SAVE HOTSPOT
-
-Future<int?> _saveHotspot(String typeId, String description, LatLng position, DateTime dateTime, String activeStatus) async {
+Future<int?> _saveHotspot(
+  String typeId, 
+  String description, 
+  LatLng position, 
+  DateTime dateTime, 
+  String activeStatus,
+  {DateTime? expirationTime}
+) async {
   try {
     final currentUserId = _userProfile?['id'];
     if (currentUserId == null) {
@@ -7349,8 +8157,7 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
       return null;
     }
 
-    // Check for nearby hotspots (within 50 meters)
-    final nearbyDistance = 50; // meters
+    final nearbyDistance = 50;
     final nearbyHotspotsResponse = await Supabase.instance.client
         .rpc('get_nearby_hotspots', params: {
           'lat': position.latitude,
@@ -7358,7 +8165,6 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
           'distance_meters': nearbyDistance,
         });
 
-    // Filter for recent hotspots (within last 30 minutes for admins)
     final thirtyMinutesAgo = DateTime.now().subtract(const Duration(minutes: 30));
     final recentNearbyHotspots = (nearbyHotspotsResponse as List).where((hotspot) {
       final createdAt = DateTime.parse(hotspot['created_at']);
@@ -7372,22 +8178,21 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
       );
 
       if (!shouldProceed) {
-        return null; // User chose not to proceed
+        return null;
       }
     }
 
-  final insertData = {
-    'type_id': int.parse(typeId),
-    'description': description.trim().isNotEmpty ? description.trim() : null,
-    'location': 'POINT(${position.longitude} ${position.latitude})',
-    // Fix: Ensure the dateTime is treated as local time
-    'time': dateTime.toUtc().toIso8601String(),
-    'created_by': currentUserId,
-    'status': 'approved',
-    'active_status': activeStatus,
-  };
+    final insertData = {
+      'type_id': int.parse(typeId),
+      'description': description.trim().isNotEmpty ? description.trim() : null,
+      'location': 'POINT(${position.longitude} ${position.latitude})',
+      'time': dateTime.toUtc().toIso8601String(),
+      'created_by': currentUserId,
+      'status': 'approved',
+      'active_status': activeStatus,
+      if (expirationTime != null) 'expires_at': expirationTime.toUtc().toIso8601String(),
+    };
 
-    // Insert the hotspot
     final response = await Supabase.instance.client
         .from('hotspot')
         .insert(insertData)
@@ -7399,13 +8204,12 @@ Future<int?> _saveHotspot(String typeId, String description, LatLng position, Da
 
     print('Crime report added successfully: ${response['id']}');
 
-    // Optional fallback for UI updates
     await Future.delayed(const Duration(milliseconds: 500));
 
     final hotspotExists = _hotspots.any((h) => h['id'] == response['id']);
 
     if (!hotspotExists) {
-      print('Real-time failed, manually adding admin hotspot to UI');
+      print('Real-time failed, manually adding hotspot to UI');
       if (mounted) {
         setState(() {
           final crimeType = response['crime_type'] ?? {};
@@ -10062,7 +10866,7 @@ void _handleNotificationTap(Map<String, dynamic> notification) {
       // Use post frame callback to ensure UI is ready
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // Move map to safe spot location
-        _mapController.move(safeSpotPosition, 15.0);
+        _mapController.move(safeSpotPosition, 15.5);
         
         // Show safe spot details after a small delay to allow map animation
         Future.delayed(const Duration(milliseconds: 200), () {
@@ -10094,7 +10898,7 @@ void _handleNotificationTap(Map<String, dynamic> notification) {
       // Use post frame callback to ensure UI is ready
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // Move map to hotspot location
-        _mapController.move(hotspotPosition, 15.0);
+        _mapController.move(hotspotPosition, 15.5);
         
         // Show hotspot details after a small delay to allow map animation
         Future.delayed(const Duration(milliseconds: 200), () {
@@ -10191,30 +10995,28 @@ Widget _buildSimpleHotspotMarker({
   required IconData markerIcon,
   required double opacity,
 }) {
-  return GestureDetector(
-    onTap: () {
-      setState(() {
-        _selectedHotspot = hotspot;
-        _selectedSafeSpot = null;
-      });
-      _showHotspotDetails(hotspot);
-    },
-    child: Container(
-      width: 24,
-      height: 24,
-      decoration: BoxDecoration(
-        color: markerColor.withOpacity(opacity),
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 2,
-            offset: const Offset(0, 1),
-          ),
-        ],
+  return Transform.rotate(
+    angle: -_currentMapRotation * pi / 180,
+    alignment: Alignment.center,
+    child: GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedHotspot = hotspot;
+          _selectedSafeSpot = null;
+        });
+        _showHotspotDetails(hotspot);
+      },
+      child: Container(
+        width: 20,
+        height: 20,
+        decoration: BoxDecoration(
+          color: markerColor.withOpacity(opacity),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 1),
+          boxShadow: const [],
+        ),
+        child: Icon(markerIcon, color: Colors.white, size: 10),
       ),
-      child: Icon(markerIcon, color: Colors.white, size: 12),
     ),
   );
 }
@@ -10256,7 +11058,7 @@ Widget _buildMap() {
             mapController: _mapController,
             options: MapOptions(
               initialCenter: _currentPosition ?? const LatLng(6.9214, 122.0790),
-              initialZoom: 15.0,
+              initialZoom: 15.5,
               maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
               minZoom: 3.0,
 
@@ -10312,19 +11114,32 @@ onLongPress: (tapPosition, latLng) {
   });
 },
 
-              onMapEvent: (MapEvent mapEvent) {
-                final maxZoom = _getMaxZoomForMapType(_currentMapType);
-                if (mapEvent is MapEventMove && mapEvent.camera.zoom > maxZoom) {
-                  _mapController.move(mapEvent.camera.center, maxZoom.toDouble());
-                }
-                // Track rotation and zoom changes
-                if (mapEvent is MapEventRotate || mapEvent is MapEventMove) {
-                  setState(() {
-                    _currentMapRotation = mapEvent.camera.rotation;
-                    _currentZoom = mapEvent.camera.zoom; // Add this to track zoom level
-                  });
-                }
-              },
+onMapEvent: (MapEvent mapEvent) {
+  final maxZoom = _getMaxZoomForMapType(_currentMapType);
+  if (mapEvent is MapEventMove && mapEvent.camera.zoom > maxZoom) {
+    _mapController.move(mapEvent.camera.center, maxZoom.toDouble());
+  }
+  
+  // Track rotation immediately (no debounce needed for rotation)
+  if (mapEvent is MapEventRotate) {
+    setState(() {
+      _currentMapRotation = mapEvent.camera.rotation;
+    });
+  }
+  
+  // Debounce zoom changes to reduce rebuilds
+  if (mapEvent is MapEventMove) {
+    final newZoom = mapEvent.camera.zoom;
+    // Update rotation immediately if changed
+    if (_currentMapRotation != mapEvent.camera.rotation) {
+      setState(() {
+        _currentMapRotation = mapEvent.camera.rotation;
+      });
+    }
+    // Debounce zoom updates
+    _onMapZoomChanged(newZoom);
+  }
+},
               interactionOptions: InteractionOptions(
                 // Conditionally enable/disable rotation based on lock state
                 flags: _isRotationLocked 
@@ -10452,9 +11267,9 @@ Consumer<HotspotFilterService>(
       return false;
     }).toList();
 
-    return MarkerLayer(
-      key: ValueKey('hotspots_optimized_${visibleHotspots.length}_${_currentZoom.round()}_${_selectedHotspot?['id']}'),
-      markers: visibleHotspots.map((hotspot) {
+      return MarkerLayer(
+        key: ValueKey('hotspots_${_currentZoom.toInt()}_${visibleHotspots.length}'),
+        markers: visibleHotspots.map((hotspot) {
         final coords = hotspot['location']['coordinates'];
         final point = LatLng(coords[1], coords[0]);
         final status = hotspot['status'] ?? 'approved';
@@ -10470,7 +11285,7 @@ Consumer<HotspotFilterService>(
         final hotspotId = hotspot['id'].toString();
         
         // Determine marker complexity based on zoom
-        final useSimpleMarker = _currentZoom < 13.0;
+        final useSimpleMarker = _currentZoom < 14.0;
         final useDotMarker = _currentZoom < 12.0;
         
         // Color and icon logic (cached)
@@ -10536,10 +11351,10 @@ Consumer<HotspotFilterService>(
         }
         
       return Marker(
-        key: ValueKey('hotspot_optimized_$hotspotId\_$status\_$activeStatus\_$isSelected\_$useDotMarker\_$useSimpleMarker'),
+        key: ValueKey('h_$hotspotId\_${_currentZoom.toInt()}'),
         point: point,
-        width: useDotMarker ? 8 : (useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 120 : 100)),
-        height: useDotMarker ? 8 : (useSimpleMarker ? (isSelected ? 30 : 24) : (isSelected ? 70 : 60)),
+        width: useDotMarker ? 6 : (useSimpleMarker ? (isSelected ? 28 : 20) : (isSelected ? 100 : 80)),
+        height: useDotMarker ? 6 : (useSimpleMarker ? (isSelected ? 28 : 20) : (isSelected ? 60 : 50)),
         child: RepaintBoundary(
           child: useDotMarker
             ? _buildDotMarker(markerColor, opacity)
@@ -10560,7 +11375,7 @@ Consumer<HotspotFilterService>(
                   isOwnHotspot: isOwnHotspot,
                   status: status,
                   crimeTypeName: crimeTypeName,
-                  showLabel: _currentZoom >= 14.0,
+                  showLabel: _currentZoom >= 15.5,
                 ),
           ),
         );
@@ -10581,10 +11396,9 @@ if (_showSafeSpots)
         return filterService.shouldShowSafeSpot(safeSpot);
       }).toList();
 
-      return MarkerLayer(
-        key: ValueKey('safe_spots_filtered_${filteredSafeSpots.length}_${_currentZoom.round()}_${_selectedSafeSpot?['id']}'),
-        markers: filteredSafeSpots.asMap().entries.map((entry) {
-          final index = entry.key;
+    return MarkerLayer(
+      key: ValueKey('safespots_${_currentZoom.toInt()}_${filteredSafeSpots.length}'),
+      markers: filteredSafeSpots.asMap().entries.map((entry) {
           final safeSpot = entry.value;
           final coords = safeSpot['location']['coordinates'];
           final point = LatLng(coords[1], coords[0]);
@@ -10600,7 +11414,7 @@ if (_showSafeSpots)
           final isSelected = _selectedSafeSpot != null && _selectedSafeSpot!['id'] == safeSpot['id'];
           
           // Use simple markers when zoomed out
-          final useSimpleMarker = _currentZoom < 13.0;
+          final useSimpleMarker = _currentZoom < 14.0;
           final useDotMarker = _currentZoom < 12.0;
           
           Color markerColor;
@@ -10623,50 +11437,53 @@ if (_showSafeSpots)
               markerColor = Colors.blue;
           }
           
-      return Marker(
-        key: ValueKey('safe_spot_filtered_$safeSpotId\_$status\_$verified\_$index\_$isSelected\_$useDotMarker\_$useSimpleMarker'),
-        point: point,
-        width: useDotMarker ? 8 : (useSimpleMarker ? 32 : (isSelected ? 140 : 120)),
-        height: useDotMarker ? 8 : (useSimpleMarker ? 32 : (isSelected ? 60 : 40)),
+        return Marker(
+          key: ValueKey('s_$safeSpotId\_${_currentZoom.toInt()}'),
+          point: point,
+        width: useDotMarker ? 6 : (useSimpleMarker ? 24 : (isSelected ? 120 : 100)),
+        height: useDotMarker ? 6 : (useSimpleMarker ? 24 : (isSelected ? 50 : 35)),
         alignment: Alignment.center,
         child: RepaintBoundary(
           child: useDotMarker
             ? _buildDotMarker(Colors.green, opacity)
-            : useSimpleMarker
-              ? GestureDetector(
-          onTap: () {
-            setState(() {
-              _selectedSafeSpot = safeSpot;
-              _selectedHotspot = null;
-            });
-            SafeSpotDetails.showSafeSpotDetails(
-              context: context,
-              safeSpot: safeSpot,
-              userProfile: _userProfile,
-              isAdmin: _hasAdminPermissions,
-              onUpdate: () => _loadSafeSpots(),
-              onGetSafeRoute: _getSafeRoute,
-            );
-          },
-
-                    child: Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: markerColor.withOpacity(opacity),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 2,
-                            offset: const Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                      child: Icon(markerIcon, color: Colors.white, size: 14),
-                    ),
-                  )
+: useSimpleMarker
+  ? Transform.rotate(
+      angle: -_currentMapRotation * pi / 180,
+      alignment: Alignment.center,
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _selectedSafeSpot = safeSpot;
+            _selectedHotspot = null;
+          });
+          SafeSpotDetails.showSafeSpotDetails(
+            context: context,
+            safeSpot: safeSpot,
+            userProfile: _userProfile,
+            isAdmin: _hasAdminPermissions,
+            onUpdate: () => _loadSafeSpots(),
+            onGetSafeRoute: _getSafeRoute,
+          );
+        },
+        child: Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            color: markerColor.withOpacity(opacity),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 2,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: Icon(markerIcon, color: Colors.white, size: 10),
+        ),
+      ),
+    )
                 : _buildStableSafeSpotMarker(
                     safeSpot: safeSpot,
                     markerColor: markerColor,
@@ -10678,7 +11495,7 @@ if (_showSafeSpots)
                     safeSpotName: safeSpotName,
                     isOwnSpot: isOwnSpot,
                     isSelected: isSelected,
-                    showLabel: _currentZoom >= 14.0,
+                    showLabel: _currentZoom >= 15.5,
                   ),
             ),
           );
@@ -10689,9 +11506,9 @@ if (_showSafeSpots)
 
 // Save Points Marker Layer
 if (_userProfile != null)
-  MarkerLayer(
-    key: ValueKey('save_points_${_savePoints.length}_${_currentZoom.round()}'),
-    markers: _savePoints.map((savePoint) {
+    MarkerLayer(
+      key: ValueKey('savepoints_${_currentZoom.toInt()}_${_savePoints.length}'),
+      markers: _savePoints.map((savePoint) {
       try {
         // Defensive programming: Validate save point data before rendering
         if (savePoint['location'] == null || savePoint['location']['coordinates'] == null) {
@@ -10717,121 +11534,121 @@ if (_userProfile != null)
         final isSelected = _selectedSavePoint != null && _selectedSavePoint!['id'] == savePoint['id'];
 
         // Use simple markers when zoomed out, dots when very far
-        final useSimpleMarker = _currentZoom < 13.0;
-        final useDotMarker = _currentZoom < 12.0; // NEW
+        final useSimpleMarker = _currentZoom < 14.0;
+       final useDotMarker = _currentZoom < 12.0;
 
         // Build marker styling
         return Marker(
-          key: ValueKey('save_point_${savePoint['id']}_$isSelected_$useDotMarker$useSimpleMarker'),
+          key: ValueKey('sp_${savePoint['id']}_${_currentZoom.toInt()}'),
           point: point,
-          width: useDotMarker ? 8 : (useSimpleMarker ? 32 : (isSelected ? 140 : 120)),
-          height: useDotMarker ? 8 : (useSimpleMarker ? 32 : 40),
+          width: useDotMarker ? 6 : (useSimpleMarker ? 24 : (isSelected ? 120 : 100)),
+          height: useDotMarker ? 6 : (useSimpleMarker ? 24 : 35),
           alignment: Alignment.center,
-          child: Transform.rotate(
-            angle: -_currentMapRotation * pi / 180, // Counteract map rotation
-            alignment: Alignment.center,
-            child: useDotMarker
-                ? _buildDotMarker(Colors.blue.shade600, 0.9) // NEW: Blue dot for save points
-                : Stack(
-                    clipBehavior: Clip.none,
-                    alignment: Alignment.center,
-                    children: [
-                      GestureDetector(
-                        onTap: () {
-                          // Update selection state
-                          setState(() {
-                            _destination = point;
-                            _selectedSavePoint = savePoint;
-                            _selectedSafeSpot = null;
-                            _selectedHotspot = null;
-                          });
-                          
-                          // Show save point details
-                          SavePointDetails.showSavePointDetails(
-                            context: context,
-                            savePoint: savePoint,
-                            userProfile: _userProfile,
-                            onUpdate: _loadSavePoints,
-                            onGetSafeRoute: _getSafeRoute,
-                          );
-                        },
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            // Selection indicator
-                            if (isSelected)
-                              Container(
-                                width: 50,
-                                height: 50,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.blue.withOpacity(0.6),
-                                    width: 3,
-                                  ),
-                                ),
-                              ),
-                            // Main marker
-                            Container(
-                              width: useSimpleMarker ? 28 : 32,
-                              height: useSimpleMarker ? 28 : 32,
-                              decoration: BoxDecoration(
-                                color: Colors.blue.shade600.withOpacity(0.9),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white, width: 2),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    blurRadius: useSimpleMarker ? 4 : 6,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                Icons.bookmark,
-                                color: Colors.white,
-                                size: useSimpleMarker ? 16 : 18,
-                              ),
-                            ),
-                          ],
+child: useDotMarker
+    ? _buildDotMarker(Colors.blue.shade600, 0.9) // Just a blue dot when zoomed out
+    : Transform.rotate(
+        angle: -_currentMapRotation * pi / 180, // Counteract map rotation
+        alignment: Alignment.center,
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.center,
+          children: [
+            GestureDetector(
+              onTap: () {
+                // Update selection state
+                setState(() {
+                  _destination = point;
+                  _selectedSavePoint = savePoint;
+                  _selectedSafeSpot = null;
+                  _selectedHotspot = null;
+                });
+                
+                // Show save point details
+                SavePointDetails.showSavePointDetails(
+                  context: context,
+                  savePoint: savePoint,
+                  userProfile: _userProfile,
+                  onUpdate: _loadSavePoints,
+                  onGetSafeRoute: _getSafeRoute,
+                );
+              },
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Selection indicator
+                  if (isSelected)
+                    Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.blue.withOpacity(0.6),
+                          width: 3,
                         ),
                       ),
-                      // Label aligned like hotspots and safe spots
-                      if (!useSimpleMarker && _currentZoom >= 14.0)
-                        Positioned(
-                          left: isSelected ? 93 : 78,
-                          child: AnimatedOpacity(
-                            duration: const Duration(milliseconds: 300),
-                            opacity: 1.0,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.shade600.withOpacity(0.9),
-                                borderRadius: BorderRadius.circular(8),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.15),
-                                    blurRadius: 3,
-                                    offset: const Offset(1, 1),
-                                  ),
-                                ],
-                              ),
-                              child: Text(
-                                name.length > 15 ? '${name.substring(0, 15)}...' : name,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ),
+                    ),
+                  // Main marker
+                  Container(
+                    width: useSimpleMarker ? 20 : 32,
+                    height: useSimpleMarker ? 20 : 32,
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade600.withOpacity(0.9),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: useSimpleMarker ? 4 : 6,
+                          offset: const Offset(0, 2),
                         ),
-                    ],
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.bookmark,
+                      color: Colors.white,
+                      size: useSimpleMarker ? 12 : 18,
+                    ),
                   ),
-          ),
+                ],
+              ),
+            ),
+            // Label aligned like hotspots and safe spots
+            if (!useSimpleMarker && _currentZoom >= 15.5)
+              Positioned(
+                left: isSelected ? 93 : 78,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 300),
+                  opacity: 1.0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade600.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.15),
+                          blurRadius: 3,
+                          offset: const Offset(1, 1),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      name.length > 15 ? '${name.substring(0, 15)}...' : name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
         );
       } catch (e) {
         print('❌ Error creating marker for save point ${savePoint['id']}: $e');
@@ -11033,7 +11850,6 @@ Widget _buildStableHotspotMarker({
   );
 }
 
-
 // FIXED: Helper widget to build time text with special "NEW" styling
 Widget _buildTimeText(Map<String, dynamic> hotspot, Color markerColor) {
   DateTime hotspotTime;
@@ -11118,7 +11934,7 @@ Widget _buildTimeText(Map<String, dynamic> hotspot, Color markerColor) {
   }
 }
 
-// UPDATED: Safe spot marker with selection indicator
+// UPDATED: Safe spot marker with selection indicator and proper rotation
 Widget _buildStableSafeSpotMarker({
   required Map<String, dynamic> safeSpot,
   required Color markerColor,
@@ -11146,17 +11962,17 @@ Widget _buildStableSafeSpotMarker({
               _selectedHotspot = null;
             });
             
-SafeSpotDetails.showSafeSpotDetails(
-  context: context,
-  safeSpot: safeSpot,
-  userProfile: _userProfile,
-  isAdmin: _hasAdminPermissions,
-  onUpdate: () {
-    print('Manual refresh triggered from details');
-    _loadSafeSpots();
-  },
-  onGetSafeRoute: _getSafeRoute,
-);
+            SafeSpotDetails.showSafeSpotDetails(
+              context: context,
+              safeSpot: safeSpot,
+              userProfile: _userProfile,
+              isAdmin: _hasAdminPermissions,
+              onUpdate: () {
+                print('Manual refresh triggered from details');
+                _loadSafeSpots();
+              },
+              onGetSafeRoute: _getSafeRoute,
+            );
           },
           child: Stack(
             alignment: Alignment.center,
@@ -11636,6 +12452,9 @@ final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
   // Add null checks for crimeType
   final crimeType = hotspot['crime_type'] ?? {};
   final category = crimeType['category'] ?? 'Unknown Category';
+  final expiresAt = hotspot['expires_at'] != null 
+    ? DateTime.parse(hotspot['expires_at']) 
+    : null;
 
 // Fetch officer details
 // Fetch officer details - UPDATED to include creator/reporter info
@@ -11983,33 +12802,81 @@ onPressed: () {
   ),
 ),
                                   // Time with icon
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 12),
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.access_time, size: 18, color: Colors.grey[600]),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Row(
-                                            children: [
-                                              const Text(
-                                                'Date and Time:',
-                                                style: TextStyle(fontWeight: FontWeight.w500),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                formattedTime,
-                                                style: TextStyle(color: Colors.grey[700]),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
+                                Padding(
+  padding: const EdgeInsets.only(bottom: 12),
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Icon(Icons.access_time, size: 18, color: Colors.grey[600]),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Row(
+              children: [
+                const Text(
+                  'Date and Time:',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  formattedTime,
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      // Add expiration indicator if exists
+      if (expiresAt != null && activeStatus == 'active') ...[
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.orange.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.timer, size: 16, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Investigation expires: ${DateFormat('MMM dd, yyyy - hh:mm a').format(expiresAt.toLocal())}',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      formatTimeRemaining(expiresAt),
+                      style: TextStyle(
+                        color: Colors.orange.shade800,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ],
+  ),
+),
+                                  
                                 ],
                               ),
                             ),
+                            
                             // Show rejection reason for rejected reports
                             if (status == 'rejected' && hotspot['rejection_reason'] != null)
                               Container(
@@ -12456,31 +13323,77 @@ showModalBottomSheet(
                   ),
 
                   // Time with mini icon
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-                    child: Row(
-                      children: [
-                        Icon(Icons.access_time, size: 18, color: Colors.grey[600]),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Date and Time:',
-                                style: TextStyle(fontWeight: FontWeight.w500),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                formattedTime,
-                                style: TextStyle(color: Colors.grey[700]),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+Container(
+  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Icon(Icons.access_time, size: 18, color: Colors.grey[600]),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Date and Time:',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  formattedTime,
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      // Add expiration indicator if exists
+      if (expiresAt != null && activeStatus == 'active') ...[
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.orange.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.timer, size: 16, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Investigation expires: ${DateFormat('MMM dd, yyyy - hh:mm a').format(expiresAt.toLocal())}',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 2),
+                    Text(
+                      formatTimeRemaining(expiresAt),
+                      style: TextStyle(
+                        color: Colors.orange.shade800,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ],
+  ),
+),
 
                   // Show rejection reason for rejected reports
                   if (status == 'rejected' && hotspot['rejection_reason'] != null)
@@ -12683,7 +13596,7 @@ if (_hasAdminPermissions || _isOfficer) ...[
                         children: [
                           Expanded(
                             child: ElevatedButton(
-                              onPressed: () => _reviewHotspot(hotspot['id'], true),
+                              onPressed: () => _showApprovalWithDurationDialog(hotspot['id']),
                               style: ElevatedButton.styleFrom(
                                 foregroundColor: Colors.green,
                                 shape: RoundedRectangleBorder(
@@ -13009,7 +13922,7 @@ Widget _buildDesktopActionButtons(Map<String, dynamic> hotspot, String status, b
     buttons.addAll([
       Expanded(
         child: ElevatedButton.icon(
-          onPressed: () => _reviewHotspot(hotspot['id'], true),
+          onPressed: () => _showApprovalWithDurationDialog(hotspot['id']),
           icon: const Icon(Icons.check_circle, size: 18),
           label: const Text('Approve', style: TextStyle(fontWeight: FontWeight.w600)),
           style: ElevatedButton.styleFrom(
@@ -13360,41 +14273,491 @@ void _showDirectionsConfirmation(LatLng coordinates, BuildContext context, VoidC
 
 
 
-// Add these methods for admin review
-void _showRejectDialog(int hotspotId) {
-  final reasonController = TextEditingController();
-
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Reject Report'),
-      content: TextField(
-        controller: reasonController,
-        decoration: const InputDecoration(
-          labelText: 'Reason for rejection',
-          hintText: 'Optional feedback for the user',
-        ),
+// RESPONSIVE DIALOG WRAPPER
+Widget _buildResponsiveDialog({
+  required Widget child,
+  double maxHeightFactor = 0.9,
+}) {
+  return Dialog(
+    insetPadding: EdgeInsets.symmetric(
+      horizontal: _isDesktopScreen() ? 40 : 16,
+      vertical: 24,
+    ),
+    child: Container(
+      width: MediaQuery.of(context).size.width,
+      constraints: BoxConstraints(
+        maxWidth: _isDesktopScreen() ? 500 : double.infinity,
+        maxHeight: MediaQuery.of(context).size.height * maxHeightFactor,
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        TextButton(
-          onPressed: () {
-            Navigator.pop(context);
-            _reviewHotspot(hotspotId, false, reasonController.text);
-          },
-          child: const Text('Reject'),
-        ),
-      ],
+      child: child,
     ),
   );
 }
 
+// IMPROVED REJECTION DIALOG
+void _showRejectDialog(int hotspotId) async {
+  final reasonController = TextEditingController();
 
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => _buildResponsiveDialog(
+      maxHeightFactor: 0.7,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.red.shade50,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(28),
+                topRight: Radius.circular(28),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.cancel_outlined, color: Colors.red.shade600, size: 28),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Reject Crime Report',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Content
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded, size: 20, color: Colors.orange.shade700),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'This will reject the report and it will not be visible on the map.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Reason for Rejection (Optional)',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Provide feedback to help the user understand why their report was rejected.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: reasonController,
+                    maxLines: 4,
+                    decoration: InputDecoration(
+                      hintText: 'e.g., Insufficient evidence, duplicate report, incorrect location...',
+                      hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: Colors.grey.shade300),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: Colors.grey.shade300),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: Colors.red.shade300, width: 2),
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                      contentPadding: const EdgeInsets.all(16),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+          ),
+          // Actions
+          Container(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  ),
+                  child: const Text('Cancel', style: TextStyle(fontSize: 15)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red.shade600,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  icon: const Icon(Icons.cancel, size: 18),
+                  label: const Text('Reject Report', style: TextStyle(fontSize: 15)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 
-Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
+  if (confirmed == true) {
+    await _reviewHotspot(hotspotId, false, reasonController.text.trim());
+  }
+  
+  reasonController.dispose();
+}
+
+// APPROVAL DIALOG WITH DURATION
+void _showApprovalWithDurationDialog(int hotspotId) async {
+  bool hasDuration = false;
+  int selectedDurationHours = 24;
+  DateTime? expirationTime;
+
+  void updateExpirationTime() {
+    if (hasDuration) {
+      expirationTime = DateTime.now().add(Duration(hours: selectedDurationHours));
+    } else {
+      expirationTime = null;
+    }
+  }
+
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => _buildResponsiveDialog(
+        maxHeightFactor: 0.9,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(28),
+                  topRight: Radius.circular(28),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: Colors.green.shade600, size: 28),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Approve Crime Report',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 20, color: Colors.green.shade700),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'This will approve the report and make it visible on the map.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.green.shade900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Divider(),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Investigation Duration (Optional)',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[800],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Set a time limit for this investigation to automatically deactivate it.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              Checkbox(
+                                value: hasDuration,
+                                onChanged: (value) {
+                                  setState(() {
+                                    hasDuration = value ?? false;
+                                    updateExpirationTime();
+                                  });
+                                },
+                              ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Enable investigation duration',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Automatically deactivate this incident after a set period',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (hasDuration) ...[
+                            const SizedBox(height: 16),
+                            const Divider(),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Icon(Icons.timer_outlined, size: 20, color: Colors.blue.shade700),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Duration:',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey[700],
+                                  ),
+                                ),
+                                const Spacer(),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue.shade100,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    '$selectedDurationHours hours',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                      color: Colors.blue.shade900,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Slider(
+                              value: selectedDurationHours.toDouble(),
+                              min: 1,
+                              max: 168,
+                              divisions: 167,
+                              label: '$selectedDurationHours h',
+                              activeColor: Colors.blue.shade600,
+                              onChanged: (value) {
+                                setState(() {
+                                  selectedDurationHours = value.toInt();
+                                  updateExpirationTime();
+                                });
+                              },
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    '1 hour',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                  ),
+                                  Text(
+                                    '7 days',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [Colors.blue.shade50, Colors.blue.shade100],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.blue.shade300, width: 1.5),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.schedule_outlined,
+                                        size: 20,
+                                        color: Colors.blue.shade700,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Expiration Time',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.blue.shade900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    expirationTime?.toLocal().toString().split('.')[0] ?? 'Not set',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue.shade900,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'The incident will automatically become inactive at this time',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.blue.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ),
+              ),
+            ),
+            // Actions
+            Container(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    ),
+                    child: const Text('Cancel', style: TextStyle(fontSize: 15)),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green.shade600,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: const Icon(Icons.check, size: 18),
+                    label: const Text('Approve Report', style: TextStyle(fontSize: 15)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  if (confirmed == true) {
+    await _reviewHotspot(hotspotId, true, null, expirationTime);
+  }
+}
+
+Future<void> _reviewHotspot(int id, bool approve, [String? reason, DateTime? expirationTime]) async {
   try {
     // First get the hotspot to notify the reporter
     final hotspotResponse = await Supabase.instance.client
@@ -13419,8 +14782,9 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
           'rejection_reason': reason,
           'updated_at': DateTime.now().toIso8601String(),
           if (approve) 'created_by': _userProfile?['id'],
-          if (approve) 'approved_by': _userProfile?['id'], // Add approved_by
-          if (!approve) 'rejected_by': _userProfile?['id'], // Add rejected_by
+          if (approve) 'approved_by': _userProfile?['id'],
+          if (!approve) 'rejected_by': _userProfile?['id'],
+          if (approve && expirationTime != null) 'expires_at': expirationTime.toIso8601String(), // NEW
         })
         .eq('id', id)
         .select('id')
@@ -13465,16 +14829,24 @@ Future<void> _reviewHotspot(int id, bool approve, [String? reason]) async {
 }
 
 
-
 //UPDATE HOTSPOT
-Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, DateTime dateTime, [String? activeStatus]) async {
+Future<PostgrestMap> _updateHotspot(
+  int id, 
+  int typeId, 
+  String description, 
+  DateTime dateTime, 
+  String? activeStatus, 
+  {DateTime? expirationTime}  
+) async {
   try {
     final updateData = {
       'type_id': typeId,
       'description': description.trim().isNotEmpty ? description.trim() : null,
-      'time': dateTime.toUtc().toIso8601String(), // Fix: Use local time
+      'time': dateTime.toUtc().toIso8601String(),
       if (activeStatus != null) 'active_status': activeStatus,
-      'updated_at': DateTime.now().toUtc().toIso8601String(), // Fix: Use local time
+      if (expirationTime != null) 'expires_at': expirationTime.toUtc().toIso8601String(),
+      if (expirationTime == null && activeStatus == 'inactive') 'expires_at': null,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
       'last_updated_by': _userProfile?['id'],
     };
 
@@ -13493,10 +14865,8 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
 
     print('✅ Hotspot updated successfully: ${response['id']}');
     
-    // Add a small delay to ensure real-time triggers properly
     await Future.delayed(const Duration(milliseconds: 100));
 
-    // Fallback: If real-time doesn't update within 2 seconds, force reload
     Timer(const Duration(seconds: 2), () async {
       if (mounted) {
         final currentHotspot = _hotspots.firstWhere(
@@ -13504,7 +14874,6 @@ Future<PostgrestMap> _updateHotspot(int id, int typeId, String description, Date
           orElse: () => {},
         );
         
-        // Check if the update was applied (compare type_id)
         if (currentHotspot.isNotEmpty && currentHotspot['type_id'] != typeId) {
           print('🔄 Real-time update didn\'t apply, forcing reload...');
           await _loadHotspots();
@@ -14458,10 +15827,11 @@ Widget _buildProfileScreen() {
 
 bool _isWithinHeatmapTimeWindow(Map<String, dynamic> crime) {
   try {
-    final crimeTime = parseStoredDateTime(crime['time']); // Use helper
-    final cutoffDate = DateTime.now().subtract(
-      const Duration(days: HEATMAP_TIME_WINDOW_DAYS)
-    );
+    final crimeTime = parseStoredDateTime(crime['time']);
+    final level = crime['crime_type']['level'] ?? 'low';
+    final daysWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
+    
+    final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
     return crimeTime.isAfter(cutoffDate);
   } catch (e) {
     print('Error parsing crime time: $e');
@@ -14492,11 +15862,11 @@ Map<String, dynamic> _formatCrimeForHeatmap(Map<String, dynamic> crime) {
 // ============================================
 // MODIFIED: Load heatmap data with proper filtering
 // ============================================
-
 Future<void> _loadHeatmapData() async {
   try {
+    // Use the longest time window to fetch all potentially relevant crimes
     final cutoffDate = DateTime.now().subtract(
-      const Duration(days: HEATMAP_TIME_WINDOW_DAYS)
+      Duration(days: MAX_TIME_WINDOW)
     );
     
     final response = await Supabase.instance.client
@@ -14517,12 +15887,14 @@ Future<void> _loadHeatmapData() async {
         .gte('time', cutoffDate.toIso8601String());
     
     setState(() {
+      // Filter each crime based on its individual time window
       _heatmapCrimes = (response as List)
           .map((crime) => _formatCrimeForHeatmap(crime))
+          .where((crime) => _isWithinHeatmapTimeWindow(crime))
           .toList();
     });
     
-    print('Loaded ${_heatmapCrimes.length} crimes for heatmap (within $HEATMAP_TIME_WINDOW_DAYS days)');
+    print('Loaded ${_heatmapCrimes.length} crimes for heatmap (dynamic windows)');
   } catch (e) {
     print('Error loading heatmap data: $e');
   }
@@ -14556,13 +15928,15 @@ Future<void> _calculateHeatmap() async {
   setState(() => _isCalculatingHeatmap = true);
   
   try {
+    // First, filter all valid crimes
     final validCrimes = _heatmapCrimes.where((crime) {
       return crime['status'] == 'approved' && _isWithinHeatmapTimeWindow(crime);
     }).toList();
     
-    print('Calculating heatmap from ${validCrimes.length} valid crimes');
+    print('Valid crimes: ${validCrimes.length}');
     
-    if (validCrimes.length < MIN_CRIMES_FOR_HOTSPOT) {
+    // Build clusters from valid crimes
+    if (validCrimes.isEmpty) {
       setState(() {
         _heatmapClusters = [];
         _isCalculatingHeatmap = false;
@@ -14571,13 +15945,45 @@ Future<void> _calculateHeatmap() async {
     }
     
     final clusters = _buildCrimeClusters(validCrimes);
-    final validClusters = clusters.where((c) => c.crimeCount >= MIN_CRIMES_FOR_HOTSPOT).toList();
+    
+    // ⭐ KEY: Keep cluster if it has:
+    // - At least MIN_CRIMES_FOR_HOTSPOT valid crimes, OR
+    // - At least 1 valid critical crime + 1 other valid crime (minimum 2), OR
+    // - At least 2 valid high crimes
+    final validClusters = clusters.where((cluster) {
+      final criticalCount = cluster.crimes
+          .where((c) => c['crime_type']['level'] == 'critical' && _isWithinHeatmapTimeWindow(c))
+          .length;
+      final highCount = cluster.crimes
+          .where((c) => c['crime_type']['level'] == 'high' && _isWithinHeatmapTimeWindow(c))
+          .length;
+      final validCount = cluster.crimes
+          .where((c) => _isWithinHeatmapTimeWindow(c))
+          .length;
+      
+      // Standard case: enough valid crimes
+      if (validCount >= MIN_CRIMES_FOR_HOTSPOT) return true;
+      
+      // Special case: Recent critical crime with at least 1 other valid crime
+      if (criticalCount >= 1 && validCount >= 2) {
+        print('⚠️ Keeping hotspot alive: $criticalCount critical + ${validCount - criticalCount} other valid crimes');
+        return true;
+      }
+      
+      // Special case: Multiple recent high-severity crimes
+      if (highCount >= 2) {
+        print('⚠️ Keeping hotspot alive: $highCount high-severity crimes');
+        return true;
+      }
+      
+      return false;
+    }).toList();
     
     setState(() {
-      _heatmapClusters = validClusters; // Use raw intensity values
+      _heatmapClusters = validClusters;
     });
     
-    print('Heatmap calculated: ${validClusters.length} hotspots identified');
+    print('✅ Heatmap calculated: ${validClusters.length} hotspots (priority mode)');
     
   } catch (e) {
     print('Heatmap calculation error: $e');
@@ -14585,6 +15991,7 @@ Future<void> _calculateHeatmap() async {
     setState(() => _isCalculatingHeatmap = false);
   }
 }
+
 
 // Build clusters from crimes using spatial proximity
 List<HeatmapCluster> _buildCrimeClusters(List<Map<String, dynamic>> crimes) {
@@ -14753,13 +16160,13 @@ Widget _buildHeatmapLayer() {
     radiusMultiplier = 5.0; // 5x
     borderWidth = 5;
     useTripleLayer = true;
-  } else if (_currentZoom < 12.0) {
+  } else if (_currentZoom < 12.5) {
     // Medium zoom: Moderate multiplier
     fillOpacity = 0.5;
     borderOpacity = 0.7;
     radiusMultiplier = 2.5; // 2.5x
     borderWidth = 4;
-  } else if (_currentZoom < 15.0) {
+  } else if (_currentZoom < 13.0) {
     // Close zoom: Small multiplier
     fillOpacity = 0.4;
     borderOpacity = 0.6;
@@ -14870,117 +16277,171 @@ Widget _buildHeatmapMarkers() {
 // ============================================
 
 void _showHeatmapDetails(HeatmapCluster cluster) {
+  // Get the most common severity level for time window display
+  final severityCounts = cluster.crimeBreakdown.entries
+      .where((e) => e.value > 0)
+      .toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  
+  final primarySeverity = severityCounts.isNotEmpty ? severityCounts.first.key : 'low';
+  final timeWindow = SEVERITY_TIME_WINDOWS[primarySeverity] ?? 30;
+  
   showDialog(
     context: context,
     builder: (context) => Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: 340,
-        padding: const EdgeInsets.all(20),
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.8, // Max 80% of screen height
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.whatshot, color: _getHeatmapColor(cluster.intensity)),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    'Crime Hotspot',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            // Fixed Header
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.whatshot, color: _getHeatmapColor(cluster.intensity)),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Crime Hotspot',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.pop(context),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              '${cluster.crimeCount} crimes in the last $HEATMAP_TIME_WINDOW_DAYS days',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            Text(
-              'Within ${cluster.radius.round()}m radius',
-              style: TextStyle(color: Colors.grey[600], fontSize: 12),
-            ),
-            const SizedBox(height: 16),
-            const Text('Crime Severity Breakdown:', style: TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            ...cluster.crimeBreakdown.entries.where((e) => e.value > 0).map((entry) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            const Divider(height: 1),
+            // Scrollable Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${entry.key.toUpperCase()}:'),
                     Text(
-                      '${entry.value}',
+                      '${cluster.crimeCount} crimes in the last $timeWindow days',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
+                    Text(
+                      'Within ${cluster.radius.round()}m radius',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Crime Severity Breakdown:', style: TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    ...cluster.crimeBreakdown.entries.where((e) => e.value > 0).map((entry) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('${entry.key.toUpperCase()}:'),
+                            Text(
+                              '${entry.value}',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    if (cluster.topCrimeTypes.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      const Text('Most Common Crimes:', style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      ...cluster.topCrimeTypes.asMap().entries.map((entry) {
+                        final crimeType = entry.value;
+                        
+                        // Find all crimes of this type
+                        final crimesOfType = cluster.crimes.where(
+                          (c) => (c['crime_type']['name'] ?? 'Unknown') == crimeType
+                        ).toList();
+                        
+                        if (crimesOfType.isEmpty) return const SizedBox.shrink();
+                        
+                        // Sort by time (most recent first)
+                        crimesOfType.sort((a, b) {
+                          final timeA = parseStoredDateTime(a['time']);
+                          final timeB = parseStoredDateTime(b['time']);
+                          return timeB.compareTo(timeA);
+                        });
+                        
+                        final mostRecentTime = parseStoredDateTime(crimesOfType.first['time']);
+                        final timeAgo = _getTimeAgo(mostRecentTime, compact: true);
+                        
+                        // Get the crime level from the most recent crime
+                        final crimeLevel = crimesOfType.first['crime_type']['level'] ?? 'unknown';
+                        final levelCapitalized = crimeLevel[0].toUpperCase() + crimeLevel.substring(1);
+                        
+                        // Count of crimes of this type
+                        final count = crimesOfType.length;
+                        
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '• $crimeType${count > 1 ? ' ($count)' : ''}',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '($levelCapitalized)',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey[600],
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Text(
+                                timeAgo,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
                   ],
                 ),
-              );
-            }),
-            if (cluster.topCrimeTypes.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const Text('Most Common Crimes:', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              ...cluster.topCrimeTypes.asMap().entries.map((entry) {
-                final crimeType = entry.value;
-                
-                // Find the most recent crime of this type
-                final crimesOfType = cluster.crimes.where(
-                  (c) => (c['crime_type']['name'] ?? 'Unknown') == crimeType
-                ).toList();
-                
-                if (crimesOfType.isEmpty) return const SizedBox.shrink();
-                
-                // Sort by time (most recent first)
-                crimesOfType.sort((a, b) {
-                  // FIXED: Use parseStoredDateTime for consistent parsing
-                  final timeA = parseStoredDateTime(a['time']);
-                  final timeB = parseStoredDateTime(b['time']);
-                  return timeB.compareTo(timeA);
-                });
-                
-                // FIXED: Parse the most recent time properly
-                final mostRecentTime = parseStoredDateTime(crimesOfType.first['time']);
-                final timeAgo = _getTimeAgo(mostRecentTime, compact: true);
-                
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '• $crimeType',
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ),
-                      Text(
-                        timeAgo,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[700],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ],
+              ),
+            ),
           ],
         ),
       ),
@@ -14990,33 +16451,23 @@ void _showHeatmapDetails(HeatmapCluster cluster) {
 
 
 
-
 Future<List<LocationSuggestion>> _searchLocations(String query) async {
   if (query.isEmpty || query.length < 2) return [];
   
   try {
-    // Check if query is lat/long coordinates (e.g., "6.8044,122.1218" or "6.8044, 122.1218")
-    final latLongPattern = RegExp(r'^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$');
-    final match = latLongPattern.firstMatch(query.trim());
+    // Enhanced coordinate parsing - supports multiple formats
+    final coordinates = _parseCoordinates(query);
     
-    if (match != null) {
-      // Parse coordinates
-      final lat = double.tryParse(match.group(1)!);
-      final lon = double.tryParse(match.group(2)!);
-      
-      if (lat != null && lon != null && 
-          lat >= -90 && lat <= 90 && 
-          lon >= -180 && lon <= 180) {
-        // Return a direct coordinate suggestion
-        return [
-          LocationSuggestion(
-            displayName: 'Go to exact location ($lat, $lon)',
-            lat: lat,
-            lon: lon,
-            isInZamboanga: LocationSuggestion._isInZamboangaCity(lat, lon),
-          )
-        ];
-      }
+    if (coordinates != null && coordinates.isValid) {
+      // Return a direct coordinate suggestion
+      return [
+        LocationSuggestion(
+          displayName: 'Go to exact location (${coordinates.lat.toStringAsFixed(4)}, ${coordinates.lon.toStringAsFixed(4)})',
+          lat: coordinates.lat,
+          lon: coordinates.lon,
+          isInZamboanga: LocationSuggestion._isInZamboangaCity(coordinates.lat, coordinates.lon),
+        )
+      ];
     }
     
     // Enhanced query processing with local knowledge
@@ -15114,6 +16565,49 @@ Future<List<LocationSuggestion>> _searchLocations(String query) async {
     return [];
   }
 }
+
+// Helper method to parse coordinates from various formats
+CoordinateParseResult? _parseCoordinates(String input) {
+  // Remove extra whitespace
+  final cleaned = input.trim();
+  
+  // Try to extract numbers from the input
+  // Matches formats like:
+  // - "6.9214, 122.0790"
+  // - "(6.9214, 122.0790)"
+  // - "6.9214 122.0790"
+  // - "lat: 6.9214, lon: 122.0790"
+  // - "6.9214°N, 122.0790°E"
+  
+  final RegExp coordRegex = RegExp(
+    r'[-+]?\d+\.?\d*',
+    multiLine: false,
+  );
+  
+  final matches = coordRegex.allMatches(cleaned).toList();
+  
+  if (matches.length >= 2) {
+    try {
+      final lat = double.parse(matches[0].group(0)!);
+      final lon = double.parse(matches[1].group(0)!);
+      
+      // Validate coordinate ranges
+      if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+        return CoordinateParseResult(
+          lat: lat,
+          lon: lon,
+          isValid: true,
+        );
+      }
+    } catch (e) {
+      return null;
+    }
+  }
+  
+  return null;
+}
+
+
 
 // Local knowledge system for Zamboanga City
 List<String> _processQueryWithLocalKnowledge(String query) {
@@ -15244,6 +16738,20 @@ void _showSafeSpotDetails(Map<String, dynamic> safeSpot) {
 
   _shouldNonAdminOfficerSeeHotspot(PostgrestMap response) {}
 }
+
+class CoordinateParseResult {
+  final double lat;
+  final double lon;
+  final bool isValid;
+  
+  CoordinateParseResult({
+    required this.lat,
+    required this.lon,
+    required this.isValid,
+  });
+}
+
+
 
 class HeatmapCluster {
   final LatLng center; // Weighted center of the cluster

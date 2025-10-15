@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -20,58 +23,58 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
   late ScrollController _scrollController;
+  late AnimationController _carouselController;
   late PageController _pageController;
+  final GlobalKey _featuresKey = GlobalKey();
+  final GlobalKey _benefitsKey = GlobalKey();
+  final GlobalKey _ctaKey = GlobalKey();
+
   int _currentPage = 0;
+  Timer? _autoPlayTimer;  // Add this
+  bool _isAutoPlaying = false;  // Add this
+  double _carouselOffset = 0.0;
+  
+@override
+void initState() {
+  super.initState();
+  
+  _fadeController = AnimationController(
+    duration: const Duration(milliseconds: 1500),
+    vsync: this,
+  );
+  _slideController = AnimationController(
+    duration: const Duration(milliseconds: 1200),
+    vsync: this,
+  );
+  
+  // Add carousel animation controller
+  _carouselController = AnimationController(
+    duration: const Duration(milliseconds: 700),
+    vsync: this,
+  );
 
-  @override
-  void initState() {
-    super.initState();
-    
-    _fadeController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
-      vsync: this,
-    );
-    _slideController = AnimationController(
-      duration: const Duration(milliseconds: 1200),
-      vsync: this,
-    );
+  _fadeAnimation = Tween<double>(
+    begin: 0.0,
+    end: 1.0,
+  ).animate(CurvedAnimation(
+    parent: _fadeController,
+    curve: Curves.easeInOut,
+  ));
 
-    _fadeAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _fadeController,
-      curve: Curves.easeInOut,
-    ));
+  _slideAnimation = Tween<Offset>(
+    begin: const Offset(0, 0.3),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(
+    parent: _slideController,
+    curve: Curves.easeOutBack,
+  ));
 
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.3),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _slideController,
-      curve: Curves.easeOutBack,
-    ));
+  _scrollController = ScrollController();
 
-    _scrollController = ScrollController();
-    
-    _pageController = PageController(
-      viewportFraction: 0.35,
-      initialPage: 0,
-    );
-    _pageController.addListener(() {
-      int next = _pageController.page!.round();
-      if (_currentPage != next) {
-        setState(() {
-          _currentPage = next;
-        });
-      }
-    });
-
-    // Start animations
-    _fadeController.forward();
-    _slideController.forward();
-    _loadCrimeData();
-  }
+  _fadeController.forward();
+  _slideController.forward();
+  _loadCrimeData();
+}
 
   @override
   void dispose() {
@@ -79,8 +82,70 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
     _slideController.dispose();
     _scrollController.dispose();
     _pageController.dispose();
+    _autoPlayTimer?.cancel();
+    _carouselController.dispose();
     super.dispose();
   }
+
+void _animateToPage(int newPage) {
+  final features = _getFeatures();
+  final normalizedNew = newPage % features.length;
+  final normalizedCurrent = _currentPage % features.length;
+  
+  // Calculate direction and offset
+  int direction = normalizedNew - normalizedCurrent;
+  if (direction.abs() > features.length ~/ 2) {
+    direction = direction > 0 ? direction - features.length : direction + features.length;
+  }
+  
+  final startOffset = _carouselOffset;
+  final endOffset = _carouselOffset + direction;
+  
+  final animation = Tween<double>(
+    begin: startOffset,
+    end: endOffset,
+  ).animate(CurvedAnimation(
+    parent: _carouselController,
+    curve: Curves.easeInOutCubic,
+  ));
+  
+  animation.addListener(() {
+    setState(() {
+      _carouselOffset = animation.value;
+    });
+  });
+  
+  _carouselController.forward(from: 0).then((_) {
+    setState(() {
+      _currentPage = normalizedNew;
+      _carouselOffset = 0;
+    });
+  });
+}
+
+void _startAutoPlay() {
+  setState(() => _isAutoPlaying = true);
+  _autoPlayTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+    _animateToPage(_currentPage + 1);
+  });
+}
+
+void _stopAutoPlay() {
+  _autoPlayTimer?.cancel();
+  setState(() => _isAutoPlaying = false);
+}
+
+List<Map<String, dynamic>> _getInfiniteFeatures() {
+  final features = _getFeatures();
+  // Create [last2, last1, ...features, first1, first2] for seamless wrapping
+  return [
+    features[features.length - 2],
+    features[features.length - 1],
+    ...features,
+    features[0],
+    features[1],
+  ];
+}
 
   
 List<Map<String, dynamic>> _crimeData = [];
@@ -92,22 +157,22 @@ Future<void> _loadCrimeData() async {
 
     final response = await Supabase.instance.client
         .from('hotspot')
-        .select('created_at')
+        .select('time')  // Changed from 'created_at' to 'time'
         .eq('status', 'approved')
-        .gte('created_at', lastMonth.toIso8601String())
-        .lte('created_at', now.toIso8601String());
+        .gte('time', lastMonth.toIso8601String())  // Changed from 'created_at' to 'time'
+        .lte('time', now.toIso8601String());  // Changed from 'created_at' to 'time'
 
     Map<String, int> dailyCounts = {};
 
     for (var item in response) {
-      final date = DateTime.parse(item['created_at']);
+      final date = DateTime.parse(item['time']);  // Changed from 'created_at' to 'time'
       final dayKey = DateFormat('yyyy-MM-dd').format(date);
       dailyCounts[dayKey] = (dailyCounts[dayKey] ?? 0) + 1;
     }
 
     final chartData = dailyCounts.entries.map((e) {
       return {
-        'date': e.key,   // now daily
+        'date': e.key,
         'count': e.value,
       };
     }).toList()
@@ -482,6 +547,7 @@ Future<void> _loadCrimeData() async {
 
     return Scaffold(
       resizeToAvoidBottomInset: false,
+      floatingActionButton: _buildHotlinesFAB(),
       body: Stack(
         children: [
           // Background image
@@ -493,19 +559,7 @@ Future<void> _loadCrimeData() async {
             ),
           ),
           // Subtle overlay
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.blue.shade50.withOpacity(0.3),
-                  Colors.transparent,
-                  Colors.blue.shade50.withOpacity(0.2),
-                ],
-              ),
-            ),
-          ),
+
           // Main content
           SafeArea(
             child: SingleChildScrollView(
@@ -525,17 +579,13 @@ Future<void> _loadCrimeData() async {
                   ),
                   SizedBox(height: screenHeight * 0.08),
                   // Features Section
-                  _buildFeaturesSection(screenWidth),
-                  SizedBox(height: screenHeight * 0.08),
-                  // Benefits Section
-                  _buildBenefitsSection(screenWidth),
-                  SizedBox(height: screenHeight * 0.08),
-                  // Hotlines Section
-                  _buildHotlinesSection(screenWidth),
-                  SizedBox(height: screenHeight * 0.08),
+                  Container(key: _featuresKey, child: _buildFeaturesSection(screenWidth)),
+                  Container(key: _benefitsKey, child: _buildBenefitsSection(screenWidth)),
+                
+
                   // Call to Action
                   _buildCallToAction(screenWidth),
-                  SizedBox(height: screenHeight * 0.05),
+                
                   // Footer
                   _buildFooter(),
                 ],
@@ -547,92 +597,227 @@ Future<void> _loadCrimeData() async {
     );
   }
 
-  Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 20),
-      child: Row(
-        children: [
-          // Logo
-          Image.asset(
-            'assets/images/zecure.png',
-            height: 75,
-            width: 75,
-            errorBuilder: (context, error, stackTrace) => Container(
-              height: 50,
-              width: 50,
-              decoration: BoxDecoration(
-                color: Colors.blue.shade600,
-                borderRadius: BorderRadius.circular(25),
+  
+Widget _buildHotlinesFAB() {
+  return MouseRegion(
+    cursor: SystemMouseCursors.click,
+    child: HoverBuilder(
+      builder: (isHovered) {
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          transform: Matrix4.identity()
+            ..translate(0.0, isHovered ? -4.0 : 0.0)
+            ..scale(isHovered ? 1.05 : 1.0),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              gradient: LinearGradient(
+                colors: isHovered
+                    ? [const Color(0xFF1e3a8a), const Color(0xFF3b82f6)]
+                    : [const Color(0xFF2563eb), const Color(0xFF3b82f6)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              child: const Icon(
-                Icons.security_rounded,
-                size: 30,
-                color: Colors.white,
-              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF3b82f6).withOpacity(isHovered ? 0.4 : 0.25),
+                  blurRadius: isHovered ? 20 : 12,
+                  offset: Offset(0, isHovered ? 6 : 3),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Text(
-              'Zecure',
-              style: GoogleFonts.poppins(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-          ),
-          // Navigation
-          Row(
-            children: [
-              TextButton(
-                onPressed: () => _scrollToSection('features'),
-                child: Text(
-                  'Features',
-                  style: GoogleFonts.poppins(color: Colors.black87, fontSize: 16),
-                ),
-              ),
-              TextButton(
-                onPressed: () => _scrollToSection('benefits'),
-                child: Text(
-                  'Benefits',
-                  style: GoogleFonts.poppins(color: Colors.black87, fontSize: 16),
-                ),
-              ),
-              TextButton(
-                onPressed: () => _scrollToSection('hotlines'),
-                child: Text(
-                  'Hotlines',
-                  style: GoogleFonts.poppins(color: Colors.black87, fontSize: 16),
-                ),
-              ),
-              const SizedBox(width: 32),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LoginScreen()),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue.shade600,
-                  foregroundColor: Colors.white,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _showHotlinesModal,
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.phone_in_talk_rounded,
+                          size: 20,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Hotlines',
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          color: Colors.white,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 18,
+                        color: Colors.white.withOpacity(0.9),
+                      ),
+                    ],
                   ),
                 ),
-                child: Text(
-                  'Get Started',
-                  style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+
+// IMPROVED HEADER
+Widget _buildHeader() {
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 10),
+    child: Row(
+      children: [
+        // Logo
+        Image.asset(
+          'assets/images/zecure.png',
+          height: 75,
+          width: 75,
+          errorBuilder: (context, error, stackTrace) => Container(
+            height: 50,
+            width: 50,
+            decoration: BoxDecoration(
+              color: Colors.blue.shade600,
+              borderRadius: BorderRadius.circular(25),
+            ),
+            child: const Icon(
+              Icons.security_rounded,
+              size: 30,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          'Zecure',
+          style: GoogleFonts.poppins(
+            fontSize: 26,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
+          ),
+        ),
+        const Spacer(),
+
+        // Navigation with tighter spacing
+        _buildNavItem('Features', () => _scrollToSection('features')),
+        const SizedBox(width: 28),
+        _buildNavItem('Benefits', () => _scrollToSection('benefits')),
+        const SizedBox(width: 32),
+
+        // Compact CTA Button
+        MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: HoverBuilder(
+            builder: (isHovered) {
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                transform: Matrix4.translationValues(0, isHovered ? -3 : 0, 0),
+                decoration: BoxDecoration(
+                  color: isHovered ? Colors.white : Colors.blue.shade600,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.blue.shade600,
+                    width: 2,
+                  ),
+                ),
+                child: TextButton(
+                  onPressed: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (context) => const LoginScreen()),
+                    );
+                  },
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), // 🔹 Reduced width
+                    minimumSize: const Size(0, 0), // prevent extra width
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedDefaultTextStyle(
+                        duration: const Duration(milliseconds: 200),
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          color: isHovered ? Colors.blue.shade600 : Colors.white,
+                        ),
+                        child: const Text('Get Started'),
+                      ),
+                      const SizedBox(width: 6),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: isHovered ? Colors.blue.shade600 : Colors.white,
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+
+Widget _buildNavItem(String text, VoidCallback onTap) {
+  return MouseRegion(
+    cursor: SystemMouseCursors.click,
+    child: HoverBuilder(
+      builder: (isHovered) {
+        return GestureDetector(
+          onTap: onTap,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 200),
+                style: GoogleFonts.poppins(
+                  color: isHovered ? Colors.blue.shade600 : Colors.black87,
+                  fontSize: 16,
+                  fontWeight: isHovered ? FontWeight.w600 : FontWeight.w500,
+                ),
+                child: Text(text),
+              ),
+              const SizedBox(height: 4),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                height: 2,
+                width: isHovered ? 40 : 0,
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade600,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
+}
+
 
 // REVAMPED HERO SECTION
 Widget _buildHeroSection(double screenWidth, double screenHeight) {
@@ -1021,12 +1206,16 @@ Widget _buildTrustBadge(IconData icon, String label) {
     ],
   );
 }
+
 // REVAMPED FEATURES SECTION
 Widget _buildFeaturesSection(double screenWidth) {
   final features = _getFeatures();
+  final infiniteFeatures = _getInfiniteFeatures();
+  final centerIndex = _currentPage + 2;
+  
   return Container(
     width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 60),
+    padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 100),
     decoration: BoxDecoration(
       gradient: LinearGradient(
         begin: Alignment.topLeft,
@@ -1039,7 +1228,7 @@ Widget _buildFeaturesSection(double screenWidth) {
     ),
     child: Column(
       children: [
-        // Section Header with Icon
+        // Header
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -1081,35 +1270,209 @@ Widget _buildFeaturesSection(double screenWidth) {
             textAlign: TextAlign.center,
           ),
         ),
-        const SizedBox(height: 60),
+        const SizedBox(height: 100), // Increased from 60
         
-        // Features Grid with Staggered Animation
-        Wrap(
-          spacing: 30,
-          runSpacing: 30,
-          children: features.asMap().entries.map((entry) {
-            final index = entry.key;
-            final feature = entry.value;
-            return TweenAnimationBuilder<double>(
-              duration: Duration(milliseconds: 600 + (index * 100)),
-              tween: Tween(begin: 0.0, end: 1.0),
-              curve: Curves.easeOutCubic,
-              builder: (context, value, child) {
-                return Transform.translate(
-                  offset: Offset(0, 30 * (1 - value)),
-                  child: Opacity(
-                    opacity: value,
-                    child: SizedBox(
-                      width: (screenWidth - 220) / 3 - 30,
-                      child: _buildFeatureCard(feature),
-                    ),
-                  ),
-                );
-              },
-            );
-          }).toList(),
+        // Carousel with adjusted positioning
+        Center(
+          child: SizedBox(
+            height: 420, // Reduced from 480 to move cards up
+            width: 1200,
+            child: Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: _buildStackedCards(infiniteFeatures, centerIndex),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 60), // Increased from 40
+        
+        // Controls
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildCarouselButton(
+              icon: Icons.chevron_left_rounded,
+              onPressed: () => _animateToPage(_currentPage - 1),
+            ),
+            const SizedBox(width: 20),
+            _buildPlayButton(),
+            const SizedBox(width: 20),
+            _buildCarouselButton(
+              icon: Icons.chevron_right_rounded,
+              onPressed: () => _animateToPage(_currentPage + 1),
+            ),
+          ],
+        ),
+        
+        const SizedBox(height: 20),
+        
+        // Indicators
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(
+            features.length,
+            (index) => AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              width: _currentPage == index ? 32 : 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: _currentPage == index
+                    ? Colors.blue.shade600
+                    : Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
         ),
       ],
+    ),
+  );
+}
+
+// New method to build properly stacked cards
+List<Widget> _buildStackedCards(List<Map<String, dynamic>> infiniteFeatures, int centerIndex) {
+  final cards = <MapEntry<double, Widget>>[];
+  
+  for (int i = -2; i <= 2; i++) {
+    final offset = i.toDouble() - _carouselOffset;
+    final featureIndex = (centerIndex + i) % infiniteFeatures.length;
+    final absOffset = offset.abs();
+    
+    cards.add(MapEntry(
+      absOffset,
+      _buildCarouselCard(
+        feature: infiniteFeatures[featureIndex],
+        offset: offset,
+        isCurrent: i == 0 && _carouselOffset.abs() < 0.5,
+        containerWidth: 1200,
+      ),
+    ));
+  }
+  
+  // Sort by absolute offset (descending) so furthest cards render first
+  cards.sort((a, b) => b.key.compareTo(a.key));
+  
+  return cards.map((e) => e.value).toList();
+}
+
+Widget _buildCarouselCard({
+  required Map<String, dynamic> feature,
+  required double offset,
+  required bool isCurrent,
+  required double containerWidth,
+}) {
+  final absOffset = offset.abs();
+  final horizontalOffset = offset * 220.0;
+  final scale = 1.0 - (absOffset * 0.2);
+  final opacity = (1.0 - (absOffset * 0.3)).clamp(0.3, 1.0);
+  final verticalOffset = absOffset * 25.0; // Reduced from 30.0
+  
+  final cardWidth = 320.0;
+  final centerPosition = (containerWidth / 2) - (cardWidth / 2);
+  
+  return Positioned(
+    left: centerPosition + horizontalOffset,
+    top: 30 + verticalOffset, // Added base offset of 30 to push all cards down
+    child: Transform(
+      transform: Matrix4.identity()
+        ..setEntry(3, 2, 0.001)
+        ..scale(scale)
+        ..rotateY(offset * 0.1),
+      alignment: Alignment.center,
+      child: Opacity(
+        opacity: opacity,
+        child: SizedBox(
+          width: cardWidth,
+          child: _buildFeatureCard(feature),
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _buildCarouselButton({required IconData icon, required VoidCallback onPressed}) {
+  return MouseRegion(
+    cursor: SystemMouseCursors.click,
+    child: HoverBuilder(
+      builder: (isHovered) {
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          transform: Matrix4.identity()..scale(isHovered ? 1.1 : 1.0),
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(50),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isHovered ? Colors.blue.shade600 : Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.blue.shade600, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.blue.withOpacity(0.2),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Icon(
+                icon,
+                color: isHovered ? Colors.white : Colors.blue.shade600,
+                size: 24,
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+Widget _buildPlayButton() {
+  return MouseRegion(
+    cursor: SystemMouseCursors.click,
+    child: HoverBuilder(
+      builder: (isHovered) {
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          transform: Matrix4.identity()..scale(isHovered ? 1.1 : 1.0),
+          child: InkWell(
+            onTap: () {
+              if (_isAutoPlaying) {
+                _stopAutoPlay();
+              } else {
+                _startAutoPlay();
+              }
+            },
+            borderRadius: BorderRadius.circular(50),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: _isAutoPlaying
+                      ? [Colors.orange.shade500, Colors.red.shade500]
+                      : [Colors.blue.shade600, Colors.purple.shade600],
+                ),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: (_isAutoPlaying ? Colors.orange : Colors.blue).withOpacity(0.4),
+                    blurRadius: 20,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Icon(
+                _isAutoPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 28,
+              ),
+            ),
+          ),
+        );
+      },
     ),
   );
 }
@@ -1123,11 +1486,10 @@ Widget _buildFeatureCard(Map<String, dynamic> feature) {
           duration: const Duration(milliseconds: 400),
           curve: Curves.easeOutCubic,
           transform: Matrix4.identity()
-            ..translate(0.0, isHovered ? -12.0 : 0.0)
-            ..rotateZ(isHovered ? -0.01 : 0.0),
+            ..translate(0.0, isHovered ? -8.0 : 0.0),
           child: Container(
-            height: 320,
-            padding: const EdgeInsets.all(28),
+            height: 300,
+            padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(24),
@@ -1151,64 +1513,57 @@ Widget _buildFeatureCard(Map<String, dynamic> feature) {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Icon with animated background
+                // Keep your existing card content
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 400),
                   transform: Matrix4.identity()
-                    ..scale(isHovered ? 1.15 : 1.0)
-                    ..rotateZ(isHovered ? 0.1 : 0.0),
+                    ..scale(isHovered ? 1.15 : 1.0),
                   child: Container(
-                    padding: const EdgeInsets.all(18),
+                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: feature['gradient'],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
                           color: feature['color'].withOpacity(0.4),
-                          blurRadius: isHovered ? 25 : 15,
-                          offset: Offset(0, isHovered ? 10 : 6),
+                          blurRadius: isHovered ? 20 : 12,
+                          offset: Offset(0, isHovered ? 8 : 4),
                         ),
                       ],
                     ),
                     child: Icon(
                       feature['icon'],
                       color: Colors.white,
-                      size: 36,
+                      size: 32,
                     ),
                   ),
                 ),
-                const SizedBox(height: 24),
-                
-                // Title with gradient on hover
+                const SizedBox(height: 20),
                 AnimatedDefaultTextStyle(
                   duration: const Duration(milliseconds: 300),
                   style: GoogleFonts.poppins(
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.bold,
                     color: isHovered ? feature['color'] : Colors.grey.shade900,
                     height: 1.3,
                   ),
                   child: Text(feature['title']),
                 ),
-                const SizedBox(height: 14),
-                
-                // Description
+                const SizedBox(height: 12),
                 Expanded(
                   child: Text(
                     feature['description'],
                     style: GoogleFonts.poppins(
-                      fontSize: 14,
+                      fontSize: 13,
                       color: Colors.grey.shade600,
                       height: 1.6,
                     ),
                   ),
                 ),
-                
-
               ],
             ),
           ),
@@ -1223,14 +1578,14 @@ Widget _buildBenefitsSection(double screenWidth) {
   final benefits = _getBenefits();
   return Container(
     width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 80),
+    padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 100),
     decoration: BoxDecoration(
       gradient: LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
           Colors.white,
-          Colors.blue.shade50.withOpacity(0.3),
+          Colors.blue.shade50,
         ],
       ),
     ),
@@ -1291,415 +1646,454 @@ Widget _buildBenefitCard(Map<String, dynamic> benefit, int index) {
     [Colors.teal.shade600, Colors.teal.shade400],
   ];
   
-  return MouseRegion(
-    cursor: SystemMouseCursors.click,
-    child: HoverBuilder(
-      builder: (isHovered) {
-        return TweenAnimationBuilder<double>(
-          duration: Duration(milliseconds: 700 + (index * 150)),
-          tween: Tween(begin: 0.0, end: 1.0),
-          curve: Curves.easeOutBack,
-          builder: (context, animValue, child) {
-            return Transform.scale(
-              scale: animValue,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 400),
-                transform: Matrix4.identity()
-                  ..translate(0.0, isHovered ? -10.0 : 0.0),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: isHovered ? colors[index] : [Colors.white, Colors.white],
-                  ),
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(
-                    color: isHovered ? Colors.transparent : Colors.grey.shade200,
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: isHovered 
-                          ? colors[index][0].withOpacity(0.4)
-                          : Colors.black.withOpacity(0.06),
-                      blurRadius: isHovered ? 35 : 20,
-                      offset: Offset(0, isHovered ? 20 : 10),
-                    ),
-                  ],
-                ),
-                padding: const EdgeInsets.all(36),
-                child: Column(
-                  children: [
-                    // Icon
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 400),
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: isHovered 
-                            ? Colors.white.withOpacity(0.2)
-                            : colors[index][0].withOpacity(0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 400),
-                        transform: Matrix4.identity()
-                          ..scale(isHovered ? 1.2 : 1.0),
-                        child: Icon(
-                          benefit['icon'],
-                          size: 48,
-                          color: isHovered ? Colors.white : colors[index][0],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 28),
-                    
-                    // Title
-                    Text(
-                      benefit['title'],
-                      style: GoogleFonts.poppins(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: isHovered ? Colors.white : Colors.grey.shade900,
-                        height: 1.3,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    
-                    // Description
-                    Text(
-                      benefit['description'],
-                      style: GoogleFonts.poppins(
-                        fontSize: 15,
-                        color: isHovered 
-                            ? Colors.white.withOpacity(0.95)
-                            : Colors.grey.shade600,
-                        height: 1.7,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    
-                    const SizedBox(height: 24),
-                    
-
-                  ],
-                ),
+  return AnimatedBuilder(
+    animation: _scrollController,
+    builder: (context, child) {
+      // Calculate parallax offset based on scroll position
+      final scrollOffset = _scrollController.hasClients ? _scrollController.offset : 0;
+      final parallaxOffset = (scrollOffset - 1500) * 0.05 * (index - 1); // Different speed per card
+      
+      return Transform.translate(
+        offset: Offset(0, parallaxOffset.clamp(-30.0, 30.0)),
+        child: child,
+      );
+    },
+    child: MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: HoverBuilder(
+        builder: (isHovered) {
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
+            transform: Matrix4.identity()
+              ..translate(0.0, isHovered ? -10.0 : 0.0),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isHovered ? colors[index] : [Colors.white, Colors.white],
               ),
-            );
-          },
-        );
-      },
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: isHovered ? Colors.transparent : Colors.grey.shade200,
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: isHovered 
+                      ? colors[index][0].withOpacity(0.4)
+                      : Colors.black.withOpacity(0.06),
+                  blurRadius: isHovered ? 35 : 20,
+                  offset: Offset(0, isHovered ? 20 : 10),
+                ),
+              ],
+            ),
+            padding: const EdgeInsets.all(36),
+            child: Column(
+              children: [
+                // Icon with animated glow
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 400),
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: isHovered 
+                        ? Colors.white.withOpacity(0.2)
+                        : colors[index][0].withOpacity(0.1),
+                    shape: BoxShape.circle,
+                    boxShadow: isHovered ? [
+                      BoxShadow(
+                        color: colors[index][0].withOpacity(0.6),
+                        blurRadius: 30,
+                        spreadRadius: 5,
+                      ),
+                    ] : [],
+                  ),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 400),
+                    transform: Matrix4.identity()
+                      ..scale(isHovered ? 1.2 : 1.0)
+                      ..rotateZ(isHovered ? 0.1 : 0.0), // Add slight rotation
+                    child: Icon(
+                      benefit['icon'],
+                      size: 48,
+                      color: isHovered ? Colors.white : colors[index][0],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                
+                Text(
+                  benefit['title'],
+                  style: GoogleFonts.poppins(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: isHovered ? Colors.white : Colors.grey.shade900,
+                    height: 1.3,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                
+                Text(
+                  benefit['description'],
+                  style: GoogleFonts.poppins(
+                    fontSize: 15,
+                    color: isHovered 
+                        ? Colors.white.withOpacity(0.95)
+                        : Colors.grey.shade600,
+                    height: 1.7,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     ),
   );
 }
 
-// REVAMPED HOTLINES SECTION
-Widget _buildHotlinesSection(double screenWidth) {
-  return Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 80),
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          Colors.red.shade50.withOpacity(0.3),
-          Colors.orange.shade50.withOpacity(0.2),
-        ],
-      ),
-    ),
-    child: Column(
-      children: [
-        // Animated Header
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.red.shade500, Colors.orange.shade600],
-                ),
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.red.withOpacity(0.4),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.emergency_rounded,
-                color: Colors.white,
-                size: 36,
-              ),
-            ),
-            const SizedBox(width: 20),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Emergency Hotlines',
-                  style: GoogleFonts.poppins(
-                    fontSize: 42,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey.shade900,
-                    letterSpacing: -0.5,
-                  ),
-                ),
-                Text(
-                  'Available 24/7 • Quick Response',
-                  style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    color: Colors.red.shade700,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+void _showHotlinesModal() {
+  showDialog(
+    context: context,
+    builder: (context) => Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 500,
+        height: 850,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 30,
+              offset: const Offset(0, 10),
             ),
           ],
         ),
-        const SizedBox(height: 60),
-        
-        // Hotlines Grid
-        Wrap(
-          spacing: 20,
-          runSpacing: 20,
-          children: _hotlines.asMap().entries.map((entry) {
-            final index = entry.key;
-            return TweenAnimationBuilder<double>(
-              duration: Duration(milliseconds: 500 + (index * 80)),
-              tween: Tween(begin: 0.0, end: 1.0),
-              curve: Curves.easeOutCubic,
-              builder: (context, value, child) {
-                return Transform.scale(
-                  scale: value,
-                  child: Opacity(
-                    opacity: value,
-                    child: SizedBox(
-                      width: (screenWidth - 220) / 4 - 20,
-                      child: _buildHotlineCard(entry.value),
+        child: Column(
+          children: [
+            // Modern Header
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(24),
+                  topRight: Radius.circular(24),
+                ),
+                border: Border(
+                  bottom: BorderSide(
+                    color: Colors.grey.shade200,
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2B5876).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.phone_in_talk_rounded,
+                      color: Color(0xFF2B5876),
+                      size: 24,
                     ),
                   ),
-                );
-              },
-            );
-          }).toList(),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Emergency Contacts',
+                          style: GoogleFonts.poppins(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF1a1a1a),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Quick access to emergency services',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: Icon(Icons.close_rounded, color: Colors.grey.shade700),
+                    iconSize: 24,
+                  ),
+                ],
+              ),
+            ),
+            
+            // Scrollable list
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(24),
+                children: [
+                  // 911 Emergency
+                  _buildEmergencyCard(),
+                  const SizedBox(height: 16),
+                  
+                  // All other hotlines
+                  ..._hotlines.map((hotline) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _buildHotlineListItem(hotline),
+                  )),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _buildEmergencyCard() {
+  return Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      gradient: const LinearGradient(
+        colors: [Color(0xFF1e3a8a), Color(0xFF3b82f6)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: const Color(0xFF3b82f6).withOpacity(0.3),
+          blurRadius: 20,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    ),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(
+            Icons.phone_rounded,
+            color: Colors.white,
+            size: 28,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '911',
+                style: GoogleFonts.poppins(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: 1,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Emergency Hotline',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: Colors.white.withOpacity(0.95),
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Icon(
+          Icons.arrow_forward_rounded,
+          color: Colors.white.withOpacity(0.9),
+          size: 24,
         ),
       ],
     ),
   );
 }
 
-Widget _buildHotlineCard(Map<String, dynamic> hotline) {
+Widget _buildHotlineListItem(Map<String, dynamic> hotline) {
   final categoryIcon = _getIconForCategory(hotline['category']);
   final categoryColor = _getColorForCategory(hotline['category']);
   
-  return MouseRegion(
-    cursor: SystemMouseCursors.click,
-    child: HoverBuilder(
-      builder: (isHovered) {
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          transform: Matrix4.identity()
-            ..translate(0.0, isHovered ? -6.0 : 0.0)
-            ..scale(isHovered ? 1.02 : 1.0),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: isHovered 
-                  ? categoryColor.withOpacity(0.6)
-                  : Colors.grey.shade200,
-              width: 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: isHovered 
-                    ? categoryColor.withOpacity(0.25)
-                    : Colors.black.withOpacity(0.06),
-                blurRadius: isHovered ? 30 : 15,
-                offset: Offset(0, isHovered ? 15 : 8),
-              ),
-            ],
-          ),
-          child: Theme(
-            data: Theme.of(context).copyWith(
-              dividerColor: Colors.transparent,
-              splashColor: categoryColor.withOpacity(0.1),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(22),
-              child: ExpansionTile(
-                tilePadding: const EdgeInsets.all(20),
-                childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                leading: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  transform: Matrix4.identity()
-                    ..scale(isHovered ? 1.15 : 1.0),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [categoryColor, categoryColor.withOpacity(0.7)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: [
-                      BoxShadow(
-                        color: categoryColor.withOpacity(0.4),
-                        blurRadius: isHovered ? 15 : 8,
-                        offset: Offset(0, isHovered ? 6 : 3),
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    categoryIcon,
-                    color: Colors.white,
-                    size: 24,
-                  ),
-                ),
-                title: Text(
-                  hotline['category'],
-                  style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: isHovered ? categoryColor : Colors.grey.shade900,
-                  ),
-                ),
-                trailing: AnimatedRotation(
-                  duration: const Duration(milliseconds: 300),
-                  turns: isHovered ? 0.5 : 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: categoryColor.withOpacity(0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.expand_more_rounded,
-                      color: categoryColor,
-                      size: 20,
-                    ),
-                  ),
-                ),
-                children: [
-                  if (hotline['numbers'] != null)
-                    ...hotline['numbers'].map<Widget>((n) => _buildPhoneNumber(n, categoryColor)),
-                  if (hotline['stations'] != null)
-                    ...hotline['stations'].map<Widget>((s) => _buildStation(s, categoryColor)),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    ),
-  );
-}
-
-Widget _buildPhoneNumber(Map<String, dynamic> number, Color color) {
-  return MouseRegion(
-    cursor: SystemMouseCursors.click,
-    child: HoverBuilder(
-      builder: (isHovered) {
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: isHovered
-                  ? [color.withOpacity(0.08), color.withOpacity(0.12)]
-                  : [Colors.grey.shade50, Colors.grey.shade50],
-            ),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isHovered ? color.withOpacity(0.4) : Colors.grey.shade200,
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(Icons.phone_rounded, size: 16, color: color),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      number['name'],
-                      style: GoogleFonts.poppins(
-                        fontSize: 13,
-                        color: Colors.grey.shade700,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      number['number'],
-                      style: GoogleFonts.poppins(
-                        fontSize: 15,
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (isHovered)
-                Icon(Icons.content_copy_rounded, size: 16, color: color),
-            ],
-          ),
-        );
-      },
-    ),
-  );
-}
-
-Widget _buildStation(Map<String, dynamic> station, Color color) {
   return Container(
-    margin: const EdgeInsets.only(bottom: 10),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.grey.shade200),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.04),
+          blurRadius: 10,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Theme(
+      data: Theme.of(context).copyWith(
+        dividerColor: Colors.transparent,
+        splashColor: Colors.grey.shade100,
+      ),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+        leading: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: categoryColor.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            categoryIcon,
+            color: categoryColor,
+            size: 22,
+          ),
+        ),
+        title: Text(
+          hotline['category'],
+          style: GoogleFonts.poppins(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: const Color(0xFF1a1a1a),
+          ),
+        ),
+        subtitle: Text(
+          _getSubtitleForCategory(hotline['category']),
+          style: GoogleFonts.poppins(
+            fontSize: 11,
+            color: Colors.grey.shade600,
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+        trailing: Icon(
+          Icons.expand_more_rounded,
+          color: Colors.grey.shade600,
+          size: 22,
+        ),
+        children: [
+          if (hotline['numbers'] != null)
+            ...hotline['numbers'].map<Widget>((n) => _buildPhoneNumberListItem(n)),
+          if (hotline['stations'] != null)
+            ...hotline['stations'].map<Widget>((s) => _buildStationListItem(s)),
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _buildPhoneNumberListItem(Map<String, dynamic> number) {
+  return Container(
+    margin: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
       color: Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.grey.shade200),
+    ),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                number['name'],
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                number['number'],
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  color: const Color(0xFF1a1a1a),
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _buildStationListItem(Map<String, dynamic> station) {
+  final categoryColor = _getColorForCategory(station['category'] ?? '');
+  
+  return Container(
+    margin: const EdgeInsets.only(bottom: 8),
+    decoration: BoxDecoration(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(12),
       border: Border.all(color: Colors.grey.shade200),
     ),
     child: Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        leading: Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(Icons.location_on_rounded, size: 18, color: color),
+        tilePadding: const EdgeInsets.all(14),
+        childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+        leading: Icon(
+          Icons.location_on_rounded, 
+          color: categoryColor, 
+          size: 20
         ),
         title: Text(
           station['name'],
           style: GoogleFonts.poppins(
-            fontSize: 14,
+            fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: Colors.grey.shade800,
+            color: const Color(0xFF1a1a1a),
           ),
         ),
+        trailing: Icon(
+          Icons.expand_more_rounded, 
+          color: Colors.grey.shade600, 
+          size: 20
+        ),
         children: station['numbers'].map<Widget>((num) => 
-          _buildPhoneNumber({'name': station['name'], 'number': num}, color)
+          _buildPhoneNumberListItem({'name': station['name'], 'number': num})
         ).toList(),
       ),
     ),
   );
+}
+
+String _getSubtitleForCategory(String category) {
+  if (category.contains('Medical') || category.contains('EMS')) {
+    return 'Medical emergencies';
+  } else if (category.contains('CDRRMO') || category.contains('ZCDRRMO')) {
+    return 'Disaster risk management';
+  } else if (category.contains('Task Force') || category.contains('JTFZ')) {
+    return 'Joint security operations';
+  } else if (category.contains('Police')) {
+    return 'Law enforcement';
+  } else if (category.contains('Fire')) {
+    return 'Fire emergencies';
+  }
+  return 'Emergency services';
 }
 
 IconData _getIconForCategory(String category) {
@@ -1718,7 +2112,7 @@ IconData _getIconForCategory(String category) {
   } else if (category.contains('Fire')) {
     return Icons.local_fire_department_rounded;
   }
-  return Icons.phone_in_talk_rounded; // default
+  return Icons.phone_in_talk_rounded;
 }
 
 Color _getColorForCategory(String category) {
@@ -1727,49 +2121,42 @@ Color _getColorForCategory(String category) {
     return Colors.lightGreen.shade700;
   } 
   else if (category.contains('CDRRMO') && !category.contains('ZCDRRMO')) {
-    return Colors.green.shade700; // Greenish-orange
+    return Colors.green.shade700;
   } 
   // Column 2: Teal/Cyan spectrum
   else if (category.contains('Mobile Force')) {
     return Colors.amber.shade600;
   } 
   else if (category.contains('ZCDRRMO')) {
-    return Colors.yellow.shade800; // Warm teal-orange
+    return Colors.yellow.shade800;
   } 
   // Column 3: Blue spectrum
   else if (category.contains('Police Office') && category.contains('ZCPO')) {
     return Colors.lightBlue.shade600;
   } 
   else if (category.contains('Police Stations')) {
-    return Colors.blue.shade500; // Lighter blue
+    return Colors.blue.shade500;
   } 
   // Column 4: Purple to Red spectrum
   else if (category.contains('Task Force') || category.contains('JTFZ')) {
     return Colors.pink.shade300;
   } 
   else if (category.contains('Fire')) {
-    return Colors.red.shade600; // Pinkish-red
+    return Colors.red.shade600;
   }
 
-  return Colors.red.shade600; // default
+  return Colors.red.shade600;
 }
-
-
 
 // REVAMPED CALL TO ACTION SECTION
 Widget _buildCallToAction(double screenWidth) {
   return Container(
     width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 100),
+    padding: const EdgeInsets.fromLTRB(80, 100, 80, 0), // Changed: removed bottom padding
     decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          Colors.blue.shade700,
-          Colors.blue.shade600,
-          Colors.purple.shade600,
-        ],
+      image: DecorationImage(
+        image: AssetImage('assets/images/DARK.jpg'),
+        fit: BoxFit.cover,
       ),
     ),
     child: Column(
@@ -1908,10 +2295,12 @@ Widget _buildCallToAction(double screenWidth) {
             );
           },
         ),
+        const SizedBox(height: 100), // Added bottom spacing within the container
       ],
     ),
   );
 }
+
 
 Widget _buildStatItem(String value, String label, double animValue) {
   return Column(
@@ -2032,186 +2421,265 @@ Widget _buildSecondaryCTAButton() {
     ),
   );
 }
-
-// REVAMPED FOOTER
+// IMPROVED FOOTER
 Widget _buildFooter() {
   return Container(
     width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 60),
     decoration: BoxDecoration(
       gradient: LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          Colors.grey.shade900,
-          Colors.grey.shade800,
+          const Color(0xFF1a1a2e),
+          const Color(0xFF16213e),
         ],
       ),
     ),
     child: Column(
       children: [
-        // Top section with logo and description
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Logo and tagline
-            Expanded(
-              flex: 2,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(2),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Image.asset(
-                          'assets/images/zecure.png',
-                          height: 50,
-                          width: 50,
-                          fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            height: 40,
-                            width: 40,
-                            decoration: BoxDecoration(
-                              color: Colors.blue.shade600,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(
-                              Icons.security_rounded,
-                              size: 24,
-                              color: Colors.white,
+        // Main footer content
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 60),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Brand section
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.blue.withOpacity(0.3),
+                                blurRadius: 12,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: Image.asset(
+                            'assets/images/zecure.png',
+                            height: 52,
+                            width: 52,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) => Container(
+                              height: 52,
+                              width: 52,
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade600,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(
+                                Icons.security_rounded,
+                                size: 28,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Zecure',
-                        style: GoogleFonts.poppins(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                        const SizedBox(width: 14),
+                        Text(
+                          'Zecure',
+                          style: GoogleFonts.poppins(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Making Zamboanga City safer through community-powered crime monitoring and real-time safety alerts.',
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        color: Colors.grey.shade300,
+                        height: 1.7,
+                        letterSpacing: 0.2,
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+                    ),
+                    const SizedBox(height: 28),
+                    // Social icons
+                      Row(
+                        children: [
+                          _buildSocialIcon(
+                            FontAwesomeIcons.facebookF,
+                            'https://www.facebook.com/venard.jhon.c.salido',
+                            hoverColor: const Color(0xFF1877F2), // Facebook blue
+                          ),
+                          const SizedBox(width: 14),
+                          _buildSocialIcon(
+                            FontAwesomeIcons.instagram,
+                            'https://www.instagram.com/venplaystrings/',
+                            hoverColor: const Color(0xFFE1306C), // Instagram pink/red tone
+                          ),
+                          const SizedBox(width: 14),
+                          _buildSocialIcon(
+                            FontAwesomeIcons.linkedinIn,
+                            'https://www.linkedin.com/in/venard-jhon-cabahug-salido-08041434b/',
+                            hoverColor: const Color.fromARGB(255, 58, 137, 190), // LinkedIn blue
+                          ),
+                        ],
+                      ),
+
+
+                  ],
+                ),
+              ),
+              const SizedBox(width: 80),
+              
+              // Quick Links
+              Expanded(
+                flex: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Quick Links',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: 40,
+                      height: 3,
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade500,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    _buildFooterLink('Features'),
+                    _buildFooterLink('Benefits'),
+                    _buildFooterLink('Get Started'),
+                  ],
+                ),
+              ),
+              
+              // Contact Info
+              Expanded(
+                flex: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Get in Touch',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: 40,
+                      height: 3,
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade500,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    _buildContactInfo(Icons.location_on_outlined, 'Zamboanga City, Philippines'),
+                    _buildContactInfo(Icons.email_outlined, 'zecure.netlify.app'),
+                    _buildContactInfo(Icons.phone_outlined, '09351363586'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+      // Bottom bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 80, vertical: 28),
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: Colors.white.withOpacity(0.1),
+                width: 1,
+              ),
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    'Making Zamboanga City safer through community-powered crime monitoring and real-time safety alerts.',
+                    '© 2025 Zecure. All rights reserved.',
                     style: GoogleFonts.poppins(
                       fontSize: 14,
                       color: Colors.grey.shade400,
-                      height: 1.6,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 60),
-            
-            // Quick Links
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+                  const SizedBox(height: 12),
                   Text(
-                    'Quick Links',
+                    'Salido, Sardani, Solis',
                     style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      fontSize: 13,
+                      color: Colors.grey.shade500,
+                      height: 1.5,
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  _buildFooterLink('Features'),
-                  _buildFooterLink('Benefits'),
-                  _buildFooterLink('Hotlines'),
-                  _buildFooterLink('Get Started'),
-                ],
-              ),
-            ),
-            
-            // Contact Info
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
                   Text(
-                    'Get in Touch',
+                    'Western Mindanao State University - College of Computing Studies',
                     style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      fontSize: 13,
+                      color: Colors.grey.shade500,
+                      height: 1.5,
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  _buildContactInfo(Icons.location_on_outlined, 'Zamboanga City, Philippines'),
-                  _buildContactInfo(Icons.email_outlined, 'info@zecure.ph'),
-                  _buildContactInfo(Icons.phone_outlined, 'Emergency: 911'),
                 ],
               ),
-            ),
-          ],
-        ),
-        
-        const SizedBox(height: 50),
-        
-        // Divider
-        Container(
-          height: 1,
-          color: Colors.grey.shade800,
-        ),
-        
-        const SizedBox(height: 30),
-        
-        // Bottom section
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            // Copyright
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '© 2025 Zecure. All rights reserved.',
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    color: Colors.grey.shade400,
+              // Badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade600.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.blue.shade500.withOpacity(0.3),
+                    width: 1,
                   ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'Salido, Sardani, Solis',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey.shade500,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.verified_user_rounded,
+                      size: 18,
+                      color: Colors.blue.shade400,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Community Trusted',
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: Colors.blue.shade300,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
-                Text(
-                  'Western Mindanao State University - College of Computing Studies',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey.shade500,
-                  ),
-                ),
-              ],
-            ),
-            
-            // Social links (placeholder)
-            Row(
-              children: [
-                _buildSocialIcon(Icons.facebook_rounded),
-                const SizedBox(width: 12),
-                _buildSocialIcon(Icons.verified_rounded),
-                const SizedBox(width: 12),
-                _buildSocialIcon(Icons.info_outline_rounded),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ],
     ),
@@ -2235,14 +2703,30 @@ Widget _buildFooterLink(String text) {
             }
           },
           child: Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: isHovered ? Colors.blue.shade400 : Colors.grey.shade400,
-              ),
-              child: Text(text),
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: isHovered ? 8 : 0,
+                  height: 2,
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade400,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                if (isHovered) const SizedBox(width: 8),
+                AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 200),
+                  style: GoogleFonts.poppins(
+                    fontSize: 15,
+                    color: isHovered ? Colors.blue.shade400 : Colors.grey.shade300,
+                    fontWeight: isHovered ? FontWeight.w500 : FontWeight.normal,
+                  ),
+                  child: Text(text),
+                ),
+              ],
             ),
           ),
         );
@@ -2251,50 +2735,31 @@ Widget _buildFooterLink(String text) {
   );
 }
 
-void _scrollToSection(String section) {
-  double offset;
-  
-  switch (section) {
-    case 'features':
-      offset = 800;
-      break;
-    case 'benefits':
-      offset = 1500;
-      break;
-    case 'hotlines':
-      offset = 2200;
-      break;
-    case 'get started':
-      offset = 2900; // Scroll to CTA section
-      break;
-    default:
-      offset = 0;
-  }
-  
-  _scrollController.animateTo(
-    offset,
-    duration: const Duration(milliseconds: 800),
-    curve: Curves.easeInOut,
-  );
-}
-
 Widget _buildContactInfo(IconData icon, String text) {
   return Padding(
-    padding: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.only(bottom: 16),
     child: Row(
       children: [
-        Icon(
-          icon,
-          size: 16,
-          color: Colors.grey.shade500,
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade600.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: Colors.blue.shade400,
+          ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 12),
         Expanded(
           child: Text(
             text,
             style: GoogleFonts.poppins(
-              fontSize: 13,
-              color: Colors.grey.shade400,
+              fontSize: 14,
+              color: Colors.grey.shade300,
+              height: 1.5,
             ),
           ),
         ),
@@ -2303,28 +2768,80 @@ Widget _buildContactInfo(IconData icon, String text) {
   );
 }
 
-Widget _buildSocialIcon(IconData icon) {
+Widget _buildSocialIcon(IconData icon, String url, {Color? hoverColor}) {
+
   return MouseRegion(
     cursor: SystemMouseCursors.click,
     child: HoverBuilder(
       builder: (isHovered) {
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: isHovered ? Colors.blue.shade600 : Colors.grey.shade800,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            icon,
-            size: 20,
-            color: Colors.white,
+        return GestureDetector(
+          onTap: () async {
+            final uri = Uri.parse(url);
+            if (await canLaunchUrl(uri)) {
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
+            }
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: isHovered
+    ? (hoverColor ?? Colors.blue.shade600)
+    : Colors.white.withOpacity(0.1),
+
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isHovered ? Colors.blue.shade500 : Colors.white.withOpacity(0.2),
+                width: 1.5,
+              ),
+            ),
+            transform: Matrix4.translationValues(0, isHovered ? -3 : 0, 0),
+            child: Icon(
+              icon,
+              size: 20,
+              color: Colors.white,
+            ),
           ),
         );
       },
     ),
   );
 }
+
+
+
+void _scrollToSection(String section) {
+  BuildContext? targetContext;
+
+  switch (section) {
+    case 'features':
+      targetContext = _featuresKey.currentContext;
+      break;
+    case 'benefits':
+      targetContext = _benefitsKey.currentContext;
+      break;
+    case 'get started':
+      targetContext = _ctaKey.currentContext;
+      break;
+    default:
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 800),
+        curve: Curves.easeInOut,
+      );
+      return;
+  }
+
+  if (targetContext != null) {
+    Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 800),
+      curve: Curves.easeInOut,
+      alignment: 0, // 0 aligns top of section with top of viewport
+    );
+  }
+}
+
 
 // REVAMPED CRIME LINE CHART
 Widget _buildCrimeLineChart() {

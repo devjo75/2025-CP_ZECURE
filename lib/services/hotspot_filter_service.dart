@@ -359,7 +359,7 @@ class HotspotFilterService with ChangeNotifier {
   bool shouldShowHotspot(Map<String, dynamic> hotspot) {
     // Time frame filtering - use crime dates
     if (_crimeStartDate != null || _crimeEndDate != null) {
-      final hotspotDateStr = hotspot['created_at'] ?? hotspot['date'];
+      final hotspotDateStr = hotspot['time'] ?? hotspot['created_at'] ?? hotspot['date'];
       if (hotspotDateStr != null) {
         final hotspotDate = DateTime.tryParse(hotspotDateStr);
         if (hotspotDate != null) {

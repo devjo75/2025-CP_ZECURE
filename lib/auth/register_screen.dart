@@ -1058,250 +1058,250 @@ return Scaffold(
 Widget _buildHeader(bool isWeb) {
   return Column(
     children: [
-      // Back to Login Button
-      Align(
-        alignment: Alignment.centerLeft,
-        child: IconButton(
-          onPressed: () {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const LoginScreen()),
-            );
-          },
-          icon: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 10,
-                  spreadRadius: 1,
+      // Desktop: Back button and Logo side by side
+      if (isWeb)
+        Padding(
+          padding: const EdgeInsets.only(top: 40),
+          child: Stack(
+            children: [
+              // Back Button positioned absolutely on the left
+              Positioned(
+                left: 0,
+                top: 8,
+              child: IconButton(
+                onPressed: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  );
+                },
+                icon: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: Colors.blue.shade600,
+                    size: 20,
+                  ),
                 ),
-              ],
+              ),
             ),
-            child: Icon(
-              Icons.arrow_back_ios_new_rounded,
-              color: Colors.blue.shade600,
-              size: 20,
+            
+            // Logo and Text centered
+            Center(
+              child: Column(
+                children: [
+                  Image.asset(
+                    'assets/images/zecure.png',
+                    height: 150,
+                    width: 150,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      height: 150,
+                      width: 150,
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade600,
+                        borderRadius: BorderRadius.circular(35),
+                      ),
+                      child: const Icon(
+                        Icons.security_rounded,
+                        size: 35,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Create Your Account',
+                    style: GoogleFonts.poppins(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Join the Zecure community and help make Zamboanga safer',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.grey.shade600,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
             ),
-          ),
+          ],
         ),
-      ),
-        
-        SizedBox(height: isWeb ? 20 : 16),
-        
-        // Logo
-        Image.asset(
-          'assets/images/zecure.png',
-          height: isWeb ? 150 : 130,
-          width: isWeb ? 150 : 130,
-          errorBuilder: (context, error, stackTrace) => Container(
-            height: isWeb ? 150 : 130,
-            width: isWeb ? 150 : 130,
-            decoration: BoxDecoration(
-              color: Colors.blue.shade600,
-              borderRadius: BorderRadius.circular(isWeb ? 40 : 35),
+        )
+      else
+        // Mobile: Keep original vertical layout
+        Column(
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: IconButton(
+                onPressed: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  );
+                },
+                icon: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: Colors.blue.shade600,
+                    size: 20,
+                  ),
+                ),
+              ),
             ),
-            child: Icon(
-              Icons.security_rounded,
-              size: isWeb ? 40 : 35,
-              color: Colors.white,
+            const SizedBox(height: 16),
+            Image.asset(
+              'assets/images/zecure.png',
+              height: 130,
+              width: 130,
+              errorBuilder: (context, error, stackTrace) => Container(
+                height: 130,
+                width: 130,
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade600,
+                  borderRadius: BorderRadius.circular(35),
+                ),
+                child: const Icon(
+                  Icons.security_rounded,
+                  size: 35,
+                  color: Colors.white,
+                ),
+              ),
             ),
-          ),
+            const SizedBox(height: 16),
+            Text(
+              'Create Your Account',
+              style: GoogleFonts.poppins(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Join the Zecure community and help make Zamboanga safer',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.grey.shade600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
-        
-        SizedBox(height: isWeb ? 20 : 16),
-        
-        // Title
-        Text(
-          'Create Your Account',
-          style: GoogleFonts.poppins(
-            fontSize: isWeb ? 28 : 22,
-            fontWeight: FontWeight.bold,
-            color: Colors.grey.shade800,
-          ),
-        ),
-        
-        const SizedBox(height: 6),
-        
-        Text(
-          'Join the Zecure community and help make Zamboanga safer',
-          style: GoogleFonts.poppins(
-            fontSize: isWeb ? 16 : 14,
-            color: Colors.grey.shade600,
-          ),
-          textAlign: TextAlign.center,
+    ],
+  );
+}
+
+ Widget _buildRegistrationForm(bool isWeb) {
+  return Container(
+    width: double.infinity,
+    constraints: isWeb 
+      ? BoxConstraints(maxHeight: 600) // Fixed height for web
+      : null, // No height constraint for mobile
+    padding: EdgeInsets.all(isWeb ? 28 : 20),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.08),
+          blurRadius: 30,
+          spreadRadius: 2,
+          offset: const Offset(0, 8),
         ),
       ],
-    );
-  }
-
-  Widget _buildRegistrationForm(bool isWeb) {
-    return Container(
-      width: double.infinity, // Take full available width
-      padding: EdgeInsets.all(isWeb ? 28 : 20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 30,
-            spreadRadius: 2,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
+    ),
+    child: SingleChildScrollView( // Make entire form scrollable
       child: Form(
         key: _formKey,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Personal Information Section
+            // Personal Information Section - Now single column for both web and mobile
             _buildRegistrationTypeSelector(),
             _buildSectionTitle('Personal Information'),
             const SizedBox(height: 14),
             
-            // First Name & Last Name Row
-            if (isWeb)
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInputField(
-                      controller: _firstNameController,
-                      label: 'First Name',
-                      icon: Icons.person_outline_rounded,
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please enter your first name';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildInputField(
-                      controller: _lastNameController,
-                      label: 'Last Name',
-                      icon: Icons.person_outline_rounded,
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please enter your last name';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                ],
-              )
-            else ...[
-              _buildInputField(
-                controller: _firstNameController,
-                label: 'First Name',
-                icon: Icons.person_outline_rounded,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your first name';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 14),
-              _buildInputField(
-                controller: _lastNameController,
-                label: 'Last Name',
-                icon: Icons.person_outline_rounded,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your last name';
-                  }
-                  return null;
-                },
-              ),
-            ],
-            
+            // Single column layout for personal information (same as mobile)
+            _buildInputField(
+              controller: _firstNameController,
+              label: 'First Name',
+              icon: Icons.person_outline_rounded,
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter your first name';
+                }
+                return null;
+              },
+            ),
             const SizedBox(height: 14),
-            
-            // Middle Name & Extension Row (or Column for mobile)
-            if (isWeb)
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInputField(
-                      controller: _middleNameController,
-                      label: 'Middle Name (Optional)',
-                      icon: Icons.person_outline_rounded,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildInputField(
-                      controller: _extNameController,
-                      label: 'Ext Name (Optional)',
-                      icon: Icons.credit_card_outlined,
-                    ),
-                  ),
-                ],
-              )
-            else ...[
-              _buildInputField(
-                controller: _middleNameController,
-                label: 'Middle Name (Optional)',
-                icon: Icons.person_outline_rounded,
-              ),
-              const SizedBox(height: 14),
-              _buildInputField(
-                controller: _extNameController,
-                label: 'Ext Name (Optional)',
-                icon: Icons.credit_card_outlined,
-              ),
-            ],
-            
+            _buildInputField(
+              controller: _lastNameController,
+              label: 'Last Name',
+              icon: Icons.person_outline_rounded,
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter your last name';
+                }
+                return null;
+              },
+            ),
             const SizedBox(height: 14),
-            
-            // Birthday & Gender Row (or Column for mobile)
-            if (isWeb)
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInputField(
-                      controller: _birthdayController,
-                      label: 'Birthday',
-                      icon: Icons.calendar_today_rounded,
-                      readOnly: true,
-                      onTap: () => _selectDate(context),
-                      validator: (value) {
-                        if (_selectedDate == null) {
-                          return 'Please select your birthday';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(child: _buildGenderDropdown()),
-                ],
-              )
-            else ...[
-              _buildInputField(
-                controller: _birthdayController,
-                label: 'Birthday',
-                icon: Icons.calendar_today_rounded,
-                readOnly: true,
-                onTap: () => _selectDate(context),
-                validator: (value) {
-                  if (_selectedDate == null) {
-                    return 'Please select your birthday';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 14),
-              _buildGenderDropdown(),
-            ],
+            _buildInputField(
+              controller: _middleNameController,
+              label: 'Middle Name (Optional)',
+              icon: Icons.person_outline_rounded,
+            ),
+            const SizedBox(height: 14),
+            _buildInputField(
+              controller: _extNameController,
+              label: 'Ext Name (Optional)',
+              icon: Icons.credit_card_outlined,
+            ),
+            const SizedBox(height: 14),
+            _buildInputField(
+              controller: _birthdayController,
+              label: 'Birthday',
+              icon: Icons.calendar_today_rounded,
+              readOnly: true,
+              onTap: () => _selectDate(context),
+              validator: (value) {
+                if (_selectedDate == null) {
+                  return 'Please select your birthday';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 14),
+            _buildGenderDropdown(),
             
             const SizedBox(height: 20),
             
@@ -1309,43 +1309,39 @@ Widget _buildHeader(bool isWeb) {
             _buildSectionTitle('Contact Information'),
             const SizedBox(height: 14),
             
-          _buildInputField(
-            controller: _contactNumberController,
-            label: 'Contact Number (Optional)',
-            icon: Icons.phone_rounded,
-            keyboardType: TextInputType.number,
-            onChanged: (value) {
-              // Ensure it always starts with +63
-              if (!value.startsWith('+63')) {
-                _contactNumberController.text = '+63';
-                _contactNumberController.selection = TextSelection.fromPosition(
-                  TextPosition(offset: _contactNumberController.text.length),
-                );
-              }
-              
-              // Limit to +63 + 10 digits (13 characters total)
-              if (value.length > 13) {
-                _contactNumberController.text = value.substring(0, 13);
-                _contactNumberController.selection = TextSelection.fromPosition(
-                  TextPosition(offset: _contactNumberController.text.length),
-                );
-              }
-            },
-            validator: (value) {
-              if (value != null && value.isNotEmpty && value != '+63') {
-                // Check if it starts with +63 and has exactly 13 characters
-                if (!value.startsWith('+63') || value.length != 13) {
-                  return 'Must be in format +63xxxxxxxxxx (11 digits total)';
+            _buildInputField(
+              controller: _contactNumberController,
+              label: 'Contact Number (Optional)',
+              icon: Icons.phone_rounded,
+              keyboardType: TextInputType.number,
+              onChanged: (value) {
+                if (!value.startsWith('+63')) {
+                  _contactNumberController.text = '+63';
+                  _contactNumberController.selection = TextSelection.fromPosition(
+                    TextPosition(offset: _contactNumberController.text.length),
+                  );
                 }
-                // Check if the remaining 10 characters are all digits
-                String digits = value.substring(3);
-                if (!RegExp(r'^\d{10}$').hasMatch(digits)) {
-                  return 'Please enter valid digits after +63';
+                
+                if (value.length > 13) {
+                  _contactNumberController.text = value.substring(0, 13);
+                  _contactNumberController.selection = TextSelection.fromPosition(
+                    TextPosition(offset: _contactNumberController.text.length),
+                  );
                 }
-              }
-              return null;
-            },
-          ),
+              },
+              validator: (value) {
+                if (value != null && value.isNotEmpty && value != '+63') {
+                  if (!value.startsWith('+63') || value.length != 13) {
+                    return 'Must be in format +63xxxxxxxxxx (11 digits total)';
+                  }
+                  String digits = value.substring(3);
+                  if (!RegExp(r'^\d{10}$').hasMatch(digits)) {
+                    return 'Please enter valid digits after +63';
+                  }
+                }
+                return null;
+              },
+            ),
             
             const SizedBox(height: 20),
             
@@ -1487,8 +1483,9 @@ Widget _buildHeader(bool isWeb) {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildSectionTitle(String title) {
     return Text(

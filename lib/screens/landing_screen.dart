@@ -1,7 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:zecure/auth/login_screen.dart';
 import 'package:zecure/screens/map_screen.dart';
 import 'dart:async';
@@ -211,6 +213,9 @@ Widget build(BuildContext context) {
                     child: _buildCallToAction(isWeb, screenWidth),
                   ),
                   const SizedBox(height: 20),
+                  SizedBox(height: isWeb ? 60 : 50),
+                  _buildFooter(isWeb, screenWidth),
+                  
                 ],
               ),
             ),
@@ -220,6 +225,8 @@ Widget build(BuildContext context) {
     ),
   );
 }
+
+
 
   Widget _buildHeroSection(bool isWeb, double screenWidth) {
     final double maxWidth = isWeb ? 700 : screenWidth * 0.95;
@@ -702,4 +709,116 @@ onPressed: () {
       ),
     );
   }
+}
+
+
+Widget _buildFooter(bool isWeb, double screenWidth) {
+  final double maxWidth = isWeb ? 600 : screenWidth * 0.95;
+  
+  return Container(
+    width: double.infinity,
+    padding: EdgeInsets.symmetric(
+      vertical: isWeb ? 30 : 20,
+      horizontal: isWeb ? 40 : 16,
+    ),
+decoration: BoxDecoration(
+  color: Colors.transparent, // Changed from Colors.grey.shade100
+  border: Border(
+    top: BorderSide(color: Colors.grey.shade300, width: 1),
+  ),
+),
+    child: Center(
+      child: Container(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Column(
+          children: [
+            // Copyright
+            Text(
+              '© 2025 Zecure. All rights reserved.',
+              style: GoogleFonts.poppins(
+                fontSize: isWeb ? 14 : 12,
+                color: Colors.grey.shade600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            // Team info
+            Text(
+              'Salido, Sardani, Solis',
+              style: GoogleFonts.poppins(
+                fontSize: isWeb ? 13 : 11,
+                color: Colors.grey.shade700,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Western Mindanao State University',
+              style: GoogleFonts.poppins(
+                fontSize: isWeb ? 12 : 10,
+                color: Colors.grey.shade600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            Text(
+              'College of Computing Studies',
+              style: GoogleFonts.poppins(
+                fontSize: isWeb ? 12 : 10,
+                color: Colors.grey.shade600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            // Social icons
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildSocialIcon(
+                  FontAwesomeIcons.facebookF,
+                  'https://www.facebook.com/venard.jhon.c.salido',
+                  hoverColor: const Color(0xFF1877F2),
+                ),
+                const SizedBox(width: 14),
+                _buildSocialIcon(
+                  FontAwesomeIcons.instagram,
+                  'https://www.instagram.com/venplaystrings/',
+                  hoverColor: const Color(0xFFE1306C),
+                ),
+                const SizedBox(width: 14),
+                _buildSocialIcon(
+                  FontAwesomeIcons.linkedinIn,
+                  'https://www.linkedin.com/in/venard-jhon-cabahug-salido-08041434b/',
+                  hoverColor: const Color.fromARGB(255, 58, 137, 190),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _buildSocialIcon(IconData icon, String url, {required Color hoverColor}) {
+  return InkWell(
+    onTap: () async {
+      final Uri uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    },
+    child: Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        shape: BoxShape.circle,
+      ),
+      child: FaIcon(
+        icon,
+        size: 18,
+        color: Colors.grey.shade700,
+      ),
+    ),
+  );
 }
