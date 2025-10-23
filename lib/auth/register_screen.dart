@@ -1058,167 +1058,184 @@ return Scaffold(
 Widget _buildHeader(bool isWeb) {
   return Column(
     children: [
-      // Desktop: Back button and Logo side by side
+      // 🌐 Web layout (same as before)
       if (isWeb)
         Padding(
           padding: const EdgeInsets.only(top: 40),
           child: Stack(
             children: [
-              // Back Button positioned absolutely on the left
+              // Back Button (left)
               Positioned(
                 left: 0,
                 top: 8,
-              child: IconButton(
-                onPressed: () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LoginScreen()),
-                  );
-                },
-                icon: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 10,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    color: Colors.blue.shade600,
-                    size: 20,
+                child: IconButton(
+                  onPressed: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (context) => const LoginScreen()),
+                    );
+                  },
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 10,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.arrow_back_ios_new_rounded,
+                      color: Colors.blue.shade600,
+                      size: 20,
+                    ),
                   ),
                 ),
               ),
-            ),
-            
-            // Logo and Text centered
-            Center(
-              child: Column(
-                children: [
-                  Image.asset(
-                    'assets/images/zecure.png',
-                    height: 150,
-                    width: 150,
-                    errorBuilder: (context, error, stackTrace) => Container(
+
+              // Centered Logo + Text
+              Center(
+                child: Column(
+                  children: [
+                    Image.asset(
+                      'assets/images/zecure.png',
                       height: 150,
                       width: 150,
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade600,
-                        borderRadius: BorderRadius.circular(35),
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        height: 150,
+                        width: 150,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade600,
+                          borderRadius: BorderRadius.circular(35),
+                        ),
+                        child: const Icon(
+                          Icons.security_rounded,
+                          size: 35,
+                          color: Colors.white,
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.security_rounded,
-                        size: 35,
-                        color: Colors.white,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Create Your Account',
+                      style: GoogleFonts.poppins(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey.shade800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Join the Zecure community and help make Zamboanga safer',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey.shade600,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        )
+      else
+        // 📱 Mobile Layout (fixed alignment)
+        Padding(
+          padding: const EdgeInsets.only(top: 8, left: 8, right: 8),
+          child: Column(
+            children: [
+              Stack(
+                alignment: Alignment.topCenter,
+                children: [
+                  // Back button (top-left)
+                  Align(
+                    alignment: Alignment.topLeft,
+                    child: IconButton(
+                      onPressed: () {
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(builder: (context) => const LoginScreen()),
+                        );
+                      },
+                      icon: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          color: Colors.blue.shade600,
+                          size: 20,
+                        ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Create Your Account',
-                    style: GoogleFonts.poppins(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey.shade800,
+
+                  // Centered logo
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Image.asset(
+                      'assets/images/zecure.png',
+                      height: 130,
+                      width: 130,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        height: 130,
+                        width: 130,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade600,
+                          borderRadius: BorderRadius.circular(35),
+                        ),
+                        child: const Icon(
+                          Icons.security_rounded,
+                          size: 35,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Join the Zecure community and help make Zamboanga safer',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.grey.shade600,
-                    ),
-                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
-            ),
-          ],
-        ),
-        )
-      else
-        // Mobile: Keep original vertical layout
-        Column(
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: IconButton(
-                onPressed: () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LoginScreen()),
-                  );
-                },
-                icon: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 10,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    color: Colors.blue.shade600,
-                    size: 20,
-                  ),
+
+              const SizedBox(height: 16),
+
+              // Texts
+              Text(
+                'Create Your Account',
+                style: GoogleFonts.poppins(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade800,
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Image.asset(
-              'assets/images/zecure.png',
-              height: 130,
-              width: 130,
-              errorBuilder: (context, error, stackTrace) => Container(
-                height: 130,
-                width: 130,
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade600,
-                  borderRadius: BorderRadius.circular(35),
+              const SizedBox(height: 6),
+              Text(
+                'Join the Zecure community and help make Zamboanga safer',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: Colors.grey.shade600,
                 ),
-                child: const Icon(
-                  Icons.security_rounded,
-                  size: 35,
-                  color: Colors.white,
-                ),
+                textAlign: TextAlign.center,
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Create Your Account',
-              style: GoogleFonts.poppins(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey.shade800,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Join the Zecure community and help make Zamboanga safer',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: Colors.grey.shade600,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+            ],
+          ),
         ),
     ],
   );
 }
+
 
  Widget _buildRegistrationForm(bool isWeb) {
   return Container(

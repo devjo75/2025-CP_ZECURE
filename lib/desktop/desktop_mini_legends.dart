@@ -142,21 +142,59 @@ class _MiniLegendState extends State<MiniLegend> with SingleTickerProviderStateM
                             FontAwesomeIcons.exclamationTriangle,
                             'Critical',
                             const Color.fromARGB(255, 219, 0, 0),
+                            crimeTypes: [
+                              'Homicide',
+                              'Murder',
+                              'Kidnapping',
+                              'Armed Violence',
+                              'Terrorism',
+                              'Sexual Assault',
+                              'Missing Person',
+                              'Insurgency Activity',
+                              'Bombing Threat',
+                            ],
                           ),
                           _buildLegendItem(
                             Icons.priority_high,
                             'High',
                             const Color.fromARGB(255, 223, 106, 11),
+                            crimeTypes: [
+                              'Robbery',
+                              'Physical Injury',
+                              'Drug Crime',
+                              'Gang Activity',
+                              'Domestic Violence',
+                              'Traffic Crime',
+                              'Drunk Driving',
+                              'Emergency Incident',
+                              'Environmental Crime',
+                            ],
                           ),
                           _buildLegendItem(
                             Icons.remove,
                             'Medium',
                             const Color.fromARGB(167, 116, 66, 9),
+                            crimeTypes: [
+                              'Theft',
+                              'Burglary',
+                              'Extortion',
+                              'Illegal Gambling',
+                              'Prostitution',
+                              'Suspicious Activity',
+                              'Police Activity',
+                              'Smuggling',
+                              'Carnapping MC',
+                              'Carnapping MV',
+                            ],
                           ),
                           _buildLegendItem(
                             Icons.low_priority,
                             'Low',
                             const Color.fromARGB(255, 216, 187, 23),
+                            crimeTypes: [
+                              'Public Disturbance',
+                              'General Crime',
+                            ],
                           ),
                           
                           const SizedBox(height: 12),
@@ -168,36 +206,80 @@ class _MiniLegendState extends State<MiniLegend> with SingleTickerProviderStateM
                             FontAwesomeIcons.triangleExclamation,
                             'Violent',
                             const Color.fromARGB(255, 139, 96, 96),
+                            crimeTypes: [
+                              'Homicide',
+                              'Murder',
+                              'Kidnapping',
+                              'Armed Violence',
+                              'Terrorism',
+                              'Robbery',
+                              'Physical Injury',
+                              'Sexual Assault',
+                              'Gang Activity',
+                              'Domestic Violence',
+                              'Insurgency Activity',
+                              'Bombing Threat',
+                              'Environmental Crime',
+                            ],
                           ),
                           _buildLegendItem(
                             FontAwesomeIcons.key,
                             'Property',
                             const Color.fromARGB(255, 139, 96, 96),
+                            crimeTypes: [
+                              'Theft',
+                              'Burglary',
+                              'Carnapping MC',
+                              'Carnapping MV',
+                            ],
                           ),
                           _buildLegendItem(
                             FontAwesomeIcons.cannabis,
                             'Drug',
                             const Color.fromARGB(255, 139, 96, 96),
+                            crimeTypes: [
+                              'Drug Crime',
+                              'Smuggling',
+                            ],
                           ),
                           _buildLegendItem(
                             Icons.balance,
                             'Public Order',
                             const Color.fromARGB(255, 139, 96, 96),
+                            crimeTypes: [
+                              'Illegal Gambling',
+                              'Prostitution',
+                            ],
                           ),
                           _buildLegendItem(
                             Icons.attach_money,
                             'Financial',
                             const Color.fromARGB(255, 139, 96, 96),
+                            crimeTypes: [
+                              'Extortion',
+                            ],
                           ),
                           _buildLegendItem(
                             Icons.traffic,
                             'Traffic',
                             const Color.fromARGB(255, 139, 96, 96),
+                            crimeTypes: [
+                              'Traffic Crime',
+                              'Drunk Driving',
+                            ],
                           ),
                           _buildLegendItem(
                             Icons.campaign,
                             'Alerts',
                             const Color.fromARGB(255, 139, 96, 96),
+                            crimeTypes: [
+                              'Suspicious Activity',
+                              'Police Activity',
+                              'Missing Person',
+                              'Public Disturbance',
+                              'Emergency Incident',
+                              'General Crime',
+                            ],
                           ),
                         ] else ...[
                           // Safe Spots Legend
@@ -311,39 +393,61 @@ class _MiniLegendState extends State<MiniLegend> with SingleTickerProviderStateM
     );
   }
 
-  Widget _buildLegendItem(IconData icon, String label, Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        children: [
-          Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(
+  Widget _buildLegendItem(IconData icon, String label, Color color, {List<String>? crimeTypes}) {
+    return Tooltip(
+      message: crimeTypes != null ? crimeTypes.join('\n') : '',
+      preferBelow: true,
+      verticalOffset: 10,
+      margin: const EdgeInsets.only(left: 220),
+      textStyle: const TextStyle(
+        fontSize: 11,
+        color: Colors.white,
+        height: 1.5,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          children: [
+            Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: color,
+                  width: 1.5,
+                ),
+              ),
+              child: Icon(
+                icon,
+                size: 12,
                 color: color,
-                width: 1.5,
               ),
             ),
-            child: Icon(
-              icon,
-              size: 12,
-              color: color,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 11,
-                color: Colors.black87,
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Colors.black87,
+                ),
               ),
             ),
-          ),
-        ],
+            if (crimeTypes != null)
+              Icon(
+                Icons.info_outline,
+                size: 12,
+                color: Colors.grey.shade400,
+              ),
+          ],
+        ),
       ),
     );
   }

@@ -1739,148 +1739,146 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
       mainAxisSize: MainAxisSize.min,
       children: [
         // Header section with background image
-        Container(
-          width: double.infinity,
-          height: 280,
-          decoration: const BoxDecoration(
-            image: DecorationImage(
-              image: AssetImage('assets/images/LIGHT.jpg'),
-              fit: BoxFit.cover,
+      Container(
+  width: double.infinity,
+  height: 280,
+  decoration: const BoxDecoration(
+    image: DecorationImage(
+      image: AssetImage('assets/images/DARK.jpg'),
+      fit: BoxFit.cover,
+    ),
+  ),
+  child: Container(
+
+    child: Column(
+      children: [
+        const SizedBox(height: 40),
+        // Profile avatar
+        Stack(
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 15,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: CircleAvatar(
+                backgroundColor: Colors.white,
+                radius: 50,
+                child: CircleAvatar(
+                  backgroundColor: Colors.white,
+                  radius: 47,
+                  child: Icon(
+                    _getGenderIcon(userProfile?['gender']),
+                    size: 50,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+              ),
             ),
-          ),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.3),
-            ),
-            child: Column(
-              children: [
-                const SizedBox(height: 40),
-                // Profile avatar
-                Stack(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 15,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: CircleAvatar(
-                        backgroundColor: Colors.white,
-                        radius: 50,
-                        child: CircleAvatar(
-                          backgroundColor: Colors.white,
-                          radius: 47,
-                          child: Icon(
-                            _getGenderIcon(userProfile?['gender']),
-                            size: 50,
-                            color: Colors.grey.shade700,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.grey.shade300,
-                            width: 2,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          Icons.camera_alt,
-                          size: 16,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
+            Positioned(
+              bottom: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.grey.shade300,
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                child: Icon(
+                  Icons.camera_alt,
+                  size: 16,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
 
-                // Full name
-                Text(
-                  '${userProfile?['first_name'] ?? ''}'
-                  '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-                  ' ${userProfile?['last_name'] ?? ''}'
-                  '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                    height: 1.2,
-                    shadows: [
-                      Shadow(
-                        offset: Offset(0, 1),
-                        blurRadius: 3,
-                        color: Colors.white,
-                      ),
-                    ],
+        // Full name
+        Text(
+          '${userProfile?['first_name'] ?? ''}'
+          '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+          ' ${userProfile?['last_name'] ?? ''}'
+          '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+            height: 1.2,
+            shadows: [
+              Shadow(
+                offset: Offset(0, 2),
+                blurRadius: 4,
+                color: Colors.black45,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // Role badge
+        if (userProfile?['role'] != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF4A6B8A),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
+                    shape: BoxShape.circle,
                   ),
                 ),
-                const SizedBox(height: 8),
-
-                // Role badge
-                if (userProfile?['role'] != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.95),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.grey.shade300, width: 1),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: userProfile?['role'] == 'officer' ? Colors.green : Colors.blue,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          userProfile?['role']?.toUpperCase() ?? 'USER',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey.shade800,
-                          ),
-                        ),
-                      ],
-                    ),
+                const SizedBox(width: 8),
+                Text(
+                  userProfile?['role']?.toUpperCase() ?? 'USER',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
                   ),
-                const SizedBox(height: 30),
+                ),
               ],
             ),
           ),
-        ),
+        const SizedBox(height: 30),
+      ],
+    ),
+  ),
+),
 
         // --- Tabs section ---
         StatefulBuilder(
@@ -1993,7 +1991,7 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
             child: ElevatedButton(
               onPressed: onEditPressed,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).primaryColor,
+                backgroundColor: const Color.fromARGB(255, 43, 68, 105),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -2921,179 +2919,173 @@ Widget buildDesktopProfileView(
           ),
           child: Column(
             children: [
-              // Header section
-              Container(
-                width: double.infinity,
-                height: 280,
-                decoration: BoxDecoration(
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-                  image: const DecorationImage(
-                    image: AssetImage('assets/images/LIGHT.jpg'),
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.3),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
+            // Header section
+Container(
+  width: double.infinity,
+  height: 280,
+  decoration: BoxDecoration(
+    borderRadius: const BorderRadius.only(
+      topLeft: Radius.circular(16),
+      topRight: Radius.circular(16),
+    ),
+    image: const DecorationImage(
+      image: AssetImage('assets/images/DARK.jpg'),
+      fit: BoxFit.cover,
+    ),
+  ),
+  child: Container(
+
+    child: Stack(
+      children: [
+        Positioned(
+          top: 16,
+          right: 16,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.close, size: 18, color: Colors.white),
+              onPressed: onClosePressed ?? () {},
+            ),
+          ),
+        ),
+        Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(height: 40),
+              Stack(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.3),
+                          blurRadius: 15,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                  ),
-                  child: Stack(
-                    children: [
-                      Positioned(
-                        top: 16,
-                        right: 16,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.grey.shade300, width: 1),
-                          ),
-                          child: IconButton(
-                            icon: Icon(Icons.close, size: 18, color: Colors.grey.shade700),
-                            onPressed: onClosePressed ?? () {},
-                          ),
+                    child: CircleAvatar(
+                      backgroundColor: Colors.white,
+                      radius: 50,
+                      child: CircleAvatar(
+                        backgroundColor: Colors.white,
+                        radius: 47,
+                        child: Icon(
+                          _getGenderIcon(userProfile?['gender']),
+                          size: 50,
+                          color: Colors.grey.shade700,
                         ),
                       ),
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            const SizedBox(height: 40),
-                            Stack(
-                              children: [
-                                Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.2),
-                                        blurRadius: 15,
-                                        offset: const Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
-                                  child: CircleAvatar(
-                                    backgroundColor: Colors.white,
-                                    radius: 50,
-                                    child: CircleAvatar(
-                                      backgroundColor: Colors.white,
-                                      radius: 47,
-                                      child: Icon(
-                                        _getGenderIcon(userProfile?['gender']),
-                                        size: 50,
-                                        color: Colors.grey.shade700,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Positioned(
-                                  bottom: 0,
-                                  right: 0,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: Colors.grey.shade300,
-                                        width: 2,
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.2),
-                                          blurRadius: 4,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Icon(
-                                      Icons.camera_alt,
-                                      size: 16,
-                                      color: Colors.grey.shade600,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Container(
-                              width: double.infinity,
-                              child: Text(
-                                '${userProfile?['first_name'] ?? ''}'
-                                '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-                                ' ${userProfile?['last_name'] ?? ''}'
-                                '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.black87,
-                                  height: 1.2,
-                                  shadows: [
-                                    Shadow(
-                                      offset: Offset(0, 1),
-                                      blurRadius: 3,
-                                      color: Colors.white,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            if (userProfile?['role'] != null)
-                              Center(
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.95),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(color: Colors.grey.shade300, width: 1),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.1),
-                                        blurRadius: 4,
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          color: userProfile?['role'] == 'officer' ? Colors.green : Colors.blue,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        userProfile?['role']?.toUpperCase() ?? 'USER',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.grey.shade800,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                          ],
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.grey.shade300,
+                          width: 2,
                         ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.camera_alt,
+                        size: 16,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                child: Text(
+                  '${userProfile?['first_name'] ?? ''}'
+                  '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                  ' ${userProfile?['last_name'] ?? ''}'
+                  '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                    height: 1.2,
+                    shadows: [
+                      Shadow(
+                        offset: Offset(0, 2),
+                        blurRadius: 4,
+                        color: Colors.black45,
                       ),
                     ],
                   ),
                 ),
               ),
+              const SizedBox(height: 8),
+              if (userProfile?['role'] != null)
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4A6B8A),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          userProfile?['role']?.toUpperCase() ?? 'USER',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  ),
+),
               Expanded(
                 child: StatefulBuilder(
                   builder: (context, setState) {
@@ -3197,7 +3189,7 @@ Widget buildDesktopProfileView(
                                   child: ElevatedButton(
                                     onPressed: onEditPressed,
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: Theme.of(context).primaryColor,
+                                      backgroundColor: const Color.fromARGB(255, 43, 68, 105),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
                                       ),
@@ -4216,9 +4208,11 @@ Color _getSaveButtonColor(BuildContext context) {
 
     case SaveButtonState.saving:
     case SaveButtonState.normal:
-    return Theme.of(context).primaryColor;
+      return const Color.fromARGB(255, 43, 68, 105);
+      
   }
 }
+
 
 
 

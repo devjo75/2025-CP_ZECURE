@@ -177,6 +177,10 @@ Timer? _deferredLoadTimer;
   Timer? _proximityCheckTimer;
   static const double _alertDistanceMeters = 500.0;
 
+  // NEW: Heatmap proximity alerts
+  List<HeatmapCluster> _nearbyHeatmapClusters = [];
+  bool _showHeatmapProximityAlert = false;
+  String _proximityAlertType = 'none'; // 'hotspot', 'heatmap', 'both', or 'none'
   
   // Directions state
   double _distance = 0;
@@ -211,13 +215,13 @@ bool _showHeatmap = true; // Toggle for users
 bool _isCalculatingHeatmap = false;
 Timer? _heatmapUpdateTimer;
 
-static const double CLUSTER_MERGE_DISTANCE = 300.0;
+static const double CLUSTER_MERGE_DISTANCE = 500.0;
 static const int MIN_CRIMES_FOR_HOTSPOT = 3;
 static const Map<String, int> SEVERITY_TIME_WINDOWS = {
-  'critical': 60,  // 60 days for critical crimes
-  'high': 45,      // 45 days for high severity
-  'medium': 30,    // 30 days for medium
-  'low': 30,       // 30 days for low
+  'critical': 120,  // 90 days for critical crimes
+  'high': 90,      // 75 days for high severity
+  'medium': 60,    // 60 days for medium
+  'low': 30,       // 45 days for low
 };
 
 // Get the maximum time window for initial data loading
@@ -262,11 +266,16 @@ bool _showSavePointSelector = false; // New state for savepoint button
 
 Timer? _timeUpdateTimer;
 
+
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
   if (!_markersLoaded) return [];
 
   final currentUserId = _userProfile?['id'];
+  final filterService = Provider.of<HotspotFilterService>(context, listen: false);
+  
+  // Check if user has set a custom date range
+  final hasCustomDateRange = filterService.crimeStartDate != null || filterService.crimeEndDate != null;
 
   if (_currentZoom < 8.0) {
     return _hotspots
@@ -327,7 +336,7 @@ List<Map<String, dynamic>> get _visibleHotspots {
         .take(_maxMarkersToShow)
         .toList();
   } else {
-    // Zoom 16+: Show ALL including rejected and inactive
+    // ✅ Zoom 16+: Show ALL including rejected, inactive, and OLD crimes
     return _hotspots
         .where((h) {
           final status = h['status'] ?? 'approved';
@@ -337,6 +346,12 @@ List<Map<String, dynamic>> get _visibleHotspots {
           final isOwnHotspot = currentUserId != null &&
               (currentUserId == createdBy || currentUserId == reportedBy);
 
+          // ✅ CRITICAL: If date filter is active, include ALL approved crimes (active or inactive)
+          if (hasCustomDateRange && status == 'approved') {
+            return true;
+          }
+
+          // Default zoom 16+ logic (show everything for admins or own reports)
           return _hasAdminPermissions ||
               status == 'approved' ||
               status == 'pending' ||
@@ -344,7 +359,7 @@ List<Map<String, dynamic>> get _visibleHotspots {
               activeStatus == 'active' ||
               (activeStatus == 'inactive' && isOwnHotspot);
         })
-        .take(_maxMarkersToShow * 2)
+        .take(hasCustomDateRange ? 2000 : _maxMarkersToShow * 2) // ✅ Increase limit only when date filtering
         .toList();
   }
 }
@@ -414,6 +429,7 @@ void _onMapZoomChanged(double newZoom) {
     }
   });
 }
+
 
 List<Map<String, dynamic>> _getFilteredNotifications() {
   switch (_notificationFilter) {
@@ -910,6 +926,8 @@ void _removeDuplicateSafeSpots() {
     print('Safe spots count: $originalCount -> $newCount');
   }
 }
+
+
 // Updated _loadSafeSpots method
 Future<void> _loadSafeSpots() async {
   try {
@@ -1435,8 +1453,95 @@ void _startProximityMonitoring() {
   _proximityCheckTimer?.cancel();
   _proximityCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
     _checkProximityToHotspots();
+    _checkProximityToHeatmaps(); // NEW: Check heatmaps too
   });
 }
+
+// ============================================
+// NEW: Check proximity to heatmap clusters
+// ============================================
+void _checkProximityToHeatmaps() {
+  if (_currentPosition == null || !mounted || _heatmapClusters.isEmpty) {
+    return;
+  }
+
+  final nearbyHeatmaps = <Map<String, dynamic>>[];
+  
+  for (final cluster in _heatmapClusters) {
+    final distanceToCenter = _calculateDistance(_currentPosition!, cluster.center);
+    final distanceToEdge = distanceToCenter - cluster.radius;
+    
+    // FIX: Use a buffer zone to prevent false positives
+    // Only consider "inside" if we're significantly inside the zone
+    final bufferZone = 50.0; // 50m buffer to prevent edge false positives
+    
+    // User is INSIDE if distance to center is less than (radius - buffer)
+    final isInside = distanceToCenter <= (cluster.radius - bufferZone);
+    
+    // User is APPROACHING if within 150m of the edge (but not inside)
+    final isApproaching = !isInside && distanceToEdge <= 150;
+    
+    print('🔥 Heatmap check: distanceToCenter=${distanceToCenter.toStringAsFixed(1)}m, radius=${cluster.radius.toStringAsFixed(0)}m, distanceToEdge=${distanceToEdge.toStringAsFixed(1)}m, inside=$isInside, approaching=$isApproaching');
+    
+    if (isInside || isApproaching) {
+      nearbyHeatmaps.add({
+        'cluster': cluster,
+        'distanceToCenter': distanceToCenter,
+        'distanceToEdge': distanceToEdge,
+        'isInside': isInside,
+      });
+      
+      if (isInside) {
+        print('🚨 INSIDE heatmap zone! ${distanceToCenter.toStringAsFixed(1)}m from center (radius: ${cluster.radius.toStringAsFixed(0)}m)');
+      } else {
+        print('⚠️ Approaching heatmap zone! ${distanceToEdge.toStringAsFixed(1)}m from edge');
+      }
+    }
+  }
+
+  // Sort by priority: inside zones first, then by distance to edge
+  nearbyHeatmaps.sort((a, b) {
+    if (a['isInside'] && !b['isInside']) return -1;
+    if (!a['isInside'] && b['isInside']) return 1;
+    return (a['distanceToEdge'] as double).compareTo(b['distanceToEdge'] as double);
+  });
+
+  final previousHeatmapAlertState = _showHeatmapProximityAlert;
+  
+  if (mounted) {
+    setState(() {
+      _nearbyHeatmapClusters = nearbyHeatmaps.map((h) => h['cluster'] as HeatmapCluster).toList();
+      _showHeatmapProximityAlert = nearbyHeatmaps.isNotEmpty;
+      
+      // Determine alert type priority: both > heatmap > hotspot
+      if (_showProximityAlert && _showHeatmapProximityAlert) {
+        _proximityAlertType = 'both';
+      } else if (_showHeatmapProximityAlert) {
+        _proximityAlertType = 'heatmap';
+      } else if (_showProximityAlert) {
+        _proximityAlertType = 'hotspot';
+      } else {
+        _proximityAlertType = 'none';
+      }
+    });
+    
+    // Haptic feedback for new heatmap alerts
+    if (_showHeatmapProximityAlert && !previousHeatmapAlertState) {
+      final isInside = nearbyHeatmaps.first['isInside'] as bool;
+      
+      if (isInside) {
+        HapticFeedback.mediumImpact(); // Stronger feedback when inside
+        print('🚨 HEATMAP ALERT ACTIVATED: Inside danger zone');
+      } else {
+        HapticFeedback.lightImpact();
+        print('⚠️ HEATMAP ALERT ACTIVATED: Approaching danger zone');
+      }
+    }
+  }
+}
+
+
+
 
 // NEW: Lightweight marker builder for distant zoom levels
 
@@ -1520,7 +1625,7 @@ void _checkProximityToHotspots() {
   }
 }
 
-// Helper method to compare lists
+// NOTIFICATION REALTIME METHOD
 
 
 void _setupNotificationsRealtime() {
@@ -1914,9 +2019,18 @@ void _setupRealtimeSubscription() {
 }
 
 
-
 void _handleHotspotInsert(PostgresChangePayload payload) async {
   if (!mounted) return;
+  
+  final hotspotId = payload.newRecord['id'];
+  
+  // Check if hotspot already exists in the LIST
+  final existingIndex = _hotspots.indexWhere((h) => h['id'] == hotspotId);
+  final alreadyInList = existingIndex != -1;
+  
+  if (alreadyInList) {
+    print('⚠️ Hotspot $hotspotId already exists at index $existingIndex, skipping list insert');
+  }
   
   try {
     // ADD SMALL DELAY to ensure database relationships are fully committed
@@ -1931,38 +2045,44 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
           created_by_profile: created_by (id, name, email),
           reported_by_profile: reported_by (id, name, email)
         ''')
-        .eq('id', payload.newRecord['id'])
+        .eq('id', hotspotId)
         .single();
 
     if (mounted) {
-      setState(() {
-        // Ensure proper crime_type structure AND preserve user IDs
-        final crimeType = response['crime_type'];
-        
-        // IMPROVED: Better handling of crime_type data
-        final crimeTypeData = crimeType != null && crimeType is Map ? {
-          'id': crimeType['id'] ?? response['type_id'],
-          'name': crimeType['name'] ?? 'Unknown',
-          'level': crimeType['level'] ?? 'unknown',
-          'category': crimeType['category'] ?? 'General',
-          'description': crimeType['description'],
-        } : {
-          'id': response['type_id'],
-          'name': 'Unknown',
-          'level': 'unknown',
-          'category': 'General',
-          'description': null,
-        };
-        
-        // INSERT AT THE BEGINNING (index 0)
-        _hotspots.insert(0, {
-          ...response,
-          'created_by': response['created_by'],
-          'reported_by': response['reported_by'],
-          'crime_type': crimeTypeData,
+      // ✅ CRITICAL FIX: Update list ONLY if not duplicate
+      if (!alreadyInList) {
+        setState(() {
+          final crimeType = response['crime_type'];
+          
+          final crimeTypeData = crimeType != null && crimeType is Map ? {
+            'id': crimeType['id'] ?? response['type_id'],
+            'name': crimeType['name'] ?? 'Unknown',
+            'level': crimeType['level'] ?? 'unknown',
+            'category': crimeType['category'] ?? 'General',
+            'description': crimeType['description'],
+          } : {
+            'id': response['type_id'],
+            'name': 'Unknown',
+            'level': 'unknown',
+            'category': 'General',
+            'description': null,
+          };
+          
+          // INSERT AT THE BEGINNING (index 0)
+          _hotspots.insert(0, {
+            ...response,
+            'created_by': response['created_by'],
+            'reported_by': response['reported_by'],
+            'crime_type': crimeTypeData,
+          });
+          
+          print('✅ Added hotspot $hotspotId with crime type: ${crimeTypeData['name']}');
         });
-      });
+      } else {
+        print('📝 Skipped list insert (duplicate), but will update heatmap');
+      }
       
+      // ✅ CRITICAL FIX: ALWAYS update heatmap regardless of duplicate status
       _updateHeatmapOnInsert(response);
     }
   } catch (e) {
@@ -1980,42 +2100,51 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
             created_by_profile: created_by (id, name, email),
             reported_by_profile: reported_by (id, name, email)
           ''')
-          .eq('id', payload.newRecord['id'])
+          .eq('id', hotspotId)
           .single();
       
       if (mounted) {
-        setState(() {
-          final crimeType = retryResponse['crime_type'];
-          final crimeTypeData = crimeType != null && crimeType is Map ? {
-            'id': crimeType['id'] ?? retryResponse['type_id'],
-            'name': crimeType['name'] ?? 'Unknown',
-            'level': crimeType['level'] ?? 'unknown',
-            'category': crimeType['category'] ?? 'General',
-            'description': crimeType['description'],
-          } : {
-            'id': retryResponse['type_id'],
-            'name': 'Unknown',
-            'level': 'unknown',
-            'category': 'General',
-            'description': null,
-          };
-          
-          _hotspots.insert(0, {
-            ...retryResponse,
-            'created_by': retryResponse['created_by'],
-            'reported_by': retryResponse['reported_by'],
-            'crime_type': crimeTypeData,
-          });
-        });
+        // Check again if it was added during the retry delay
+        final nowExists = _hotspots.any((h) => h['id'] == hotspotId);
         
+        if (!nowExists) {
+          setState(() {
+            final crimeType = retryResponse['crime_type'];
+            final crimeTypeData = crimeType != null && crimeType is Map ? {
+              'id': crimeType['id'] ?? retryResponse['type_id'],
+              'name': crimeType['name'] ?? 'Unknown',
+              'level': crimeType['level'] ?? 'unknown',
+              'category': crimeType['category'] ?? 'General',
+              'description': crimeType['description'],
+            } : {
+              'id': retryResponse['type_id'],
+              'name': 'Unknown',
+              'level': 'unknown',
+              'category': 'General',
+              'description': null,
+            };
+            
+            _hotspots.insert(0, {
+              ...retryResponse,
+              'created_by': retryResponse['created_by'],
+              'reported_by': retryResponse['reported_by'],
+              'crime_type': crimeTypeData,
+            });
+            
+            print('✅ Retry successful - crime type loaded: ${crimeTypeData['name']}');
+          });
+        }
+        
+        // ✅ ALWAYS update heatmap
         _updateHeatmapOnInsert(retryResponse);
-        print('✅ Retry successful - crime type loaded correctly');
       }
     } catch (retryError) {
-      print('Retry also failed: $retryError');
+      print('❌ Retry also failed: $retryError');
       
-      // Final fallback with payload data
-      if (mounted) {
+      // Check one last time before final fallback
+      final existsInFinalCheck = _hotspots.any((h) => h['id'] == hotspotId);
+      
+      if (mounted && !existsInFinalCheck) {
         setState(() {
           _hotspots.insert(0, {
             ...payload.newRecord,
@@ -2023,7 +2152,7 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
             'reported_by': payload.newRecord['reported_by'],
             'crime_type': {
               'id': payload.newRecord['type_id'],
-              'name': 'Unknown',
+              'name': 'Loading...', // Better than "Unknown" for fallback
               'level': 'unknown',
               'category': 'General',
               'description': null
@@ -2031,13 +2160,21 @@ void _handleHotspotInsert(PostgresChangePayload payload) async {
           });
         });
         
-        _updateHeatmapOnInsert(payload.newRecord);
+        // Schedule a refresh to fix the "Loading..." state
+        Timer(const Duration(seconds: 2), () {
+          if (mounted) {
+            _loadHotspots(); // This will refresh and fix the crime type
+          }
+        });
       }
+      
+      // ✅ ALWAYS update heatmap even in error case
+      _updateHeatmapOnInsert(payload.newRecord);
     }
   }
 }
 
-
+// FIXED: Update handler - no changes needed here, but ensure it handles updates properly
 void _handleHotspotUpdate(PostgresChangePayload payload) async {
   if (!mounted) return;
   
@@ -2065,13 +2202,12 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
 
     print('Fetched complete hotspot data: ${response['id']} - ${response['crime_type']?['name']}');
 
-    // NEW: Check if this is an auto-expiration
+    // Check if this is an auto-expiration
     final wasActive = previousHotspot['active_status'] == 'active';
     final isNowInactive = response['active_status'] == 'inactive';
     final hasExpirationTime = response['expires_at'] != null;
     
     if (wasActive && isNowInactive && hasExpirationTime) {
-      // This was auto-expired by the cron job
       _handleAutoExpiration(response, previousHotspot);
     }
 
@@ -2096,12 +2232,13 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
                 'description': crimeType['description'],
               }
             };
-            print('Updated existing hotspot at index $index');
+            print('✅ Updated existing hotspot at index $index');
           } else {
             _hotspots.removeAt(index);
             print('Removed hotspot from non-admin view');
           }
         } else {
+          // ✅ Only add if it doesn't exist
           if (_hasAdminPermissions || shouldShowForNonAdminOfficer) {
             final crimeType = response['crime_type'] ?? {};
             _hotspots.add({
@@ -2114,7 +2251,7 @@ void _handleHotspotUpdate(PostgresChangePayload payload) async {
                 'description': crimeType['description'],
               }
             });
-            print('Added new hotspot to list');
+            print('Added new hotspot to list via update');
           }
         }
       });
@@ -2260,11 +2397,20 @@ void _handleHotspotDelete(PostgresChangePayload payload) {
 
 
 
-
 void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
+  print('🔥 _updateHeatmapOnInsert called for crime: ${newCrime['id']}');
+  
   // Only add if approved
   if (newCrime['status'] != 'approved') {
     print('❌ Crime not approved - not adding to heatmap');
+    return;
+  }
+  
+  // Check if already exists in heatmap
+  final existsInHeatmap = _heatmapCrimes.any((c) => c['id'] == newCrime['id']);
+  if (existsInHeatmap) {
+    print('⚠️ Crime ${newCrime['id']} already in heatmap, triggering recalculation only');
+    _scheduleHeatmapUpdate();
     return;
   }
   
@@ -2289,7 +2435,7 @@ void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
     
     final formattedCrime = _formatCrimeForHeatmap(response);
     
-    // ⭐ UPDATED: Validate with dynamic time window based on severity
+    // Validate with dynamic time window based on severity
     if (!_isWithinHeatmapTimeWindow(formattedCrime)) {
       final level = formattedCrime['crime_type']['level'] ?? 'low';
       final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
@@ -2297,17 +2443,28 @@ void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
       return;
     }
     
-    setState(() {
-      _heatmapCrimes.add(formattedCrime);
-    });
+    // Double-check it wasn't added during the async operation
+    final stillNotInHeatmap = !_heatmapCrimes.any((c) => c['id'] == newCrime['id']);
     
-    final level = formattedCrime['crime_type']['level'] ?? 'low';
-    final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
-    print('✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']}, ${level}, ${timeWindow}d window)');
+    if (stillNotInHeatmap) {
+      setState(() {
+        _heatmapCrimes.add(formattedCrime);
+      });
+      
+      final level = formattedCrime['crime_type']['level'] ?? 'low';
+      final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
+      print('✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']}, ${level}, ${timeWindow}d window)');
+    } else {
+      print('⚠️ Crime was added to heatmap during fetch, skipping');
+    }
+    
     _scheduleHeatmapUpdate();
     
   } catch (e) {
     print('Error fetching complete crime data for heatmap insert: $e');
+    
+    // Even on error, schedule an update to recalculate
+    _scheduleHeatmapUpdate();
   }
 }
 
@@ -15123,9 +15280,374 @@ Widget _buildSearchBar({bool isWeb = false}) {
 
 
 
-//ALERT SCREEN MESSAGE
+// ============================================
+// RECOMMENDED: Smart Combined Proximity Alert
+// Shows most critical threat first, with compact multi-alert display
+// ============================================
 Widget _buildProximityAlert() {
-  if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
+  // Show nothing if no alerts
+  if (_proximityAlertType == 'none') {
+    return const SizedBox.shrink();
+  }
+
+  // CASE 1: Both alerts active - Show most critical first
+  if (_proximityAlertType == 'both') {
+    // Determine which is more critical
+    final hotspotLevel = _nearbyHotspots.first['crime_type']['level'] ?? 'low';
+    final heatmapLevel = _nearbyHeatmapClusters.first.dominantSeverity;
+    final hotspotDistance = _nearbyHotspots.first['distance'] as double;
+    final heatmapDistance = _calculateDistance(_currentPosition!, _nearbyHeatmapClusters.first.center);
+    final isInsideHeatmap = heatmapDistance <= _nearbyHeatmapClusters.first.radius;
+    
+    // Priority logic:
+    // 1. Inside heatmap zone = highest priority
+    // 2. Critical level crimes
+    // 3. High level crimes
+    // 4. Closer distance
+    
+    bool showHeatmapFirst = isInsideHeatmap || 
+                           _getSeverityPriority(heatmapLevel) > _getSeverityPriority(hotspotLevel) ||
+                           (heatmapLevel == hotspotLevel && heatmapDistance < hotspotDistance);
+    
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showHeatmapFirst) ...[
+          _buildHeatmapAlert(),
+          const SizedBox(height: 6),
+          _buildCompactHotspotAlert(), // Compact version when secondary
+        ] else ...[
+          _buildHotspotAlert(),
+          const SizedBox(height: 6),
+          _buildCompactHeatmapAlert(), // Compact version when secondary
+        ],
+      ],
+    );
+  }
+  
+  // CASE 2: Heatmap alert only
+  if (_proximityAlertType == 'heatmap') {
+    return _buildHeatmapAlert();
+  }
+  
+  // CASE 3: Hotspot alert only (original behavior)
+  return _buildHotspotAlert();
+}
+
+// Helper: Get numeric priority for severity levels
+int _getSeverityPriority(String level) {
+  switch (level) {
+    case 'critical': return 4;
+    case 'high': return 3;
+    case 'medium': return 2;
+    case 'low': return 1;
+    default: return 0;
+  }
+}
+
+
+
+// ============================================
+// NEW: Compact versions for secondary alerts
+// ============================================
+Widget _buildCompactHotspotAlert() {
+  if (_nearbyHotspots.isEmpty) return const SizedBox.shrink();
+  
+  final closestHotspot = _nearbyHotspots.first;
+  final crimeType = closestHotspot['crime_type'];
+  final distance = (closestHotspot['distance'] as double).round();
+  final level = crimeType['level'] ?? 'unknown';
+  
+  Color alertColor = _getAlertColor(level);
+  Color textColor = level == 'low' ? Colors.black87 : Colors.white;
+  
+  return Container(
+    margin: const EdgeInsets.symmetric(vertical: 2),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    decoration: BoxDecoration(
+      color: alertColor.withOpacity(0.9),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: alertColor, width: 1.5),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.location_on, color: textColor, size: 12),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            '${crimeType['name']} • ${distance}m',
+            style: TextStyle(
+              color: textColor,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (_nearbyHotspots.length > 1)
+          Text(
+            '+${_nearbyHotspots.length - 1}',
+            style: TextStyle(
+              color: textColor.withOpacity(0.7),
+              fontSize: 10,
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+Widget _buildCompactHeatmapAlert() {
+  if (_nearbyHeatmapClusters.isEmpty) return const SizedBox.shrink();
+  
+  final closestCluster = _nearbyHeatmapClusters.first;
+  final distanceToCenter = _calculateDistance(_currentPosition!, closestCluster.center);
+  final distanceToEdge = distanceToCenter - closestCluster.radius;
+  final isInside = distanceToCenter <= closestCluster.radius;
+  final level = closestCluster.dominantSeverity;
+  
+  Color alertColor = _getAlertColor(level);
+  Color textColor = level == 'low' ? Colors.black87 : Colors.white;
+  
+  return Container(
+    margin: const EdgeInsets.symmetric(vertical: 2),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    decoration: BoxDecoration(
+      color: alertColor.withOpacity(0.9),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: alertColor, width: 1.5),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          isInside ? Icons.dangerous : Icons.shield_outlined,
+          color: textColor,
+          size: 12,
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            isInside 
+          ? 'Danger! Crime hotzone • ${closestCluster.crimeCount} crimes' // CHANGED
+          : 'Danger zone nearby • ${distanceToEdge.round().abs()}m',
+            style: TextStyle(
+              color: textColor,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (_nearbyHeatmapClusters.length > 1)
+          Text(
+            '+${_nearbyHeatmapClusters.length - 1}',
+            style: TextStyle(
+              color: textColor.withOpacity(0.7),
+              fontSize: 10,
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+// Helper: Centralized color logic
+Color _getAlertColor(String level) {
+  switch (level) {
+    case 'critical': return const Color.fromARGB(255, 247, 26, 10);
+    case 'high': return const Color.fromARGB(255, 223, 106, 11);
+    case 'medium': return const Color.fromARGB(155, 202, 130, 49);
+    case 'low': return const Color.fromARGB(255, 216, 187, 23);
+    default: return Colors.orange;
+  }
+}
+
+// ============================================
+// NEW: Build heatmap-specific alert
+// FIXED: Better distance display logic
+// ============================================
+Widget _buildHeatmapAlert() {
+  if (_nearbyHeatmapClusters.isEmpty) {
+    return const SizedBox.shrink();
+  }
+
+  final closestCluster = _nearbyHeatmapClusters.first;
+  final distanceToCenter = _calculateDistance(_currentPosition!, closestCluster.center);
+  final distanceToEdge = distanceToCenter - closestCluster.radius;
+  final isInside = distanceToCenter <= closestCluster.radius;
+  
+  // Determine alert severity based on cluster's dominant severity
+  final dominantSeverity = closestCluster.dominantSeverity;
+  
+  Color alertColor;
+  IconData alertIcon;
+  Color textColor = Colors.white;
+  String alertEmoji;
+  String alertText;
+  
+  switch (dominantSeverity) {
+    case 'critical':
+      alertColor = const Color.fromARGB(255, 247, 26, 10);
+      alertIcon = isInside ? Icons.dangerous_rounded : Icons.warning_rounded;
+      alertEmoji = isInside ? '🚨' : '⚠️';
+      break;
+    case 'high':
+      alertColor = const Color.fromARGB(255, 223, 106, 11);
+      alertIcon = isInside ? Icons.error_rounded : Icons.warning_rounded;
+      alertEmoji = isInside ? '🚨' : '⚠️';
+      break;
+    case 'medium':
+      alertColor = const Color.fromARGB(155, 202, 130, 49);
+      alertIcon = Icons.info_rounded;
+      alertEmoji = '⚠️';
+      break;
+    case 'low':
+      alertColor = const Color.fromARGB(255, 216, 187, 23);
+      alertIcon = Icons.info_outline_rounded;
+      alertEmoji = '⚠️';
+      textColor = Colors.black87;
+      break;
+    default:
+      alertColor = Colors.orange;
+      alertIcon = Icons.warning_outlined;
+      alertEmoji = '⚠️';
+  }
+  
+// Build alert text with accurate distance
+if (isInside) {
+  // CHANGED: Remove "Inside" wording, show crime count
+  alertText = 'Danger! Crime hotzone • ${closestCluster.crimeCount} incidents';
+} else {
+  // Keep approaching alert as is
+  final metersAway = distanceToEdge.round().abs();
+  alertText = 'Approaching crime zone • ${metersAway}m away';
+}
+
+  return Container(
+    margin: const EdgeInsets.symmetric(vertical: 4),
+    decoration: BoxDecoration(
+      color: alertColor,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: alertColor.withOpacity(0.4),
+          blurRadius: 10,
+          spreadRadius: 1,
+          offset: const Offset(0, 4),
+        ),
+      ],
+    ),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _showHeatmapDetails(closestCluster),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icon with pulsing animation if inside
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.25),
+                  shape: BoxShape.circle,
+                ),
+                child: isInside
+                    ? TweenAnimationBuilder<double>(
+                        duration: const Duration(milliseconds: 1000),
+                        tween: Tween(begin: 0.5, end: 1.0),
+                        curve: Curves.easeInOut,
+                        builder: (context, scale, child) {
+                          return Transform.scale(
+                            scale: scale,
+                            child: Icon(alertIcon, color: textColor, size: 14),
+                          );
+                        },
+                        onEnd: () {
+                          if (mounted) setState(() {});
+                        },
+                      )
+                    : Icon(alertIcon, color: textColor, size: 14),
+              ),
+              
+              const SizedBox(width: 8),
+              
+              // Content
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          alertEmoji,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            alertText,
+                            style: TextStyle(
+                              color: textColor,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    
+                    // Show top crime types
+                    if (closestCluster.topCrimeTypes.isNotEmpty)
+                      Text(
+                        closestCluster.topCrimeTypes.take(2).join(', '),
+                        style: TextStyle(
+                          color: textColor.withOpacity(0.8),
+                          fontSize: 10,
+                          fontStyle: FontStyle.italic,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    
+                    // Additional zones nearby
+                    if (_nearbyHeatmapClusters.length > 1)
+                      Text(
+                        '+${_nearbyHeatmapClusters.length - 1} more danger zones nearby',
+                        style: TextStyle(
+                          color: textColor.withOpacity(0.8),
+                          fontSize: 10,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              
+              // Chevron
+              Icon(
+                Icons.chevron_right,
+                color: textColor.withOpacity(0.7),
+                size: 16,
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// ============================================
+// REFACTORED: Original hotspot alert as separate method
+// ============================================
+Widget _buildHotspotAlert() {
+  if (_nearbyHotspots.isEmpty) {
     return const SizedBox.shrink();
   }
 
@@ -15134,7 +15656,6 @@ Widget _buildProximityAlert() {
   final distance = (closestHotspot['distance'] as double).round();
   final level = crimeType['level'] ?? 'unknown';
   
-
   Color alertColor;
   IconData alertIcon;
   Color textColor = Colors.white;
@@ -15169,9 +15690,7 @@ Widget _buildProximityAlert() {
   }
 
   return Container(
-    // REMOVED: margin from here since it's now handled by parent
-    // margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-    margin: const EdgeInsets.symmetric(vertical: 4), // Keep only vertical margin
+    margin: const EdgeInsets.symmetric(vertical: 4),
     decoration: BoxDecoration(
       color: alertColor,
       borderRadius: BorderRadius.circular(16),
@@ -15194,23 +15713,17 @@ Widget _buildProximityAlert() {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Icon
               Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.25),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  alertIcon,
-                  color: textColor,
-                  size: 14,
-                ),
+                child: Icon(alertIcon, color: textColor, size: 14),
               ),
               
               const SizedBox(width: 8),
               
-              // Content
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -15218,10 +15731,7 @@ Widget _buildProximityAlert() {
                   children: [
                     Row(
                       children: [
-                        Text(
-                          alertEmoji,
-                          style: const TextStyle(fontSize: 12),
-                        ),
+                        Text(alertEmoji, style: const TextStyle(fontSize: 12)),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
@@ -15250,7 +15760,6 @@ Widget _buildProximityAlert() {
                 ),
               ),
               
-              // Chevron
               Icon(
                 Icons.chevron_right,
                 color: textColor.withOpacity(0.7),
@@ -15264,27 +15773,31 @@ Widget _buildProximityAlert() {
   );
 }
 
-// PROXIMITY ALERT FLOATING
+// ============================================
+// UPGRADED: Animated alert wrapper
+// ============================================
 Widget _buildAnimatedProximityAlert() {
-  if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
+  if (_proximityAlertType == 'none') {
     return const SizedBox.shrink();
   }
 
+  // Use stronger animation if inside a heatmap zone
+  final isInsideHeatmap = _nearbyHeatmapClusters.isNotEmpty &&
+      _calculateDistance(_currentPosition!, _nearbyHeatmapClusters.first.center) 
+          <= _nearbyHeatmapClusters.first.radius;
+
   return TweenAnimationBuilder<double>(
-    duration: const Duration(milliseconds: 2000),
+    duration: Duration(milliseconds: isInsideHeatmap ? 1500 : 2000),
     tween: Tween(begin: -3.0, end: 3.0),
     curve: Curves.easeInOut,
     builder: (context, translateY, child) {
       return Transform.translate(
         offset: Offset(0, translateY),
-        child: _buildProximityAlert(), // This calls the actual alert widget
+        child: _buildProximityAlert(),
       );
     },
     onEnd: () {
-      // Restart the animation by rebuilding the widget
-      if (mounted) {
-        setState(() {});
-      }
+      if (mounted) setState(() {});
     },
   );
 }
@@ -16055,6 +16568,10 @@ HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
   final crimeTypeCount = <String, int>{};
   double intensity = 0.0;
   
+  // Determine dominant severity level
+  String dominantSeverity = 'low';
+  int maxSeverityCount = 0;
+  
   // Calculate weighted center and statistics
   for (final crime in crimes) {
     final coords = crime['location']['coordinates'];
@@ -16068,6 +16585,17 @@ HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
     intensity += weight;
     
     breakdown[level] = (breakdown[level] ?? 0) + 1;
+    
+    // Track dominant severity
+    if (breakdown[level]! > maxSeverityCount) {
+      maxSeverityCount = breakdown[level]!;
+      dominantSeverity = level;
+    }
+    
+    // If ANY critical crime exists, upgrade to critical
+    if (level == 'critical') {
+      dominantSeverity = 'critical';
+    }
     
     final crimeType = crime['crime_type']['name'] ?? 'Unknown';
     crimeTypeCount[crimeType] = (crimeTypeCount[crimeType] ?? 0) + 1;
@@ -16088,13 +16616,17 @@ HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
     if (distance > maxDistance) maxDistance = distance;
   }
   
-  // UPDATED: Smaller base radius, multiplier happens in display layer
-  final baseRadius = 200.0; // Smaller base (was 500)
-  final countMultiplier = crimes.length * 20.0; // Smaller multiplier (was 50)
-  final intensityMultiplier = intensity * 50.0; // Smaller multiplier (was 200)
+  // ⭐ NEW: Use severity-based radius configuration
+  final config = SEVERITY_RADIUS_CONFIG[dominantSeverity]!;
+  
+  final baseRadius = config['base']!;
+  final countMultiplier = crimes.length * config['countMultiplier']!;
+  final intensityMultiplier = intensity * config['intensityMultiplier']!;
   
   final calculatedRadius = maxDistance + baseRadius + countMultiplier + intensityMultiplier;
-  final radius = calculatedRadius.clamp(300.0, 1000.0); // Smaller range: 300m-1km (was 800m-5km)
+  final radius = calculatedRadius.clamp(config['min']!, config['max']!);
+  
+  print('🎯 Cluster: ${crimes.length} crimes, $dominantSeverity severity, radius: ${radius.toStringAsFixed(0)}m');
   
   // Get top 3 crime types
   final sortedTypes = crimeTypeCount.entries.toList()
@@ -16109,8 +16641,43 @@ HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
     crimeBreakdown: breakdown,
     topCrimeTypes: topTypes,
     crimes: crimes,
+    dominantSeverity: dominantSeverity, // Add this field to your class
   );
 }
+
+// ============================================
+// SEVERITY-BASED RADIUS RANGES
+// ============================================
+static const Map<String, Map<String, double>> SEVERITY_RADIUS_CONFIG = {
+  'critical': {
+    'base': 400.0,      // Larger base for serious crimes
+    'min': 500.0,       // 500m minimum danger zone
+    'max': 2500.0,      // 2.5km maximum (terrorism, kidnapping zones)
+    'countMultiplier': 30.0,
+    'intensityMultiplier': 80.0,
+  },
+  'high': {
+    'base': 300.0,
+    'min': 400.0,       // 400m minimum
+    'max': 1800.0,      // 1.8km maximum (gang territories, robbery zones)
+    'countMultiplier': 25.0,
+    'intensityMultiplier': 60.0,
+  },
+  'medium': {
+    'base': 250.0,
+    'min': 300.0,       // 300m minimum
+    'max': 1200.0,      // 1.2km maximum (theft, burglary areas)
+    'countMultiplier': 20.0,
+    'intensityMultiplier': 50.0,
+  },
+  'low': {
+    'base': 200.0,
+    'min': 250.0,       // 250m minimum
+    'max': 800.0,       // 800m maximum (disturbances, minor crimes)
+    'countMultiplier': 15.0,
+    'intensityMultiplier': 40.0,
+  },
+};
 
 // Calculate distance between two points (Haversine formula)
 
@@ -16139,7 +16706,7 @@ Widget _buildHeatmapLayer() {
     return const SizedBox.shrink();
   }
   
-  // Zoom-dependent scaling - MORE AGGRESSIVE for far zoom
+  // ⭐ UPDATED: Even more conservative scaling across ALL zoom levels
   double fillOpacity;
   double borderOpacity;
   double radiusMultiplier;
@@ -16147,50 +16714,51 @@ Widget _buildHeatmapLayer() {
   bool useTripleLayer = false;
   
   if (_currentZoom < 8.0) {
-    // Very far zoom: MASSIVE multiplier
-    fillOpacity = 0.7;
-    borderOpacity = 0.9;
-    radiusMultiplier = 8.0; // 8x (300m becomes 2.4km)
-    borderWidth = 6;
+    // Very far zoom: REDUCED from 4.0 to 3.0
+    fillOpacity = 0.55;
+    borderOpacity = 0.75;
+    radiusMultiplier = 3.0; // Was 4.0, now 3x
+    borderWidth = 4;
     useTripleLayer = true;
   } else if (_currentZoom < 10.0) {
-    // Far zoom: Large multiplier
-    fillOpacity = 0.6;
-    borderOpacity = 0.8;
-    radiusMultiplier = 5.0; // 5x
-    borderWidth = 5;
-    useTripleLayer = true;
-  } else if (_currentZoom < 12.5) {
-    // Medium zoom: Moderate multiplier
+    // Far zoom: REDUCED from 3.0 to 2.2
     fillOpacity = 0.5;
     borderOpacity = 0.7;
-    radiusMultiplier = 2.5; // 2.5x
-    borderWidth = 4;
-  } else if (_currentZoom < 13.0) {
-    // Close zoom: Small multiplier
-    fillOpacity = 0.4;
-    borderOpacity = 0.6;
-    radiusMultiplier = 1.5; // 1.5x
+    radiusMultiplier = 2.2; // Was 3.0, now 2.2x
+    borderWidth = 3.5;
+    useTripleLayer = true;
+  } else if (_currentZoom < 12.5) {
+    // Medium zoom: REDUCED from 1.8 to 1.4
+    fillOpacity = 0.45;
+    borderOpacity = 0.65;
+    radiusMultiplier = 1.4; // Was 1.8, now 1.4x
     borderWidth = 3;
+
+  } else if (_currentZoom < 13.0) {
+    // Very close zoom: REDUCED from 1.0 to 0.85
+    fillOpacity = 0.35;
+    borderOpacity = 0.55;
+    radiusMultiplier = 0.85; // Was 1.0, now 0.85x (15% smaller)
+    borderWidth = 2;
   } else {
-    // Very close zoom: Minimal/no multiplier
+    // Super close zoom: NEW - even smaller
     fillOpacity = 0.3;
     borderOpacity = 0.5;
-    radiusMultiplier = 1.0; // 1x (original size)
+    radiusMultiplier = 0.7; // 30% smaller than base
     borderWidth = 2;
   }
   
   return Stack(
     children: [
-      // Outer glow layer (largest)
+      // Outer glow layer - FURTHER REDUCED
       if (useTripleLayer)
         CircleLayer(
           circles: _heatmapClusters.map((cluster) {
             final color = _getHeatmapColor(cluster.intensity);
             return CircleMarker(
               point: cluster.center,
-              radius: cluster.radius * radiusMultiplier * 2.0,
-              color: color.withOpacity(fillOpacity * 0.3),
+              radius: cluster.radius * radiusMultiplier * 1.3, // Was 1.5, now 1.3
+              color: color.withOpacity(fillOpacity * 0.2), // Was 0.25, now 0.2
               borderColor: Colors.transparent,
               borderStrokeWidth: 0,
               useRadiusInMeter: true,
@@ -16198,15 +16766,15 @@ Widget _buildHeatmapLayer() {
           }).toList(),
         ),
       
-      // Middle glow layer
+      // Middle glow layer - FURTHER REDUCED
       if (useTripleLayer)
         CircleLayer(
           circles: _heatmapClusters.map((cluster) {
             final color = _getHeatmapColor(cluster.intensity);
             return CircleMarker(
               point: cluster.center,
-              radius: cluster.radius * radiusMultiplier * 1.5,
-              color: color.withOpacity(fillOpacity * 0.5),
+              radius: cluster.radius * radiusMultiplier * 1.15, // Was 1.25, now 1.15
+              color: color.withOpacity(fillOpacity * 0.35), // Was 0.4, now 0.35
               borderColor: Colors.transparent,
               borderStrokeWidth: 0,
               useRadiusInMeter: true,
@@ -16761,6 +17329,8 @@ class HeatmapCluster {
   final Map<String, int> crimeBreakdown;
   final List<String> topCrimeTypes;
   final List<Map<String, dynamic>> crimes; // Individual crimes in this cluster
+  final String dominantSeverity; // ADD THIS LINE - Store the dominant severity level
+  
   
   HeatmapCluster({
     required this.center,
@@ -16770,6 +17340,7 @@ class HeatmapCluster {
     required this.crimeBreakdown,
     required this.topCrimeTypes,
     required this.crimes,
+    required this.dominantSeverity, // Now it matches the field above
   });
 }
 

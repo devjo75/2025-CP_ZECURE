@@ -1648,93 +1648,97 @@ child: _showOTPVerification
       ),
     );
   }
-
-  Widget _buildHeader(bool isWeb) {
-    return Column(
-      children: [
-        // Back to Landing Page Button
-        Align(
-          alignment: Alignment.centerLeft,
-          child: IconButton(
-          onPressed: () {
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const ResponsiveLandingScreen(),
-            ),
-            (route) => false,
-          );
-        },
-
-            icon: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    spreadRadius: 1,
+Widget _buildHeader(bool isWeb) {
+  return Column(
+    children: [
+      Padding(
+        padding: EdgeInsets.only(top: isWeb ? 40 : 8),
+        child: Stack(
+          alignment: Alignment.topCenter,
+          children: [
+            // Home icon (top-left)
+            Align(
+              alignment: Alignment.topLeft,
+              child: IconButton(
+                onPressed: () {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const ResponsiveLandingScreen(),
+                    ),
+                    (route) => false,
+                  );
+                },
+                icon: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
                   ),
-                ],
+                  child: Icon(
+                    Icons.home_rounded,
+                    color: Colors.blue.shade600,
+                    size: 20,
+                  ),
+                ),
               ),
-              child: Icon(
-                Icons.home_rounded,
-                color: Colors.blue.shade600,
-                size: 20,
+            ),
+
+            // Centered logo (independent of icon)
+            Padding(
+              padding: const EdgeInsets.only(top: 4), // aligns top visually
+              child: Image.asset(
+                'assets/images/zecure.png',
+                height: isWeb ? 150 : 130,
+                width: isWeb ? 150 : 130,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  height: isWeb ? 150 : 130,
+                  width: isWeb ? 150 : 130,
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade600,
+                    borderRadius: BorderRadius.circular(isWeb ? 40 : 35),
+                  ),
+                  child: Icon(
+                    Icons.security_rounded,
+                    size: isWeb ? 40 : 35,
+                    color: Colors.white,
+                  ),
+                ),
               ),
             ),
-          ),
+          ],
         ),
-        
-        SizedBox(height: isWeb ? 20 : 16),
-        
-        // Logo
-        Image.asset(
-          'assets/images/zecure.png',
-          height: isWeb ? 150 : 130,
-          width: isWeb ? 150 : 130,
-          errorBuilder: (context, error, stackTrace) => Container(
-            height: isWeb ? 150 : 130,
-            width: isWeb ? 150 : 130,
-            decoration: BoxDecoration(
-              color: Colors.blue.shade600,
-              borderRadius: BorderRadius.circular(isWeb ? 40 : 35),
-            ),
-            child: Icon(
-              Icons.security_rounded,
-              size: isWeb ? 40 : 35,
-              color: Colors.white,
-            ),
-          ),
+      ),
+
+      SizedBox(height: isWeb ? 20 : 16),
+      Text(
+        'Welcome Back!',
+        style: GoogleFonts.poppins(
+          fontSize: isWeb ? 28 : 22,
+          fontWeight: FontWeight.bold,
+          color: Colors.grey.shade800,
         ),
-        
-        SizedBox(height: isWeb ? 20 : 16),
-        
-        // Welcome Text
-        Text(
-          'Welcome Back!',
-          style: GoogleFonts.poppins(
-            fontSize: isWeb ? 28 : 22,
-            fontWeight: FontWeight.bold,
-            color: Colors.grey.shade800,
-          ),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        'Sign in to access your Zecure account',
+        style: GoogleFonts.poppins(
+          fontSize: isWeb ? 16 : 14,
+          color: Colors.grey.shade600,
         ),
-        
-        const SizedBox(height: 6),
-        
-        Text(
-          'Sign in to access your Zecure account',
-          style: GoogleFonts.poppins(
-            fontSize: isWeb ? 16 : 14,
-            color: Colors.grey.shade600,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ],
-    );
-  }
+        textAlign: TextAlign.center,
+      ),
+    ],
+  );
+}
+
 
   Widget _buildLoginForm(bool isWeb) {
     return Container(

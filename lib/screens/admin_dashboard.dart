@@ -48,6 +48,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   DateTime _reportsStartDate = DateTime(DateTime.now().year, DateTime.now().month - 1, 1);
   DateTime _reportsEndDate = DateTime.now();
+
+  DateTime _officersStartDate = DateTime(DateTime.now().year, DateTime.now().month - 1, 1);
+  DateTime _officersEndDate = DateTime.now();
+
   
   Map<String, dynamic> _userStats = {};
   Map<String, dynamic> _crimeStats = {};
@@ -109,6 +113,30 @@ String _selectedActivityStatus = 'All Activity';
 String _reportSortBy = 'date';
 bool _reportSortAscending = false;
 List<Map<String, dynamic>> _filteredReportsData = [];
+List<String> _availableBarangays = ['All Barangays'];
+Map<String, String> _barangayCache = {}; // Cache for barangay data
+bool _isLoadingBarangays = false;
+
+// SafeSpot page search and filter variables
+final TextEditingController _safeSpotSearchController = TextEditingController();
+String _selectedSafeSpotStatus = 'All Status';
+String _selectedSafeSpotType = 'All Types';
+String _selectedSafeSpotVerified = 'All Verification';
+String _safeSpotSortBy = 'created_at';
+String? _hoveredCard;
+String _selectedBarangay = 'All Barangays';
+bool _safeSpotSortAscending = false;
+List<Map<String, dynamic>> _safeSpotsData = [];
+List<Map<String, dynamic>> _filteredSafeSpotsData = [];
+List<String> _availableSafeSpotStatuses = ['All Status'];
+List<String> _availableSafeSpotTypes = ['All Types'];
+List<String> _availableSafeSpotVerified = ['All Verification'];
+String _selectedSafeSpotBarangay = 'All Barangays';
+List<String> _availableSafeSpotBarangays = ['All Barangays'];
+Map<String, String> _safeSpotBarangayCache = {}; // Cache for barangay data
+bool _isLoadingSafeSpotBarangays = false;
+// ignore: unused_field
+Map<String, dynamic> _safeSpotStats = {};
 
 //AUTHORIZATION
 bool _isAdmin = false;
@@ -121,20 +149,9 @@ List<String> _availableLevels = ['All Levels'];
 List<String> _availableCategories = ['All Categories'];
 List<String> _availableActivityStatuses = ['All Activity'];
 
-// SafeSpot page search and filter variables
-final TextEditingController _safeSpotSearchController = TextEditingController();
-String _selectedSafeSpotStatus = 'All Status';
-String _selectedSafeSpotType = 'All Types';
-String _selectedSafeSpotVerified = 'All Verification';
-String _safeSpotSortBy = 'created_at';
-bool _safeSpotSortAscending = false;
-List<Map<String, dynamic>> _safeSpotsData = [];
-List<Map<String, dynamic>> _filteredSafeSpotsData = [];
-List<String> _availableSafeSpotStatuses = ['All Status'];
-List<String> _availableSafeSpotTypes = ['All Types'];
-List<String> _availableSafeSpotVerified = ['All Verification'];
-// ignore: unused_field
-Map<String, dynamic> _safeSpotStats = {};
+
+
+
 
 
 
@@ -296,7 +313,10 @@ Future<void> _loadOfficersData() async {
   try {
     print('Loading officers data...'); // Debug print
     
-    // Updated query with proper joins to get rank and station data
+    String startDateStr = DateFormat('yyyy-MM-dd').format(_officersStartDate);
+    String endDateStr = DateFormat('yyyy-MM-dd').format(_officersEndDate.add(const Duration(days: 1)));
+    
+    // Updated query with proper joins to get rank and station data + date filter
     final response = await Supabase.instance.client
         .from('users')
         .select('''
@@ -314,6 +334,8 @@ Future<void> _loadOfficersData() async {
           )
         ''')
         .eq('role', 'officer')
+        .gte('created_at', startDateStr)
+        .lt('created_at', endDateStr)
         .order('created_at', ascending: false);
     
     print('Officers response: ${response.length} officers found'); // Debug print
@@ -330,11 +352,11 @@ Future<void> _loadOfficersData() async {
       _availablePoliceStations = ['All Stations'];
       
       for (var officer in _officersData) {
-      // Add ranks
-      final rank = officer['police_ranks']?['old_rank']?.toString();
-      if (rank != null && rank.isNotEmpty && !_availablePoliceRanks.contains(rank)) {
-        _availablePoliceRanks.add(rank);
-      }
+        // Add ranks
+        final rank = officer['police_ranks']?['old_rank']?.toString();
+        if (rank != null && rank.isNotEmpty && !_availablePoliceRanks.contains(rank)) {
+          _availablePoliceRanks.add(rank);
+        }
         
         // Add stations
         final station = officer['police_stations']?['name']?.toString();
@@ -352,12 +374,14 @@ Future<void> _loadOfficersData() async {
   } catch (e) {
     print('Error loading officers data: $e');
     // Show error to user
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Error loading officers: $e'),
-        backgroundColor: Colors.red,
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading officers: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }
 
@@ -461,13 +485,19 @@ void _filterSafeSpots() {
           (_selectedSafeSpotVerified == 'Verified' && verified) ||
           (_selectedSafeSpotVerified == 'Unverified' && !verified);
 
+      // Barangay filter - ADD THIS
+      final matchesBarangay = _selectedSafeSpotBarangay == 'All Barangays' ||
+          (safeSpot['cached_barangay']?.toString() ?? '').toLowerCase() == 
+          _selectedSafeSpotBarangay.toLowerCase();
+
       // Date range filter
       final createdAt = DateTime.tryParse(safeSpot['created_at'] ?? '');
       final matchesDateRange = createdAt == null ||
           (createdAt.isAfter(_startDate.subtract(const Duration(days: 1))) &&
            createdAt.isBefore(_endDate.add(const Duration(days: 1))));
 
-      return matchesSearch && matchesStatus && matchesType && matchesVerified && matchesDateRange;
+      return matchesSearch && matchesStatus && matchesType && matchesVerified && 
+             matchesBarangay && matchesDateRange; // Added matchesBarangay
     }).toList();
 
     // Sorting
@@ -505,6 +535,9 @@ void _updateSafeSpotFilter(String filterType, String value) {
       case 'verified':
         _selectedSafeSpotVerified = value;
         break;
+      case 'barangay':  // ADD THIS CASE
+        _selectedSafeSpotBarangay = value;
+        break;
       case 'sort':
         if (_safeSpotSortBy == value) {
           _safeSpotSortAscending = !_safeSpotSortAscending;
@@ -524,13 +557,64 @@ void _clearSafeSpotFilters() {
     _selectedSafeSpotStatus = 'All Status';
     _selectedSafeSpotType = 'All Types';
     _selectedSafeSpotVerified = 'All Verification';
+    _selectedSafeSpotBarangay = 'All Barangays';  // ADD THIS
     _safeSpotSortBy = 'created_at';
     _safeSpotSortAscending = false;
   });
   _filterSafeSpots();
 }
 
-// ADD THIS METHOD TO LOAD SAFESPOT DATA
+Future<void> _cacheSafeSpotBarangayData() async {
+  if (_safeSpotsData.isEmpty) return;
+  
+  setState(() => _isLoadingSafeSpotBarangays = true);
+  
+  int processedCount = 0;
+  
+  for (var safeSpot in _safeSpotsData) {
+    if (safeSpot['location'] != null) {
+      try {
+        String cacheKey = _getLocationCoordinates(safeSpot['location']);
+        
+        if (_safeSpotBarangayCache.containsKey(cacheKey)) {
+          safeSpot['cached_barangay'] = _safeSpotBarangayCache[cacheKey];
+        } else {
+          String address = await _getAddressFromCoordinates(safeSpot['location']);
+          String barangay = SearchAndFilterService.extractBarangayFromAddress(address);
+          
+          _safeSpotBarangayCache[cacheKey] = barangay;
+          safeSpot['cached_barangay'] = barangay;
+        }
+        
+        processedCount++;
+        
+        // Update UI every 5 safe spots to show progress
+        if (processedCount % 5 == 0) {
+          setState(() {
+            // Update available barangays progressively
+            _availableSafeSpotBarangays = SearchAndFilterService.getUniqueBarangays(_safeSpotsData);
+          });
+        }
+        
+      } catch (e) {
+        print('Error caching barangay for safe spot ${safeSpot['id']}: $e');
+        safeSpot['cached_barangay'] = '';
+      }
+    } else {
+      safeSpot['cached_barangay'] = '';
+    }
+  }
+  
+  setState(() {
+    _isLoadingSafeSpotBarangays = false;
+    _availableSafeSpotBarangays = SearchAndFilterService.getUniqueBarangays(_safeSpotsData);
+  });
+  
+  // Refresh filters after all barangays are cached
+  _filterSafeSpots();
+}
+
+// UPDATE YOUR _loadSafeSpotsData METHOD
 Future<void> _loadSafeSpotsData() async {
   try {
     final response = await Supabase.instance.client
@@ -541,25 +625,33 @@ Future<void> _loadSafeSpotsData() async {
           users!safe_spots_created_by_fkey(first_name, last_name, email)
         ''')
         .order('created_at', ascending: false);
-
+    
     setState(() {
       _safeSpotsData = List<Map<String, dynamic>>.from(response);
       
-      // Update available filter options
-      _availableSafeSpotStatuses = ['All Status', ...{..._safeSpotsData.map((s) => s['status']?.toString() ?? 'pending')}];
-      _availableSafeSpotTypes = ['All Types', ...{..._safeSpotsData.map((s) => s['safe_spot_types']?['name']?.toString() ?? 'Unknown')}];
+      _availableSafeSpotStatuses = ['All Status', 'Pending', 'Approved', 'Rejected'];
+      
+      Set<String> types = _safeSpotsData
+          .map((s) => s['safe_spot_types']?['name']?.toString() ?? 'Unknown')
+          .toSet();
+      _availableSafeSpotTypes = ['All Types', ...types];
+      
       _availableSafeSpotVerified = ['All Verification', 'Verified', 'Unverified'];
       
-      // Initialize filtered data
       _filteredSafeSpotsData = List.from(_safeSpotsData);
     });
     
     _filterSafeSpots();
     _loadSafeSpotStats();
+    
+    // DON'T AWAIT - Let it run in background
+    _cacheSafeSpotBarangayData();
+    
   } catch (e) {
     print('Error loading safe spots data: $e');
   }
 }
+
 
 // ADD METHOD TO LOAD SAFESPOT STATS
 Future<void> _loadSafeSpotStats() async {
@@ -626,96 +718,106 @@ String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const 
     });
   }
 
-  void _filterReports() {
-    setState(() {
-_filteredReportsData = SearchAndFilterService.filterReports(
-  reports: _reportsData,
-  searchQuery: _reportSearchController.text,
-  statusFilter: _selectedReportStatus,
-  levelFilter: _selectedReportLevel,
-  categoryFilter: _selectedReportCategory,
-  activityFilter: _selectedActivityStatus,
-  sortBy: _reportSortBy,
-  ascending: _reportSortAscending,
-  startDate: _reportsStartDate,
-  endDate: _reportsEndDate,
-);
-    });
-  }
 
-  void _updateUserFilter(String filterType, String value) {
-    setState(() {
-      switch (filterType) {
-        case 'role':
-          _selectedUserRole = value;
-          break;
-        case 'gender':
-          _selectedUserGender = value;
-          break;
-        case 'sort':
-          if (_userSortBy == value) {
-            _userSortAscending = !_userSortAscending;
-          } else {
-            _userSortBy = value;
-            _userSortAscending = true;
-          }
-          break;
-      }
-    });
-    _filterUsers();
-  }
+void _updateUserFilter(String filterType, String value) {
+  setState(() {
+    switch (filterType) {
+      case 'role':
+        _selectedUserRole = value;
+        break;
+      case 'gender':
+        _selectedUserGender = value;
+        break;
+      case 'sort':
+        if (_userSortBy == value) {
+          _userSortAscending = !_userSortAscending;
+        } else {
+          _userSortBy = value;
+          _userSortAscending = true;
+        }
+        break;
+    }
+  });
+  _filterUsers();
+}
+  
 
-  void _updateReportFilter(String filterType, String value) {
-    setState(() {
-      switch (filterType) {
-        case 'status':
-          _selectedReportStatus = value;
-          break;
-        case 'level':
-          _selectedReportLevel = value;
-          break;
-        case 'category':
-          _selectedReportCategory = value;
-          break;
-        case 'activity':
-          _selectedActivityStatus = value;
-          break;
-        case 'sort':
-          if (_reportSortBy == value) {
-            _reportSortAscending = !_reportSortAscending;
-          } else {
-            _reportSortBy = value;
-            _reportSortAscending = true;
-          }
-          break;
-      }
-    });
-    _filterReports();
-  }
 
-  void _clearUserFilters() {
-    setState(() {
-      _userSearchController.clear();
-      _selectedUserRole = 'All Roles';
-      _selectedUserGender = 'All Genders';
-      _userSortBy = 'date_joined';
-      _userSortAscending = false;
-    });
-    _filterUsers();
-  }
 
-  void _clearReportFilters() {
-    setState(() {
-      _reportSearchController.clear();
-      _selectedReportStatus = 'All Status';
-      _selectedReportLevel = 'All Levels';
-      _selectedReportCategory = 'All Categories';
-      _selectedActivityStatus = 'All Activity';
-      _reportSortBy = 'date';
-      _reportSortAscending = false;
-    });
-    _filterReports();
-  }
+
+void _filterReports() {
+  setState(() {
+    _filteredReportsData = SearchAndFilterService.filterReports(
+      reports: _reportsData,
+      searchQuery: _reportSearchController.text,
+      statusFilter: _selectedReportStatus,
+      levelFilter: _selectedReportLevel,
+      categoryFilter: _selectedReportCategory,
+      activityFilter: _selectedActivityStatus,
+      barangayFilter: _selectedBarangay,
+      sortBy: _reportSortBy,
+      ascending: _reportSortAscending,
+      startDate: _reportsStartDate,
+      endDate: _reportsEndDate,
+    );
+  });
+}
+
+void _updateReportFilter(String filterType, String value) {
+  setState(() {
+    switch (filterType) {
+      case 'status':
+        _selectedReportStatus = value;
+        break;
+      case 'level':
+        _selectedReportLevel = value;
+        break;
+      case 'category':
+        _selectedReportCategory = value;
+        break;
+      case 'activity':
+        _selectedActivityStatus = value;
+        break;
+      case 'barangay':  // ADD THIS CASE
+        _selectedBarangay = value;
+        break;
+      case 'sort':
+        if (_reportSortBy == value) {
+          _reportSortAscending = !_reportSortAscending;
+        } else {
+          _reportSortBy = value;
+          _reportSortAscending = true;
+        }
+        break;
+    }
+  });
+  _filterReports();
+}
+
+void _clearUserFilters() {
+  setState(() {
+    _userSearchController.clear();
+    _selectedUserRole = 'All Roles';
+    _selectedUserGender = 'All Genders';
+    _userSortBy = 'date_joined';
+    _userSortAscending = false;
+  });
+  _filterUsers();
+}
+
+void _clearReportFilters() {
+  setState(() {
+    _reportSearchController.clear();
+    _selectedReportStatus = 'All Status';
+    _selectedReportLevel = 'All Levels';
+    _selectedReportCategory = 'All Categories';
+    _selectedActivityStatus = 'All Activity';
+    _selectedBarangay = 'All Barangays';
+    _reportSortBy = 'date';
+    _reportSortAscending = false;
+  });
+  _filterReports();
+}
 
 Future<void> _loadUserStats() async {
     try {
@@ -840,6 +942,7 @@ String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const 
 final Map<String, String> _addressCache = {};
 
 // Simplified function to get FULL address (not shortened)
+// Enhanced version - matches your map page formatting
 Future<String> _getAddressFromCoordinates(dynamic location) async {
   if (location == null) return 'Unknown Location';
   
@@ -870,22 +973,44 @@ Future<String> _getAddressFromCoordinates(dynamic location) async {
           final address = data['address'] as Map<String, dynamic>?;
           
           if (address != null) {
-            // Build detailed address similar to your example
+            // Build detailed address matching your map page format
             final List<String> addressParts = [];
             
-            // Add road/street
-            if (address['road'] != null) {
+            // Add house number + road (like "Star Street")
+            if (address['house_number'] != null && address['road'] != null) {
+              addressParts.add('${address['house_number']} ${address['road']}');
+            } else if (address['road'] != null) {
               addressParts.add(address['road'].toString());
             }
             
-            // Add suburb/neighbourhood
+            // Add suburb/neighbourhood (like "Tumaga Por Centro")
             if (address['suburb'] != null) {
               addressParts.add(address['suburb'].toString());
             } else if (address['neighbourhood'] != null) {
               addressParts.add(address['neighbourhood'].toString());
             }
             
-            // Add city/municipality
+            // Add village/hamlet if available (additional local area detail)
+            if (address['village'] != null) {
+              addressParts.add(address['village'].toString());
+            } else if (address['hamlet'] != null) {
+              addressParts.add(address['hamlet'].toString());
+            }
+            
+            // Add barangay/city district (like "Tumaga")
+            // Check multiple possible keys for barangay
+            String? barangay;
+            if (address['city_district'] != null) {
+              barangay = address['city_district'].toString();
+            } else if (address['quarter'] != null) {
+              barangay = address['quarter'].toString();
+            }
+            
+            if (barangay != null && !addressParts.contains(barangay)) {
+              addressParts.add(barangay);
+            }
+            
+            // Add city/municipality (always "Zamboanga City")
             if (address['city'] != null) {
               addressParts.add(address['city'].toString());
             } else if (address['municipality'] != null) {
@@ -894,15 +1019,16 @@ Future<String> _getAddressFromCoordinates(dynamic location) async {
               addressParts.add(address['town'].toString());
             }
             
-            // Add state/province with postal code if available
-            final state = address['state'] ?? address['province'];
-            final postcode = address['postcode'];
-            if (state != null) {
-              if (postcode != null) {
-                addressParts.add('$state ($postcode)');
-              } else {
-                addressParts.add(state.toString());
-              }
+            // Add state/region (like "Zamboanga Peninsula")
+            if (address['state'] != null) {
+              addressParts.add(address['state'].toString());
+            } else if (address['region'] != null) {
+              addressParts.add(address['region'].toString());
+            }
+            
+            // Add postal code if available
+            if (address['postcode'] != null) {
+              addressParts.add(address['postcode'].toString());
             }
             
             // Add country
@@ -1109,8 +1235,8 @@ String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const 
 
 Future<void> _loadReportsData() async {
   try {
-String startDateStr = DateFormat('yyyy-MM-dd').format(_reportsStartDate);
-String endDateStr = DateFormat('yyyy-MM-dd').format(_reportsEndDate.add(const Duration(days: 1)));
+    String startDateStr = DateFormat('yyyy-MM-dd').format(_reportsStartDate);
+    String endDateStr = DateFormat('yyyy-MM-dd').format(_reportsEndDate.add(const Duration(days: 1)));
     
     final response = await Supabase.instance.client
         .from('hotspot')
@@ -1124,24 +1250,82 @@ String endDateStr = DateFormat('yyyy-MM-dd').format(_reportsEndDate.add(const Du
         .lt('time', endDateStr)
         .order('time', ascending: false);
       
-      setState(() {
-        _reportsData = List<Map<String, dynamic>>.from(response);
-        
-        // Update available filter options
-        _availableStatuses = SearchAndFilterService.getUniqueStatuses(_reportsData);
-        _availableLevels = SearchAndFilterService.getUniqueLevels(_reportsData);
-        _availableCategories = SearchAndFilterService.getUniqueCategories(_reportsData);
-        _availableActivityStatuses = SearchAndFilterService.getUniqueActivityStatuses(_reportsData);
-        
-        // Initialize filtered data
-        _filteredReportsData = List.from(_reportsData);
-      });
+    setState(() {
+      _reportsData = List<Map<String, dynamic>>.from(response);
       
-      _filterReports();
-    } catch (e) {
-      print('Error loading reports data: $e');
+      // ALWAYS include all possible statuses
+      _availableStatuses = ['All Status', 'Pending', 'Approved', 'Rejected'];
+      
+      // Get levels and categories from data (these can be dynamic)
+      _availableLevels = SearchAndFilterService.getUniqueLevels(_reportsData);
+      _availableCategories = SearchAndFilterService.getUniqueCategories(_reportsData);
+      
+      // ALWAYS include all possible activity statuses
+      _availableActivityStatuses = ['All Activity', 'Active', 'Inactive'];
+      
+      // Initialize filtered data
+      _filteredReportsData = List.from(_reportsData);
+    });
+    
+    // Cache barangay data after loading reports
+    await _cacheBarangayData();
+    
+    _filterReports();
+  } catch (e) {
+    print('Error loading reports data: $e');
+  }
+}
+
+Future<void> _cacheBarangayData() async {
+  setState(() => _isLoadingBarangays = true);
+  
+  int processedCount = 0;
+  
+  for (var report in _reportsData) {
+    if (report['location'] != null) {
+      try {
+        // Create a unique cache key based on coordinates
+        String cacheKey = _getLocationCoordinates(report['location']);
+        
+        // Check if we already have this barangay cached
+        if (_barangayCache.containsKey(cacheKey)) {
+          report['cached_barangay'] = _barangayCache[cacheKey];
+        } else {
+          // Get the full address using your existing method
+          String address = await _getAddressFromCoordinates(report['location']);
+          
+          // Extract barangay from the address
+          String barangay = SearchAndFilterService.extractBarangayFromAddress(address);
+          
+          // Cache it
+          _barangayCache[cacheKey] = barangay;
+          report['cached_barangay'] = barangay;
+        }
+        
+        processedCount++;
+        
+        // Update UI every 10 reports to show progress
+        if (processedCount % 10 == 0) {
+          setState(() {});
+        }
+        
+      } catch (e) {
+        print('Error caching barangay for report ${report['id']}: $e');
+        report['cached_barangay'] = '';
+      }
+    } else {
+      report['cached_barangay'] = '';
     }
   }
+  
+  setState(() {
+    _isLoadingBarangays = false;
+    // Update available barangays based on cached data
+    _availableBarangays = SearchAndFilterService.getUniqueBarangays(_reportsData);
+  });
+}
+
+
 Future<void> _selectDateRange() async {
   DateTime firstDate = DateTime(2020, 1, 1);
   DateTime lastDate = DateTime.now();
@@ -1412,84 +1596,83 @@ Widget _buildSidebar() {
                 child: Column(
                   children: [
                   // Logo section with new gradient
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color.fromARGB(255, 92, 118, 165), Color.fromARGB(255, 61, 91, 131)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-           
-                    ),
-                    child: GestureDetector(
-                      onTap: () {
-                        _navigateToPage('dashboard');
-                      },
-                      child: Column(
-                        children: [
-                          // Logo container with improved styling
-                          Container(
-                            width: 70,
-                            height: 70,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.08),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 4),
-                                  spreadRadius: 0,
-                                ),
-                              ],
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(20),
-                              child: Image.asset(
-                                'assets/images/zecure.png',
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return const Icon(
-                                    Icons.security_rounded,
-                                    color: Color(0xFF4F8EF7),
-                                    size: 35,
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'ZECURE',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Text(
-                              'Admin Panel',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+Container(
+  width: double.infinity,
+  padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
+  decoration: BoxDecoration(
+    image: DecorationImage(
+      image: AssetImage('assets/images/DARK.jpg'),
+      fit: BoxFit.cover,
+    ),
+  ),
+  child: GestureDetector(
+    onTap: () {
+      _navigateToPage('dashboard');
+    },
+    child: Column(
+      children: [
+        // Logo container with improved styling
+        Container(
+          width: 70,
+          height: 70,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+                spreadRadius: 0,
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Image.asset(
+              'assets/images/zecure.png',
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return const Icon(
+                  Icons.security_rounded,
+                  color: Color(0xFF4F8EF7),
+                  size: 35,
+                );
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'ZECURE',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Text(
+            'Admin Panel',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ],
+    ),
+  ),
+),
+
                   
                   // Navigation items - Scrollable middle section
                   Expanded(
@@ -1738,24 +1921,136 @@ Widget _buildNavItem({
   );
 }
 
-void _navigateToPage(String page) {
+void _navigateToPage(String page, {Map<String, String>? filterPresets}) {
   setState(() {
     _currentPage = page;
     _isSidebarOpen = false;
     _addressCache.clear();
   });
+  
   _sidebarController.reverse();
   
-  // Load data based on page
+  // Load data based on page, then apply or reset filters
   if (page == 'users') {
-    _loadUsersData();
+    // Reset filters if no presets provided
+    if (filterPresets == null) {
+      _resetUserFilters();
+    }
+    
+    _loadUsersData().then((_) {
+      if (filterPresets != null) {
+        setState(() {
+          if (filterPresets.containsKey('role')) {
+            _selectedUserRole = filterPresets['role']!;
+          }
+          if (filterPresets.containsKey('gender')) {
+            _selectedUserGender = filterPresets['gender']!;
+          }
+        });
+        _filterUsers();
+      }
+    });
   } else if (page == 'reports') {
-    _loadReportsData();
-  } else if (page == 'safespots') { // ADD THIS
-    _loadSafeSpotsData();
-    } else if (page == 'officers') {
-  _loadOfficersData();
+    // Reset filters if no presets provided
+    if (filterPresets == null) {
+      _resetReportFilters();
+    }
+    
+    _loadReportsData().then((_) {
+      if (filterPresets != null) {
+        setState(() {
+          if (filterPresets.containsKey('status')) {
+            _selectedReportStatus = filterPresets['status']!;
+          }
+          if (filterPresets.containsKey('level')) {
+            _selectedReportLevel = filterPresets['level']!;
+          }
+          if (filterPresets.containsKey('category')) {
+            _selectedReportCategory = filterPresets['category']!;
+          }
+          if (filterPresets.containsKey('activity')) {
+            _selectedActivityStatus = filterPresets['activity']!;
+          }
+        });
+        _filterReports();
+      }
+    });
+  } else if (page == 'safespots') {
+    // Reset filters if no presets provided
+    if (filterPresets == null) {
+      _resetSafeSpotFilters();
+    }
+    
+    _loadSafeSpotsData().then((_) {
+      if (filterPresets != null) {
+        setState(() {
+          if (filterPresets.containsKey('status')) {
+            _selectedSafeSpotStatus = filterPresets['status']!;
+          }
+          if (filterPresets.containsKey('type')) {
+            _selectedSafeSpotType = filterPresets['type']!;
+          }
+          if (filterPresets.containsKey('verified')) {
+            _selectedSafeSpotVerified = filterPresets['verified']!;
+          }
+        });
+        _filterSafeSpots();
+      }
+    });
+  } else if (page == 'officers') {
+    // Reset filters if no presets provided
+    if (filterPresets == null) {
+      _resetOfficerFilters();
+    }
+    
+    _loadOfficersData();
   }
+}
+
+// ADD THESE RESET METHODS (if you don't have them already)
+
+void _resetUserFilters() {
+  setState(() {
+    _userSearchController.clear();
+    _selectedUserRole = 'All Roles';
+    _selectedUserGender = 'All Genders';
+    _userSortBy = 'date_joined';
+    _userSortAscending = false;
+  });
+}
+
+void _resetReportFilters() {
+  setState(() {
+    _reportSearchController.clear();
+    _selectedReportStatus = 'All Status';
+    _selectedReportLevel = 'All Levels';
+    _selectedReportCategory = 'All Categories';
+    _selectedActivityStatus = 'All Activity';
+    _reportSortBy = 'date';
+    _reportSortAscending = false;
+  });
+}
+
+void _resetSafeSpotFilters() {
+  setState(() {
+    _safeSpotSearchController.clear();
+    _selectedSafeSpotStatus = 'All Status';
+    _selectedSafeSpotType = 'All Types';
+    _selectedSafeSpotVerified = 'All Verification';
+    _safeSpotSortBy = 'created_at';
+    _safeSpotSortAscending = false;
+  });
+}
+
+void _resetOfficerFilters() {
+  setState(() {
+    _officerSearchController.clear();
+    _selectedOfficerGender = 'All Genders';
+    _selectedOfficerRank = 'All Ranks';
+    _selectedOfficerStation = 'All Stations';
+    _officerSortBy = 'date_joined';
+    _officerSortAscending = false;
+  });
 }
 
 Widget _buildCurrentPage() {
@@ -3081,7 +3376,9 @@ Widget _buildReportsPage() {
                     _selectedReportStatus != 'All Status' || 
                     _selectedReportLevel != 'All Levels' ||
                     _selectedReportCategory != 'All Categories' ||
-                    _selectedActivityStatus != 'All Activity')
+                    _selectedActivityStatus != 'All Activity' ||
+                    _selectedBarangay != 'All Barangays')
+                    
                   Container(
                     margin: const EdgeInsets.only(left: 8),
                     height: 44,
@@ -3832,13 +4129,69 @@ Widget _buildReportsPageDesktop() {
                 ),
               ),
             ),
+
+
+// Barangay Filter Dropdown (in your _buildReportsPageDesktop)
+const SizedBox(width: 16),
+
+Expanded(
+  flex: 1,
+  child: Container(
+    height: 40,
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: Color(0xE0E0E0)),
+    ),
+    child: _isLoadingBarangays
+        ? Row(
+            children: const [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Loading barangays...',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+            ],
+          )
+        : DropdownButton<String>(
+            value: _selectedBarangay,
+            underline: const SizedBox(),
+            icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+            isExpanded: true,
+            items: _availableBarangays.map((barangay) {
+              return DropdownMenuItem(
+                value: barangay,
+                child: Text(
+                  barangay,
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              );
+            }).toList(),
+            onChanged: _isLoadingBarangays
+                ? null
+                : (value) {
+                    if (value != null) {
+                      _updateReportFilter('barangay', value);
+                    }
+                  },
+          ),
+  ),
+),
             
             // Clear Filters Button
             if (_reportSearchController.text.isNotEmpty || 
                 _selectedReportStatus != 'All Status' || 
                 _selectedReportLevel != 'All Levels' ||
                 _selectedReportCategory != 'All Categories' ||
-                _selectedActivityStatus != 'All Activity')
+                _selectedActivityStatus != 'All Activity' ||
+                _selectedBarangay != 'All Barangays')
               Container(
                 margin: const EdgeInsets.only(left: 16),
                 height: 40,
@@ -4276,6 +4629,7 @@ Widget _buildSafeSpotsPage() {
                     _selectedSafeSpotStatus != 'All Status' || 
                     _selectedSafeSpotType != 'All Types' ||
                     _selectedSafeSpotVerified != 'All Verification')
+                    
                   Container(
                     margin: const EdgeInsets.only(left: 8),
                     height: 44,
@@ -4946,45 +5300,100 @@ Widget _buildSafeSpotsPageDesktop() {
             ),
             const SizedBox(width: 16),
             
-            // Verification Filter Dropdown
-            Expanded(
-              flex: 1,
-              child: Container(
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Color(0xE0E0E0)),
+// Verification Filter Dropdown
+Expanded(
+  flex: 1,
+  child: Container(
+    height: 40,
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: Color(0xE0E0E0)),
+    ),
+    child: DropdownButton<String>(
+      value: _selectedSafeSpotVerified,
+      underline: const SizedBox(),
+      icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+      isExpanded: true,
+      items: _availableSafeSpotVerified.map((verified) {
+        return DropdownMenuItem(
+          value: verified,
+          child: Text(
+            verified,
+            style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+          ),
+        );
+      }).toList(),
+      onChanged: (value) {
+        if (value != null) {
+          _updateSafeSpotFilter('verified', value);
+        }
+      },
+    ),
+  ),
+),
+
+const SizedBox(width: 16),
+
+// Barangay Filter Dropdown - ADD THIS
+Expanded(
+  flex: 1,
+  child: Container(
+    height: 40,
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: Color(0xE0E0E0)),
+    ),
+    child: _isLoadingSafeSpotBarangays
+        ? Row(
+            children: const [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Loading barangays...',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+            ],
+          )
+        : DropdownButton<String>(
+            value: _selectedSafeSpotBarangay,
+            underline: const SizedBox(),
+            icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
+            isExpanded: true,
+            items: _availableSafeSpotBarangays.map((barangay) {
+              return DropdownMenuItem(
+                value: barangay,
+                child: Text(
+                  barangay,
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                child: DropdownButton<String>(
-                  value: _selectedSafeSpotVerified,
-                  underline: const SizedBox(),
-                  icon: const Icon(Icons.keyboard_arrow_down, size: 20, color: Color(0xFF6B7280)),
-                  isExpanded: true,
-                  items: _availableSafeSpotVerified.map((verified) {
-                    return DropdownMenuItem(
-                      value: verified,
-                      child: Text(
-                        verified,
-                        style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
-                      ),
-                    );
-                  }).toList(),
-                  onChanged: (value) {
+              );
+            }).toList(),
+            onChanged: _isLoadingSafeSpotBarangays
+                ? null
+                : (value) {
                     if (value != null) {
-                      _updateSafeSpotFilter('verified', value);
+                      _updateSafeSpotFilter('barangay', value);
                     }
                   },
-                ),
-              ),
-            ),
+          ),
+  ),
+),
             
             // Clear Filters Button
             if (_safeSpotSearchController.text.isNotEmpty || 
                 _selectedSafeSpotStatus != 'All Status' || 
                 _selectedSafeSpotType != 'All Types' ||
-                _selectedSafeSpotVerified != 'All Verification')
+                _selectedSafeSpotVerified != 'All Verification' ||
+                _selectedSafeSpotBarangay != 'All Barangays') 
               Container(
                 margin: const EdgeInsets.only(left: 16),
                 height: 40,
@@ -7710,7 +8119,7 @@ Widget _buildDateRangeCard() {
   );
 }
 
-// CARDS CARDS CARDS - Unchanged from previous update
+// OVERVIEW CARDS
 Widget _buildOverviewCards() {
   return LayoutBuilder(
     builder: (context, constraints) {
@@ -7725,7 +8134,7 @@ Widget _buildOverviewCards() {
   );
 }
 
-// Desktop layout (unchanged: all five cards in a single row)
+// DESKTOP LAYOUT
 Widget _buildDesktopLayout() {
   return Row(
     children: [
@@ -7736,6 +8145,7 @@ Widget _buildDesktopLayout() {
           icon: Icons.report_outlined,
           gradient: const [Color(0xFFEC4899), Color(0xFFBE185D)],
           delay: 0,
+          onTap: () => _navigateToPage('reports'),
         ),
       ),
       const SizedBox(width: 16),
@@ -7746,6 +8156,7 @@ Widget _buildDesktopLayout() {
           icon: Icons.pending_outlined,
           gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
           delay: 100,
+          onTap: () => _navigateToPage('reports', filterPresets: {'status': 'Pending'}),
         ),
       ),
       const SizedBox(width: 16),
@@ -7756,6 +8167,7 @@ Widget _buildDesktopLayout() {
           icon: Icons.place_outlined,
           gradient: const [Color(0xFF10B981), Color(0xFF059669)],
           delay: 200,
+          onTap: () => _navigateToPage('safespots'),
         ),
       ),
       const SizedBox(width: 16),
@@ -7766,6 +8178,7 @@ Widget _buildDesktopLayout() {
           icon: Icons.pending_outlined,
           gradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
           delay: 300,
+          onTap: () => _navigateToPage('safespots', filterPresets: {'status': 'Pending'}),
         ),
       ),
       const SizedBox(width: 16),
@@ -7776,6 +8189,7 @@ Widget _buildDesktopLayout() {
           icon: Icons.people_alt_outlined,
           gradient: const [Color(0xFF06B6D4), Color(0xFF0891B2)],
           delay: 400,
+          onTap: () => _navigateToPage('users'),
         ),
       ),
       const SizedBox(width: 16),
@@ -7786,17 +8200,18 @@ Widget _buildDesktopLayout() {
           icon: Icons.security_outlined,
           gradient: const [Color(0xFF8B5CF6), Color(0xFF6D28D9)],
           delay: 500,
+          onTap: () => _navigateToPage('officers'),
         ),
       ),
     ],
   );
 }
 
-// Mobile layout (unchanged: two cards per row, Registered Users full-width)
+// UPDATE YOUR MOBILE LAYOUT STATS CARDS
+
 Widget _buildMobileLayout() {
   return Column(
     children: [
-      // First Row: Total Reports | Pending Reports
       Row(
         children: [
           Expanded(
@@ -7806,6 +8221,7 @@ Widget _buildMobileLayout() {
               icon: Icons.report_outlined,
               gradient: const [Color(0xFFEC4899), Color(0xFFBE185D)],
               delay: 0,
+              onTap: () => _navigateToPage('reports'),
             ),
           ),
           const SizedBox(width: 16),
@@ -7816,12 +8232,12 @@ Widget _buildMobileLayout() {
               icon: Icons.pending_outlined,
               gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
               delay: 100,
+              onTap: () => _navigateToPage('reports', filterPresets: {'status': 'Pending'}),
             ),
           ),
         ],
       ),
       const SizedBox(height: 16),
-      // Second Row: Total SafeSpots | Pending SafeSpot
       Row(
         children: [
           Expanded(
@@ -7831,6 +8247,7 @@ Widget _buildMobileLayout() {
               icon: Icons.place_outlined,
               gradient: const [Color(0xFF10B981), Color(0xFF059669)],
               delay: 200,
+              onTap: () => _navigateToPage('safespots'),
             ),
           ),
           const SizedBox(width: 16),
@@ -7841,12 +8258,12 @@ Widget _buildMobileLayout() {
               icon: Icons.pending_outlined,
               gradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
               delay: 300,
+              onTap: () => _navigateToPage('safespots', filterPresets: {'status': 'Pending'}),
             ),
           ),
         ],
       ),
       const SizedBox(height: 16),
-      // Third Row: Registered Users | Officers
       Row(
         children: [
           Expanded(
@@ -7856,6 +8273,7 @@ Widget _buildMobileLayout() {
               icon: Icons.people_alt_outlined,
               gradient: const [Color(0xFF06B6D4), Color(0xFF0891B2)],
               delay: 400,
+              onTap: () => _navigateToPage('users'),
             ),
           ),
           const SizedBox(width: 16),
@@ -7866,6 +8284,7 @@ Widget _buildMobileLayout() {
               icon: Icons.security_outlined,
               gradient: const [Color(0xFF8B5CF6), Color(0xFF6D28D9)],
               delay: 500,
+              onTap: () => _navigateToPage('officers'),
             ),
           ),
         ],
@@ -7874,74 +8293,90 @@ Widget _buildMobileLayout() {
   );
 }
 
-// Stats card (unchanged)
+// STATS CARD — now clickable + hover animation
 Widget _buildStatsCard({
   required String title,
   required String value,
   required IconData icon,
   required List<Color> gradient,
   required int delay,
+  VoidCallback? onTap,
 }) {
   return AnimatedBuilder(
     animation: _chartAnimation,
     builder: (context, child) {
       return Transform.scale(
         scale: 0.8 + (_chartAnimation.value * 0.2),
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: gradient,
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: gradient[0].withOpacity(0.3),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              Icon(
-                icon,
-                size: 32,
-                color: Colors.white,
-              ),
-              const SizedBox(height: 12),
-              AnimatedBuilder(
-                animation: _chartAnimation,
-                builder: (context, child) {
-                  final animatedValue = (int.parse(value) * _chartAnimation.value).toInt();
-                  return Text(
-                    '$animatedValue',
-                    style: const TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hoveredCard = title),
+          onExit: (_) => setState(() => _hoveredCard = null),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            transform: _hoveredCard == title
+                ? (Matrix4.identity()..translate(0, -4)) // subtle lift
+                : Matrix4.identity(),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(16),
+                splashColor: Colors.white24,
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: gradient,
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                  );
-                },
-              ),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w500,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: gradient[0].withOpacity(0.3),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(icon, size: 32, color: Colors.white),
+                      const SizedBox(height: 12),
+                      AnimatedBuilder(
+                        animation: _chartAnimation,
+                        builder: (context, child) {
+                          final animatedValue = (int.parse(value) * _chartAnimation.value).toInt();
+                          return Text(
+                            '$animatedValue',
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          );
+                        },
+                      ),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white70,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
-                textAlign: TextAlign.center,
               ),
-            ],
+            ),
           ),
         ),
       );
     },
   );
 }
+
 
 
 
