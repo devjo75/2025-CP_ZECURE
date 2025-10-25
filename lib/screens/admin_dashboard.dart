@@ -6,11 +6,14 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:zecure/pdf/pdt_export_modal.dart';
 import '../services/search_filter_service.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(MyApp());
 }
+
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -941,7 +944,7 @@ String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const 
 
 final Map<String, String> _addressCache = {};
 
-// Simplified function to get FULL address (not shortened)
+
 // Enhanced version - matches your map page formatting
 Future<String> _getAddressFromCoordinates(dynamic location) async {
   if (location == null) return 'Unknown Location';
@@ -6828,13 +6831,12 @@ Widget _buildOfficersPageDesktop() {
   );
 }
 
-
-
 Widget _buildModernAppBar() {
   return Container(
     padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
     child: Row(
       children: [
+        // Sidebar Menu Button
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -6867,7 +6869,10 @@ Widget _buildModernAppBar() {
             ),
           ),
         ),
+
         const SizedBox(width: 15),
+
+        // Page Title and Subtitle
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -6890,7 +6895,7 @@ Widget _buildModernAppBar() {
             ],
           ),
         ),
-        
+
         // Dashboard Refresh Button
         if (_currentPage == 'dashboard')
           Container(
@@ -6916,15 +6921,42 @@ Widget _buildModernAppBar() {
               tooltip: 'Refresh Data',
             ),
           ),
-        
-        // Reports Page Calendar Button
-        if (_currentPage == 'reports')
+
+        // Reports Page Buttons (Desktop)
+        if (_currentPage == 'reports' && MediaQuery.of(context).size.width > 768) ...[
+          // Download PDF Button
+          Container(
+            margin: const EdgeInsets.only(right: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10B981),
+              borderRadius: BorderRadius.circular(15),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF10B981).withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.download, color: Colors.white),
+              tooltip: 'Export to PDF',
+              onPressed: () {
+                PdfExportModal.show(
+                  context: context,
+                  reports: _filteredReportsData,
+                  startDate: _reportsStartDate,
+                  endDate: _reportsEndDate,
+                );
+              },
+            ),
+          ),
+
+          // Calendar Button
           GestureDetector(
             onTap: _selectReportsDateRange,
             child: Container(
-              padding: MediaQuery.of(context).size.width > 768
-                  ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10)
-                  : const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
                 color: const Color(0xFF6366F1),
                 borderRadius: BorderRadius.circular(15),
@@ -6936,37 +6968,50 @@ Widget _buildModernAppBar() {
                   ),
                 ],
               ),
-              child: MediaQuery.of(context).size.width > 768
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.calendar_today,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${DateFormat('MMM d').format(_reportsStartDate)} - ${DateFormat('MMM d').format(_reportsEndDate)}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    )
-                  : const Icon(
-                      Icons.calendar_today,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.calendar_today, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${DateFormat('MMM d').format(_reportsStartDate)} - ${DateFormat('MMM d').format(_reportsEndDate)}',
+                    style: const TextStyle(
                       color: Colors.white,
-                      size: 20,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+
+        // Reports Page (Mobile)
+        if (_currentPage == 'reports' && MediaQuery.of(context).size.width <= 768)
+          GestureDetector(
+            onTap: _selectReportsDateRange,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6366F1),
+                borderRadius: BorderRadius.circular(15),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF6366F1).withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.calendar_today, color: Colors.white, size: 20),
             ),
           ),
       ],
     ),
   );
 }
+
 
 
 
@@ -10724,9 +10769,14 @@ Color _getCrimeLevelColor(String? level) {
   _getMaxWidth() {}
   
 DateTime _convertToPhilippinesTime(String utcTimeString) {
-  final utcTime = DateTime.parse(utcTimeString);
-  // Philippines is UTC+8
-  return utcTime.add(const Duration(hours: 8));
+  // The original code was incorrectly adding an 8-hour offset 
+  // (the UTC+8 offset for the Philippines) to a time string 
+  // that was already storing the correct local Philippines time (e.g., 1:00 AM).
+  // This resulted in the 8-hour jump (1:00 AM -> 9:00 AM).
+  
+  // By simply parsing the string, we allow Dart to interpret the database timestamp 
+  // directly as the correct local time of incident, matching the PDF output.
+  return DateTime.parse(utcTimeString);
 }
 }
 

@@ -17,6 +17,7 @@ dependencies:
   location: ^7.0.0     # Updated version
   google_maps_flutter: ^2.12.3
   
+  
   # Networking and APIs
   http: ^1.2.0
   dio: ^5.7.0          # Better HTTP client with interceptors
@@ -70,6 +71,9 @@ dependencies:
   
   # Caching for better performance
   cached_network_image: ^3.4.1  # Cache map tiles and images
+  carousel_slider: ^5.1.1
+  pdf: ^3.11.3
+  printing: ^5.14.2
 
 dev_dependencies:
   flutter_test:
@@ -77,12 +81,17 @@ dev_dependencies:
   flutter_lints: ^5.0.0  # Updated lints
   flutter_native_splash: ^2.4.1  # Added for splash screen generation
 
+# For better social auth UI (optional)
+flutter_signin_button: ^2.0.0
+
 flutter:
   uses-material-design: true
   assets:
     - assets/images/zecure.png
     - assets/images/LIGHT.jpg
     - assets/images/DARK.jpg
+    - assets/images/slide1.png
+    - assets/images/slide2.png
     - .env
 
 

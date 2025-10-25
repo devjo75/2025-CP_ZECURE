@@ -926,8 +926,6 @@ void _removeDuplicateSafeSpots() {
     print('Safe spots count: $originalCount -> $newCount');
   }
 }
-
-
 // Updated _loadSafeSpots method
 Future<void> _loadSafeSpots() async {
   try {
@@ -4281,26 +4279,67 @@ double _calculateDistance(LatLng point1, LatLng point2) {
 
 List<LatLng> _findUnsafeSegments(List<LatLng> route) {
   final unsafeSegments = <LatLng>[];
-  const safeDistance = 150.0; // Increased from 100m to 150m for better avoidance
+  const safeDistance = 150.0; // Distance for active hotspots
   
-  // Filter hotspots to only include active + approved ones
+  // Filter hotspots to only include active + approved ones (PRIORITY 1)
   final activeApprovedHotspots = _hotspots.where((hotspot) {
     final status = hotspot['status'] ?? 'approved';
     final activeStatus = hotspot['active_status'] ?? 'active';
     return status == 'approved' && activeStatus == 'active';
   }).toList();
   
+  // Check each route point
   for (final point in route) {
+    bool isUnsafe = false;
+    
+    // PRIORITY 1: Check active hotspots
     for (final hotspot in activeApprovedHotspots) {
       final coords = hotspot['location']['coordinates'];
       final hotspotLatLng = LatLng(coords[1], coords[0]);
       if (_calculateDistance(point, hotspotLatLng) < safeDistance) {
-        unsafeSegments.add(point);
+        isUnsafe = true;
         break;
       }
     }
+    
+    // PRIORITY 2: Check heatmap clusters (only if not already marked unsafe)
+    if (!isUnsafe && _showHeatmap && _heatmapClusters.isNotEmpty) {
+      for (final cluster in _heatmapClusters) {
+        final distanceToCluster = _calculateDistance(point, cluster.center);
+        
+        // Use cluster radius + safety buffer based on severity
+        final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
+        final totalSafeDistance = cluster.radius + safetyBuffer;
+        
+        if (distanceToCluster < totalSafeDistance) {
+          isUnsafe = true;
+          break;
+        }
+      }
+    }
+    
+    if (isUnsafe) {
+      unsafeSegments.add(point);
+    }
   }
+  
   return unsafeSegments;
+}
+
+// NEW: Get safety buffer based on cluster severity
+double _getClusterSafetyBuffer(String severity) {
+  switch (severity) {
+    case 'critical':
+      return 300.0; // 300m extra buffer for critical zones
+    case 'high':
+      return 200.0; // 200m extra buffer for high zones
+    case 'medium':
+      return 150.0; // 150m extra buffer for medium zones
+    case 'low':
+      return 100.0; // 100m extra buffer for low zones
+    default:
+      return 100.0;
+  }
 }
 
 
@@ -4572,7 +4611,7 @@ Future<void> _getSafeRoute(LatLng destination) async {
   await _attemptSafeRouting(destination, showProgressMessage: true);
 }
 
-// Core safe routing logic with retry handling
+// FIXED: Core safe routing logic with proper route handling
 Future<void> _attemptSafeRouting(LatLng destination, {bool showProgressMessage = false}) async {
   if (showProgressMessage) {
     _showSnackBar('Calculating safest route...');
@@ -4600,22 +4639,35 @@ Future<void> _attemptSafeRouting(LatLng destination, {bool showProgressMessage =
       await _applySuccessfulRoute(safeRoute, destination, 'Safer route found!');
     } else {
       // Could not find significantly safer route
-      await _handleFailedSafeRouting(destination, unsafeSegments.length, newUnsafeSegments.length);
+      // FIXED: Pass the attempted safe route for analysis
+      await _handleFailedSafeRouting(
+        destination, 
+        unsafeSegments.length, 
+        newUnsafeSegments.length,
+        attemptedRoute: safeRoute, // NEW: Pass the route
+      );
     }
     
   } catch (e) {
     print('Safe route error: $e');
-    await _handleFailedSafeRouting(destination, -1, -1, error: e.toString());
+    // FIXED: Pass the regular route (fallback) for analysis
+    await _handleFailedSafeRouting(
+      destination, 
+      -1, 
+      -1, 
+      error: e.toString(),
+      attemptedRoute: _lastRegularRoute, // NEW: Pass the route
+    );
   }
 }
 
-// Handle successful route application
+// FIXED: Handle successful route application without premature display
 Future<void> _applySuccessfulRoute(List<LatLng> route, LatLng destination, String message) async {
   final distance = _calculateRouteDistance(route);
   final duration = _estimateRouteDuration(distance);
   
   setState(() {
-    _routePoints = route;
+    _routePoints = route; // NOW it's safe to display the route
     _distance = distance / 1000;
     _duration = _formatDuration(duration);
     _hasActiveRoute = true;
@@ -4626,14 +4678,23 @@ Future<void> _applySuccessfulRoute(List<LatLng> route, LatLng destination, Strin
   _startRouteUpdates();
 }
 
-// Handle failed safe routing with modal confirmation
-Future<void> _handleFailedSafeRouting(LatLng destination, int originalUnsafe, int newUnsafe, {String? error}) async {
+// FIXED: Handle failed safe routing with modal confirmation
+Future<void> _handleFailedSafeRouting(
+  LatLng destination, 
+  int originalUnsafe, 
+  int newUnsafe, 
+  {String? error,
+  List<LatLng>? attemptedRoute} // NEW: Pass the route that was attempted
+) async {
   if (_isShowingRouteModal) return; // Prevent multiple modals
   
   // Record this failed attempt
   _recordFailedRoutingAttempt(destination, originalUnsafe, newUnsafe, error);
   
-  // Show confirmation modal
+  // CRITICAL FIX: Don't set route in state until user confirms
+  // Store the attempted route temporarily but don't display it yet
+  
+  // Show confirmation modal with the attempted route for analysis
   _isShowingRouteModal = true;
   
   final shouldProceed = await _showRouteConfirmationModal(
@@ -4641,6 +4702,7 @@ Future<void> _handleFailedSafeRouting(LatLng destination, int originalUnsafe, in
     originalUnsafeCount: originalUnsafe,
     newUnsafeCount: newUnsafe,
     error: error,
+    currentRoute: attemptedRoute ?? _lastRegularRoute, // FIXED: Pass the route
   );
   
   _isShowingRouteModal = false;
@@ -4659,14 +4721,14 @@ Future<void> _handleFailedSafeRouting(LatLng destination, int originalUnsafe, in
       }
     }
   } else if (shouldProceed == false) {
-    // User chose to retry or cancel
+    // User chose to cancel
     setState(() {
       _hasActiveRoute = false;
-      _routePoints = [];
+      _routePoints = []; // FIXED: Clear any route points
       _destination = null;
     });
   }
-  // If shouldProceed is null, user dismissed modal - keep current state
+  // If shouldProceed is null, user chose "Try Harder" - modal already closed
 }
 
 // Record failed routing attempt for analysis
@@ -4689,20 +4751,30 @@ void _recordFailedRoutingAttempt(LatLng destination, int originalUnsafe, int new
   
   print('Recorded failed routing attempt: $attempt');
 }
-// Show route confirmation modal
+// FIXED: Show route confirmation modal with proper route calculation
 Future<bool?> _showRouteConfirmationModal({
   required LatLng destination,
   required int originalUnsafeCount,
   required int newUnsafeCount,
   String? error,
+  List<LatLng>? currentRoute, // NEW: Pass the actual route being evaluated
 }) async {
   return showDialog<bool>(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) {
       final double screenWidth = MediaQuery.of(context).size.width;
+      final bool isMobile = screenWidth < 600;
+      
+      // FIXED: Calculate zones from the passed route, not _routePoints
+      final heatmapZonesCount = _showHeatmap && currentRoute != null
+          ? _countHeatmapZonesInRoute(currentRoute) 
+          : 0;
+      
       return AlertDialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        insetPadding: isMobile 
+            ? const EdgeInsets.symmetric(horizontal: 20, vertical: 24)
+            : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
         contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
         title: const Row(
           children: [
@@ -4716,11 +4788,8 @@ Future<bool?> _showRouteConfirmationModal({
             ),
           ],
         ),
-        content: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: screenWidth * 0.9, // take up ~90% of screen
-            minWidth: screenWidth * 0.75, // ensure it’s wider than default
-          ),
+        content: SizedBox(
+          width: isMobile ? null : 400,
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -4737,6 +4806,43 @@ Future<bool?> _showRouteConfirmationModal({
                   ),
                   const SizedBox(height: 8),
                 ],
+                
+                // FIXED: Show heatmap warning BEFORE the explanation
+                if (_showHeatmap && heatmapZonesCount > 0) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.heat_pump, color: Colors.orange.shade700, size: 20),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Crime Heatmap Zones Detected',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Route passes through $heatmapZonesCount high-crime density area${heatmapZonesCount > 1 ? 's' : ''}. '
+                          'These zones are calculated from historical crime patterns.',
+                          style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                
                 const Text(
                   'We couldn\'t find a significantly safer route to your destination. '
                   'This might be due to:',
@@ -4745,8 +4851,11 @@ Future<bool?> _showRouteConfirmationModal({
                 const SizedBox(height: 8),
                 const Text('• Limited alternative roads in the area'),
                 const Text('• Multiple hotspots along possible routes'),
+                if (heatmapZonesCount > 0)
+                  const Text('• High-crime density zones blocking alternatives'),
                 const Text('• API routing limitations'),
                 const SizedBox(height: 12),
+                
                 if (_routingRetryCount < MAX_RETRY_ATTEMPTS) ...[
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -4765,12 +4874,15 @@ Future<bool?> _showRouteConfirmationModal({
                         const SizedBox(height: 4),
                         const Text('• Extended detour search (may be much longer)'),
                         const Text('• Alternative routing strategies'),
+                        if (heatmapZonesCount > 0)
+                          const Text('• Wider avoidance of crime density zones'),
                         Text('• Attempt ${_routingRetryCount + 1} of $MAX_RETRY_ATTEMPTS'),
                       ],
                     ),
                   ),
                   const SizedBox(height: 12),
                 ],
+                
                 const Text(
                   'What would you like to do?',
                   style: TextStyle(fontWeight: FontWeight.w600),
@@ -4780,34 +4892,40 @@ Future<bool?> _showRouteConfirmationModal({
           ),
         ),
         actions: [
-          if (_routingRetryCount < MAX_RETRY_ATTEMPTS)
-            TextButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop(null); // Close modal
-                _retryWithExtendedSearch(destination);
-              },
-              icon: const Icon(Icons.refresh),
-              label: const Text('Try Harder'),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.blue,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_routingRetryCount < MAX_RETRY_ATTEMPTS)
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop(null);
+                    _retryWithExtendedSearch(destination);
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Try Harder'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              if (_routingRetryCount < MAX_RETRY_ATTEMPTS)
+                const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: () => Navigator.of(context).pop(true),
+                icon: const Icon(Icons.route),
+                label: const Text('Use Regular Route'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
               ),
-            ),
-          TextButton.icon(
-            onPressed: () => Navigator.of(context).pop(false), // Cancel
-            icon: const Icon(Icons.cancel),
-            label: const Text('Cancel'),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.grey,
-            ),
-          ),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.of(context).pop(true), // Proceed
-            icon: const Icon(Icons.warning),
-            label: const Text('Use Regular Route'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange,
-              foregroundColor: Colors.white,
-            ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).pop(false),
+                icon: const Icon(Icons.cancel),
+                label: const Text('Cancel'),
+              ),
+            ],
           ),
         ],
       );
@@ -4815,14 +4933,42 @@ Future<bool?> _showRouteConfirmationModal({
   );
 }
 
+// FIXED: Accept route parameter to avoid race conditions
+int _countHeatmapZonesInRoute([List<LatLng>? routeToCheck]) {
+  final route = routeToCheck ?? _routePoints;
+  
+  if (route.isEmpty || _heatmapClusters.isEmpty) return 0;
+  
+  int count = 0;
+  final checkedClusters = <HeatmapCluster>{};
+  
+  for (final point in route) {
+    for (final cluster in _heatmapClusters) {
+      if (checkedClusters.contains(cluster)) continue;
+      
+      final distance = _calculateDistance(point, cluster.center);
+      final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
+      
+      if (distance <= cluster.radius + safetyBuffer) {
+        count++;
+        checkedClusters.add(cluster);
+      }
+    }
+  }
+  
+  return count;
+}
+
 
 // Retry with extended search parameters
+// FIXED: Retry with extended search parameters
 Future<void> _retryWithExtendedSearch(LatLng destination) async {
   _routingRetryCount++;
   _showSnackBar('Attempting extended route search... (${_routingRetryCount}/$MAX_RETRY_ATTEMPTS)');
   
   try {
     final regularRoute = await _getRouteFromAPI(_currentPosition!, destination);
+    _lastRegularRoute = regularRoute; // Update fallback
     final unsafeSegments = _findUnsafeSegments(regularRoute);
     
     if (unsafeSegments.isEmpty) {
@@ -4838,12 +4984,25 @@ Future<void> _retryWithExtendedSearch(LatLng destination) async {
       await _applySuccessfulRoute(safeRoute, destination, 'Extended search found safer route!');
     } else {
       // Still couldn't find better route
-      await _handleFailedSafeRouting(destination, unsafeSegments.length, newUnsafeSegments.length);
+      // FIXED: Pass the attempted route
+      await _handleFailedSafeRouting(
+        destination, 
+        unsafeSegments.length, 
+        newUnsafeSegments.length,
+        attemptedRoute: safeRoute, // NEW: Pass the route
+      );
     }
     
   } catch (e) {
     print('Extended search error: $e');
-    await _handleFailedSafeRouting(destination, -1, -1, error: 'Extended search failed: $e');
+    // FIXED: Pass the fallback route
+    await _handleFailedSafeRouting(
+      destination, 
+      -1, 
+      -1, 
+      error: 'Extended search failed: $e',
+      attemptedRoute: _lastRegularRoute, // NEW: Pass the route
+    );
   }
 }
 
@@ -5030,6 +5189,7 @@ Future<List<LatLng>> _tryPerpendicularDetourStrategy(LatLng start, LatLng destin
   final hotspotClusters = _clusterHotspots(unsafeSegments);
   final waypoints = <LatLng>[];
   
+  // Process both active hotspot clusters AND heatmap clusters
   for (final cluster in hotspotClusters) {
     final clusterCenter = _getClusterCenter(cluster);
     
@@ -5038,29 +5198,62 @@ Future<List<LatLng>> _tryPerpendicularDetourStrategy(LatLng start, LatLng destin
     final perpendicularDirection1 = (mainRouteDirection + 90) % 360;
     final perpendicularDirection2 = (mainRouteDirection - 90) % 360;
     
-    // Try both perpendicular directions at different distances
-    final distances = [500.0, 800.0, 1200.0]; // meters
+    // Increased distances to account for heatmap zones
+    final distances = [600.0, 900.0, 1400.0]; // Increased from [500, 800, 1200]
     
     for (final distance in distances) {
       final waypoint1 = _calculateDestination(clusterCenter, perpendicularDirection1, distance);
       final waypoint2 = _calculateDestination(clusterCenter, perpendicularDirection2, distance);
       
-      // Choose the waypoint that's safer
+      // Enhanced safety evaluation (considers both hotspots and heatmap)
       final safety1 = _evaluateWaypointSafety(waypoint1);
       final safety2 = _evaluateWaypointSafety(waypoint2);
       
-      if (safety1 > safety2 && safety1 > 200) { // Minimum 200m from hotspots
+      // Also check if waypoints are in heatmap danger zones
+      final inDanger1 = _isPointInHeatmapDangerZone(waypoint1);
+      final inDanger2 = _isPointInHeatmapDangerZone(waypoint2);
+      
+      if (!inDanger1 && safety1 > safety2 && safety1 > 250) { // Increased from 200
         waypoints.add(waypoint1);
         break;
-      } else if (safety2 > 200) {
+      } else if (!inDanger2 && safety2 > 250) { // Increased from 200
         waypoints.add(waypoint2);
         break;
       }
     }
   }
   
+  // NEW: Also create waypoints to avoid heatmap clusters directly
+  if (_showHeatmap && _heatmapClusters.isNotEmpty) {
+    final mainBearing = _calculateBearing(start, destination);
+    
+    for (final heatCluster in _heatmapClusters) {
+      // Only process high-danger clusters
+      if (heatCluster.dominantSeverity == 'critical' || heatCluster.dominantSeverity == 'high') {
+        final safetyBuffer = _getClusterSafetyBuffer(heatCluster.dominantSeverity);
+        final avoidanceDistance = heatCluster.radius + safetyBuffer + 200; // Extra margin
+        
+        // Try perpendicular directions
+        final perpBearing1 = (mainBearing + 90) % 360;
+        final perpBearing2 = (mainBearing - 90) % 360;
+        
+        final candidate1 = _calculateDestination(heatCluster.center, perpBearing1, avoidanceDistance);
+        final candidate2 = _calculateDestination(heatCluster.center, perpBearing2, avoidanceDistance);
+        
+        final safety1 = _evaluateWaypointSafety(candidate1);
+        final safety2 = _evaluateWaypointSafety(candidate2);
+        
+        if (safety1 > 300 && !_isPointInHeatmapDangerZone(candidate1)) {
+          waypoints.add(candidate1);
+        } else if (safety2 > 300 && !_isPointInHeatmapDangerZone(candidate2)) {
+          waypoints.add(candidate2);
+        }
+      }
+    }
+  }
+  
   if (waypoints.isNotEmpty) {
-    return await _getRouteWithWaypoints(start, destination, waypoints.take(2).toList());
+    return await _getRouteWithWaypoints(start, destination, waypoints.take(3).toList());
   }
   
   throw Exception('No safe perpendicular route found');
@@ -5073,26 +5266,29 @@ Future<List<LatLng>> _tryRadialAvoidanceStrategy(LatLng start, LatLng destinatio
   
   for (final cluster in hotspotClusters) {
     final clusterCenter = _getClusterCenter(cluster);
-    
-    // Try 8 directions around the hotspot cluster (every 45 degrees)
     final directions = [0, 45, 90, 135, 180, 225, 270, 315];
-    final avoidanceDistance = 600.0; // meters
+    final avoidanceDistance = 600.0;
     
     LatLng? bestWaypoint;
     double bestSafety = 0;
+    double lowestDanger = double.infinity; // NEW
     
     for (final direction in directions) {
       final candidate = _calculateDestination(clusterCenter, direction.toDouble(), avoidanceDistance);
       final safety = _evaluateWaypointSafety(candidate);
+      final dangerScore = _getClusterDangerScore(candidate); // NEW: Use it here
       
-      if (safety > bestSafety) {
+      // Prioritize waypoints with high safety AND low danger score
+      if (safety > bestSafety || (safety == bestSafety && dangerScore < lowestDanger)) {
         bestSafety = safety;
+        lowestDanger = dangerScore;
         bestWaypoint = candidate;
       }
     }
     
-    if (bestWaypoint != null && bestSafety > 250) { // Minimum 250m safety margin
+    if (bestWaypoint != null && bestSafety > 250 && lowestDanger < 2.0) { // NEW: danger threshold
       waypoints.add(bestWaypoint);
+      print('🎯 Added waypoint with danger score: ${lowestDanger.toStringAsFixed(2)}');
     }
   }
   
@@ -5283,6 +5479,7 @@ LatLng _calculateDestination(LatLng start, double bearing, double distance) {
 double _evaluateWaypointSafety(LatLng waypoint) {
   double minDistance = double.infinity;
   
+  // PRIORITY 1: Check active hotspots
   final activeHotspots = _hotspots.where((hotspot) {
     final status = hotspot['status'] ?? 'approved';
     final activeStatus = hotspot['active_status'] ?? 'active';
@@ -5298,7 +5495,65 @@ double _evaluateWaypointSafety(LatLng waypoint) {
     }
   }
   
+  // PRIORITY 2: Check heatmap clusters
+  if (_showHeatmap && _heatmapClusters.isNotEmpty) {
+    for (final cluster in _heatmapClusters) {
+      // Distance to cluster edge (not center)
+      final distanceToCenter = _calculateDistance(waypoint, cluster.center);
+      final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
+      final effectiveDistance = distanceToCenter - cluster.radius - safetyBuffer;
+      
+      // Penalize waypoints inside or near cluster boundaries
+      if (effectiveDistance < minDistance) {
+        minDistance = effectiveDistance;
+      }
+    }
+  }
+  
   return minDistance;
+}
+
+// NEW: Check if a point is within any heatmap cluster danger zone
+bool _isPointInHeatmapDangerZone(LatLng point) {
+  if (!_showHeatmap || _heatmapClusters.isEmpty) return false;
+  
+  for (final cluster in _heatmapClusters) {
+    final distanceToCenter = _calculateDistance(point, cluster.center);
+    final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
+    final dangerZoneRadius = cluster.radius + safetyBuffer;
+    
+    if (distanceToCenter <= dangerZoneRadius) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// NEW: Get cluster danger score for a point (for prioritization)
+double _getClusterDangerScore(LatLng point) {
+  if (!_showHeatmap || _heatmapClusters.isEmpty) return 0.0;
+  
+  double maxDangerScore = 0.0;
+  
+  for (final cluster in _heatmapClusters) {
+    final distanceToCenter = _calculateDistance(point, cluster.center);
+    final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
+    final dangerZoneRadius = cluster.radius + safetyBuffer;
+    
+    if (distanceToCenter <= dangerZoneRadius) {
+      // Calculate danger score based on proximity and severity
+      final proximityFactor = 1.0 - (distanceToCenter / dangerZoneRadius);
+      final severityWeight = SEVERITY_WEIGHTS[cluster.dominantSeverity] ?? 0.25;
+      final dangerScore = proximityFactor * severityWeight * cluster.intensity;
+      
+      if (dangerScore > maxDangerScore) {
+        maxDangerScore = dangerScore;
+      }
+    }
+  }
+  
+  return maxDangerScore;
 }
 
 

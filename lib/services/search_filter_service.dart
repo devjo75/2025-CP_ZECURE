@@ -76,7 +76,7 @@ class SearchAndFilterService {
     'Santa Barbara',
     'Santa Catalina',
     'Santa Maria',
-    'Santo Niño',
+    'Santo NiÃ±o',
     'Sibulao',
     'Sinubung',
     'Sinunoc',
@@ -239,14 +239,14 @@ class SearchAndFilterService {
 
     if (levelFilter != null && levelFilter != 'All Levels') {
       filteredReports = filteredReports.where((report) {
-        String reportLevel = _getNestedString(report, ['crime_type', 'level']);
+        String reportLevel = getNestedString(report, ['crime_type', 'level']);
         return reportLevel.toLowerCase() == levelFilter.toLowerCase();
       }).toList();
     }
 
     if (categoryFilter != null && categoryFilter != 'All Categories') {
       filteredReports = filteredReports.where((report) {
-        String reportCategory = _getNestedString(report, ['crime_type', 'category']);
+        String reportCategory = getNestedString(report, ['crime_type', 'category']);
         return reportCategory.toLowerCase() == categoryFilter.toLowerCase();
       }).toList();
     }
@@ -293,13 +293,13 @@ class SearchAndFilterService {
       String reportId = report['id']?.toString() ?? '';
       if (reportId.contains(searchTerm)) return true;
 
-      String crimeType = _getNestedString(report, ['crime_type', 'name']).toLowerCase();
+      String crimeType = getNestedString(report, ['crime_type', 'name']).toLowerCase();
       if (crimeType.contains(searchTerm)) return true;
 
-      String crimeCategory = _getNestedString(report, ['crime_type', 'category']).toLowerCase();
+      String crimeCategory = getNestedString(report, ['crime_type', 'category']).toLowerCase();
       if (crimeCategory.contains(searchTerm)) return true;
 
-      String crimeLevel = _getNestedString(report, ['crime_type', 'level']).toLowerCase();
+      String crimeLevel = getNestedString(report, ['crime_type', 'level']).toLowerCase();
       if (crimeLevel.contains(searchTerm)) return true;
 
       String status = (report['status']?.toString() ?? '').toLowerCase();
@@ -313,18 +313,18 @@ class SearchAndFilterService {
       if (barangay.contains(searchTerm)) return true;
 
       if (report['reporter'] != null && report['reporter'] is Map<String, dynamic>) {
-        String reporterFirstName = _getNestedString(report, ['reporter', 'first_name']);
-        String reporterLastName = _getNestedString(report, ['reporter', 'last_name']);
+        String reporterFirstName = getNestedString(report, ['reporter', 'first_name']);
+        String reporterLastName = getNestedString(report, ['reporter', 'last_name']);
         String reporterName = '$reporterFirstName $reporterLastName'.toLowerCase().trim();
         if (reporterName.contains(searchTerm)) return true;
 
-        String reporterEmail = _getNestedString(report, ['reporter', 'email']).toLowerCase();
+        String reporterEmail = getNestedString(report, ['reporter', 'email']).toLowerCase();
         if (reporterEmail.contains(searchTerm)) return true;
       }
 
       if (report['users'] != null && report['users'] is Map<String, dynamic>) {
-        String creatorFirstName = _getNestedString(report, ['users', 'first_name']);
-        String creatorLastName = _getNestedString(report, ['users', 'last_name']);
+        String creatorFirstName = getNestedString(report, ['users', 'first_name']);
+        String creatorLastName = getNestedString(report, ['users', 'last_name']);
         String creatorName = '$creatorFirstName $creatorLastName'.toLowerCase().trim();
         if (creatorName.contains(searchTerm)) return true;
       }
@@ -339,7 +339,8 @@ class SearchAndFilterService {
     }).toList();
   }
 
-  static String _getNestedString(Map<String, dynamic> map, List<String> keys) {
+  // Made public for use in PDF export modal
+  static String getNestedString(Map<String, dynamic> map, List<String> keys) {
     dynamic current = map;
     for (String key in keys) {
       if (current is Map<String, dynamic> && current.containsKey(key)) {
@@ -380,43 +381,42 @@ class SearchAndFilterService {
     }
   }
 
-static String extractBarangayFromAddress(String? address) {
-  if (address == null || address.isEmpty) return '';
-  
-  String addressLower = address.toLowerCase();
-  
-  for (String barangay in SearchAndFilterService.zamboangaCityBarangays) {
-    if (addressLower.contains(barangay.toLowerCase())) {
-      return barangay;
-    }
-  }
-
-  List<String> parts = address.split(',').map((e) => e.trim()).toList();
-
-  for (int i = 0; i < parts.length; i++) {
-    String part = parts[i];
-
-    if (part.toLowerCase().contains('zamboanga city') ||
-        part.toLowerCase().contains('zamboanga peninsula') ||
-        part.toLowerCase().contains('philippines') ||
-        part.toLowerCase().contains('street') ||
-        part.toLowerCase().contains('road') ||
-        part.toLowerCase().contains('avenue') ||
-        RegExp(r'^\d+$').hasMatch(part)) {
-      continue;
-    }
-
+  static String extractBarangayFromAddress(String? address) {
+    if (address == null || address.isEmpty) return '';
+    
+    String addressLower = address.toLowerCase();
+    
     for (String barangay in SearchAndFilterService.zamboangaCityBarangays) {
-      if (part.toLowerCase() == barangay.toLowerCase() ||
-          part.toLowerCase().contains(barangay.toLowerCase())) {
+      if (addressLower.contains(barangay.toLowerCase())) {
         return barangay;
       }
     }
+
+    List<String> parts = address.split(',').map((e) => e.trim()).toList();
+
+    for (int i = 0; i < parts.length; i++) {
+      String part = parts[i];
+
+      if (part.toLowerCase().contains('zamboanga city') ||
+          part.toLowerCase().contains('zamboanga peninsula') ||
+          part.toLowerCase().contains('philippines') ||
+          part.toLowerCase().contains('street') ||
+          part.toLowerCase().contains('road') ||
+          part.toLowerCase().contains('avenue') ||
+          RegExp(r'^\d+$').hasMatch(part)) {
+        continue;
+      }
+
+      for (String barangay in SearchAndFilterService.zamboangaCityBarangays) {
+        if (part.toLowerCase() == barangay.toLowerCase() ||
+            part.toLowerCase().contains(barangay.toLowerCase())) {
+          return barangay;
+        }
+      }
+    }
+
+    return '';
   }
-
-  return '';
-}
-
 
   static void _sortReports(
     List<Map<String, dynamic>> reports,
@@ -432,8 +432,8 @@ static String extractBarangayFromAddress(String? address) {
           bValue = b['id'] ?? 0;
           break;
         case 'crime_type':
-          aValue = _getNestedString(a, ['crime_type', 'name']).toLowerCase();
-          bValue = _getNestedString(b, ['crime_type', 'name']).toLowerCase();
+          aValue = getNestedString(a, ['crime_type', 'name']).toLowerCase();
+          bValue = getNestedString(b, ['crime_type', 'name']).toLowerCase();
           break;
         case 'level':
           Map<String, int> levelPriority = {
@@ -442,8 +442,8 @@ static String extractBarangayFromAddress(String? address) {
             'medium': 2,
             'low': 1,
           };
-          aValue = levelPriority[_getNestedString(a, ['crime_type', 'level']).toLowerCase()] ?? 0;
-          bValue = levelPriority[_getNestedString(b, ['crime_type', 'level']).toLowerCase()] ?? 0;
+          aValue = levelPriority[getNestedString(a, ['crime_type', 'level']).toLowerCase()] ?? 0;
+          bValue = levelPriority[getNestedString(b, ['crime_type', 'level']).toLowerCase()] ?? 0;
           break;
         case 'status':
           Map<String, int> statusPriority = {
@@ -463,15 +463,15 @@ static String extractBarangayFromAddress(String? address) {
           String bReporter = '';
           
           if (a['reporter'] != null && a['reporter'] is Map<String, dynamic>) {
-            String aFirstName = _getNestedString(a, ['reporter', 'first_name']);
-            String aLastName = _getNestedString(a, ['reporter', 'last_name']);
+            String aFirstName = getNestedString(a, ['reporter', 'first_name']);
+            String aLastName = getNestedString(a, ['reporter', 'last_name']);
             aReporter = '$aFirstName $aLastName'.trim();
           }
           if (aReporter.isEmpty) aReporter = 'Admin';
           
           if (b['reporter'] != null && b['reporter'] is Map<String, dynamic>) {
-            String bFirstName = _getNestedString(b, ['reporter', 'first_name']);
-            String bLastName = _getNestedString(b, ['reporter', 'last_name']);
+            String bFirstName = getNestedString(b, ['reporter', 'first_name']);
+            String bLastName = getNestedString(b, ['reporter', 'last_name']);
             bReporter = '$bFirstName $bLastName'.trim();
           }
           if (bReporter.isEmpty) bReporter = 'Admin';
@@ -542,7 +542,7 @@ static String extractBarangayFromAddress(String? address) {
   static List<String> getUniqueLevels(List<Map<String, dynamic>> reports) {
     Set<String> levels = {'All Levels'};
     for (var report in reports) {
-      String level = _getNestedString(report, ['crime_type', 'level']);
+      String level = getNestedString(report, ['crime_type', 'level']);
       if (level.isNotEmpty) {
         levels.add(_capitalizeFirst(level));
       }
@@ -553,7 +553,7 @@ static String extractBarangayFromAddress(String? address) {
   static List<String> getUniqueCategories(List<Map<String, dynamic>> reports) {
     Set<String> categories = {'All Categories'};
     for (var report in reports) {
-      String category = _getNestedString(report, ['crime_type', 'category']);
+      String category = getNestedString(report, ['crime_type', 'category']);
       if (category.isNotEmpty) {
         categories.add(category);
       }
@@ -625,7 +625,7 @@ static String extractBarangayFromAddress(String? address) {
   ) {
     List<String> highPriorityLevels = ['critical', 'high'];
     return reports.where((report) {
-      String level = _getNestedString(report, ['crime_type', 'level']).toLowerCase();
+      String level = getNestedString(report, ['crime_type', 'level']).toLowerCase();
       return highPriorityLevels.contains(level);
     }).toList();
   }
@@ -689,7 +689,7 @@ static String extractBarangayFromAddress(String? address) {
   static Map<String, int> getReportStatsByLevel(List<Map<String, dynamic>> reports) {
     Map<String, int> levelStats = {};
     for (var report in reports) {
-      String level = _getNestedString(report, ['crime_type', 'level']);
+      String level = getNestedString(report, ['crime_type', 'level']);
       if (level.isEmpty) level = 'unknown';
       levelStats[level] = (levelStats[level] ?? 0) + 1;
     }
