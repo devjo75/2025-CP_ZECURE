@@ -39,6 +39,7 @@ import 'package:zecure/desktop/hotspot_filter_dialog_desktop.dart';
 import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
 import 'package:zecure/desktop/save_point_desktop.dart';
+import 'package:zecure/services/firebase_service.dart';
 import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
@@ -125,9 +126,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
 
-bool _markersLoaded = false;
-int _maxMarkersToShow = 50; // Progressive loading
-Timer? _deferredLoadTimer;
+
 
  
   TravelMode _selectedTravelMode = TravelMode.driving;
@@ -266,6 +265,10 @@ bool _showSavePointSelector = false; // New state for savepoint button
 
 Timer? _timeUpdateTimer;
 
+
+bool _markersLoaded = false;
+int _maxMarkersToShow = 50; // Progressive loading
+Timer? _deferredLoadTimer;
 
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
@@ -493,7 +496,6 @@ List<Map<String, dynamic>> _getFilteredNotifications() {
   }
 }
 
-
 @override
 void initState() {
   super.initState();
@@ -526,6 +528,9 @@ void _initializeEssentials() {
             final filterService = Provider.of<HotspotFilterService>(context, listen: false);
             filterService.resetFiltersForUser(_userProfile?['id']?.toString());
             
+            // ✅ Setup Firebase notifications after profile is loaded
+            _initializeFirebaseForUser();
+            
             // Only setup notifications if not already done
             if (_notificationsChannel == null) {
               _deferredLoadTimer = Timer(Duration(milliseconds: 1000), () {
@@ -543,6 +548,10 @@ void _initializeEssentials() {
       } else if (event.session == null && mounted) {
         print('User logged out, cleaning up');
         _isLoadingProfile = false;
+        
+        // ✅ Clear Firebase token on logout
+        _clearFirebaseToken();
+        
         setState(() {
           _userProfile = null;
           _isAdmin = false;
@@ -562,6 +571,53 @@ void _initializeEssentials() {
 
   // Start location immediately (but don't block)
   _getCurrentLocationAsync();
+}
+
+// ✅ NEW: Initialize Firebase for logged-in user
+Future<void> _initializeFirebaseForUser() async {
+  try {
+    // Subscribe to general crime alerts topic
+    await FirebaseService().subscribeToTopic('crime_alerts');
+    print('✅ Subscribed to crime_alerts topic');
+    
+    // Subscribe to role-specific topics
+    if (_isAdmin || _isOfficer) {
+      await FirebaseService().subscribeToTopic('admin_alerts');
+      print('✅ Subscribed to admin_alerts topic');
+    }
+    
+    // Save FCM token to database
+    final token = FirebaseService().fcmToken;
+    if (token != null && _userProfile != null) {
+      await Supabase.instance.client
+          .from('users')
+          .update({
+            'fcm_token': token,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', _userProfile!['id']);
+      
+      print('✅ FCM token saved for user: ${_userProfile!['email']}');
+    }
+  } catch (e) {
+    print('❌ Error initializing Firebase for user: $e');
+  }
+}
+
+// ✅ NEW: Clear Firebase token on logout
+Future<void> _clearFirebaseToken() async {
+  try {
+    // Unsubscribe from all topics
+    await FirebaseService().unsubscribeFromTopic('crime_alerts');
+    await FirebaseService().unsubscribeFromTopic('admin_alerts');
+    
+    // Clear FCM token
+    await FirebaseService().clearToken();
+    
+    print('✅ Firebase cleaned up on logout');
+  } catch (e) {
+    print('❌ Error clearing Firebase token: $e');
+  }
 }
 
 // Helper method to clean up channels safely
@@ -680,7 +736,7 @@ void _deferredInitialization() async {
     _markersLoaded = true;
   });
   
- // HEATMAP INITIALIZATION
+  // HEATMAP INITIALIZATION
   await Future.delayed(Duration(milliseconds: 300));
   if (!mounted) return;
   
@@ -1935,26 +1991,27 @@ Future<void> _loadUserProfile() async {
           .single();
       
  if (mounted) {
-        setState(() {
-          _userProfile = response;
-          _isAdmin = response['role'] == 'admin';
-          _isOfficer = response['role'] == 'officer';
-          _profileScreen = ProfileScreen(
-  _authService, 
-  _userProfile, 
-  _isAdmin,           // Admin-only privileges
-  _hasAdminPermissions // Admin + Officer privileges
-);
-          _profileScreen.initControllers();
-        });
-        
-        print('User profile loaded: ${_userProfile!['id']}');
-        
-        // Setup real-time subscriptions after profile is loaded
-        _setupNotificationsRealtime();
-        await _loadNotifications();
-        await _loadHotspots();
-      }
+  setState(() {
+    _userProfile = response;
+    _isAdmin = response['role'] == 'admin';
+    _isOfficer = response['role'] == 'officer';
+    _profileScreen = ProfileScreen(
+      _authService, 
+      _userProfile, 
+      _isAdmin,
+      _hasAdminPermissions
+    );
+    _profileScreen.initControllers();
+  });
+  
+  print('User profile loaded: ${_userProfile!['id']}');
+  // Profile photo URL: ${_userProfile!['profile_picture_url'] ?? 'none'}
+  
+  // Setup real-time subscriptions after profile is loaded
+  _setupNotificationsRealtime();
+  await _loadNotifications();
+  await _loadHotspots();
+}
     } catch (e) {
       print('Error loading user profile: $e');
       if (mounted) {
@@ -4961,7 +5018,6 @@ int _countHeatmapZonesInRoute([List<LatLng>? routeToCheck]) {
 
 
 // Retry with extended search parameters
-// FIXED: Retry with extended search parameters
 Future<void> _retryWithExtendedSearch(LatLng destination) async {
   _routingRetryCount++;
   _showSnackBar('Attempting extended route search... (${_routingRetryCount}/$MAX_RETRY_ATTEMPTS)');
@@ -9234,6 +9290,9 @@ bool _isDesktopScreen() {
 // BOTTOM NAV BARS MAIN WIDGETS
 
 Widget _buildBottomNavBar() {
+  final profilePictureUrl = _userProfile?['profile_picture_url'];
+  final hasProfilePhoto = profilePictureUrl != null && profilePictureUrl.isNotEmpty;
+
   return Container(
     decoration: BoxDecoration(
       color: Colors.white,
@@ -9324,15 +9383,56 @@ Widget _buildBottomNavBar() {
                 ),
                 label: 'Alerts',
               ),
-              BottomNavigationBarItem(
-                icon: Icon(
+              // Profile tab with user photo or default icon
+BottomNavigationBarItem(
+  icon: hasProfilePhoto
+      ? Container(
+          width: 32, // increased from 26
+          height: 32, // increased from 26
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: _currentTab == MainTab.profile
+                  ? Colors.blue.shade600
+                  : Colors.grey.shade600,
+              width: 2.5, // slightly thicker for bigger size
+            ),
+          ),
+          child: ClipOval(
+            child: Image.network(
+              profilePictureUrl,
+              width: 32,
+              height: 32,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Icon(
                   _currentTab == MainTab.profile
                       ? Icons.person_rounded
                       : Icons.person_outline_rounded,
-                  size: 26,
-                ),
-                label: 'Profile',
-              ),
+                  size: 26, // keep default size for fallback
+                );
+              },
+              loadingBuilder: (context, child, loadingProgress) {
+                if (loadingProgress == null) return child;
+                return Icon(
+                  _currentTab == MainTab.profile
+                      ? Icons.person_rounded
+                      : Icons.person_outline_rounded,
+                  size: 26, // keep default size for fallback
+                );
+              },
+            ),
+          ),
+        )
+      : Icon(
+          _currentTab == MainTab.profile
+              ? Icons.person_rounded
+              : Icons.person_outline_rounded,
+          size: 26, // unchanged default icon size
+        ),
+  label: 'Profile',
+),
+
             ],
             selectedItemColor: Colors.blue.shade600,
             unselectedItemColor: Colors.grey.shade600,
@@ -9380,7 +9480,6 @@ Widget _buildBottomNavBar() {
     ),
   );
 }
-
 
 void _showQuickActionDialog() {
   showDialog(
@@ -11445,6 +11544,7 @@ Widget _buildDotMarker(Color color, double opacity) {
   );
 }
 
+
 // MAP MAP MAP
 
 Widget _buildMap() {
@@ -11788,6 +11888,7 @@ Consumer<HotspotFilterService>(
                   status: status,
                   crimeTypeName: crimeTypeName,
                   showLabel: _currentZoom >= 15.5,
+                  crimeLevel: crimeLevel,
                 ),
           ),
         );
@@ -12106,6 +12207,8 @@ bool get isLargeScreen {
 
 
 // HOTSPOT MARKER - Fixed to keep marker stable like safe spots
+
+
 Widget _buildStableHotspotMarker({
   required Map<String, dynamic> hotspot,
   required Color markerColor,
@@ -12117,15 +12220,15 @@ Widget _buildStableHotspotMarker({
   required String status,
   required String crimeTypeName,
   required bool showLabel,
+  required String crimeLevel, // ADD THIS
 }) {
   return Transform.rotate(
-    angle: -_currentMapRotation * pi / 180, // Counteract map rotation (degrees to radians)
+    angle: -_currentMapRotation * pi / 180,
     alignment: Alignment.center,
     child: Stack(
       clipBehavior: Clip.none,
       alignment: Alignment.center,
       children: [
-        // Main marker (stays in same position regardless of selection)
         Stack(
           alignment: Alignment.center,
           children: [
@@ -12148,6 +12251,7 @@ Widget _buildStableHotspotMarker({
                 markerIcon: markerIcon,
                 isActive: isActive && status != 'rejected',
                 pulseScale: isSelected ? 1.1 : 0.9,
+                crimeLevel: crimeLevel, // ADD THIS LINE
                 onTap: () {
                   setState(() {
                     _selectedHotspot = hotspot;
@@ -12181,11 +12285,11 @@ Widget _buildStableHotspotMarker({
           ],
         ),
         
-        // Crime type label with improved time indicator
-              if (showLabel)
+        // Crime type label (rest remains the same)
+        if (showLabel)
           Positioned(
             left: isSelected ? 93 : 73,
-            top: 20, // Center the label with the marker
+            top: 20,
             child: AnimatedOpacity(
               duration: const Duration(milliseconds: 300),
               opacity: showLabel ? 1.0 : 0.0,
@@ -12193,7 +12297,6 @@ Widget _buildStableHotspotMarker({
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Main crime type label
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(
@@ -12221,13 +12324,11 @@ Widget _buildStableHotspotMarker({
                     ),
                   ),
                   
-                  // Time indicator below the label
-                  if (hotspot['time'] != null) ...[
+                  if (hotspot['time'] != null && (status == 'approved' || status == 'pending')) ...[
                     const SizedBox(height: 3),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Clock icon with enhanced visibility
                         Container(
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
@@ -12248,7 +12349,6 @@ Widget _buildStableHotspotMarker({
                           ),
                         ),
                         const SizedBox(width: 3),
-                        // Enhanced time text with special styling for "NEW"
                         _buildTimeText(hotspot, markerColor),
                       ],
                     ),
@@ -12518,28 +12618,31 @@ IconData _getIconFromString(String iconName) {
 
 
 
-// CURRENT LOCATION - MINIMIZED (unchanged)
+// NEW: Current location marker with profile photo
 Widget _buildEnhancedCurrentLocationMarker() {
+  final profilePictureUrl = _userProfile?['profile_picture_url'];
+  final hasProfilePhoto = profilePictureUrl != null && profilePictureUrl.isNotEmpty;
+
   return Transform.rotate(
-    angle: -_currentMapRotation * pi / 180, // Counteract map rotation (degrees to radians)
+    angle: -_currentMapRotation * pi / 180,
     alignment: Alignment.center,
     child: Stack(
       alignment: Alignment.center,
       children: [
-        // Pulsing outer ring (minimized)
+        // Pulsing outer ring
         Container(
-          width: 55, // Reduced from 65
-          height: 55, // Reduced from 65
+          width: 55,
+          height: 55,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: Colors.blue.withOpacity(0.15),
           ),
         ),
 
-        // Second ring for depth (minimized)
+        // Second ring for depth
         Container(
-          width: 38, // Reduced from 48
-          height: 38, // Reduced from 48
+          width: 38,
+          height: 38,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: Colors.blue.withOpacity(0.25),
@@ -12550,34 +12653,77 @@ Widget _buildEnhancedCurrentLocationMarker() {
           ),
         ),
 
-        // Main circle background (minimized)
-        Container(
-          width: 22, // Reduced from 28
-          height: 22, // Reduced from 28
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
-            border: Border.all(
-              color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
-              width: 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
+        // Main circle - Profile photo (larger with white border) or default icon (with border)
+        if (hasProfilePhoto)
+          // Profile photo - with white border
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+              border: Border.all(
+                color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
+                width: 2,
               ),
-            ],
-          ),
-        ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: ClipOval(
+              child: Image.network(
+                profilePictureUrl,
+                width: 34,
+                height: 34,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  // Fallback to default icon if image fails to load
+                  return _buildDefaultMarker();
+                },
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  // Show default icon while loading
+                  return _buildDefaultMarker();
+                },
+              ),
+            ),
+          )
+        else
+          // Default icon - smaller with white border (original size)
+          _buildDefaultMarker(),
+      ],
+    ),
+  );
+}
 
-        // Human silhouette icon (minimized)
-        Icon(
-          Icons.person,
-          size: 14, // Reduced from 18
-          color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
+// Helper method for default marker (no profile photo)
+Widget _buildDefaultMarker() {
+  return Container(
+    width: 22,
+    height: 22,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
+      border: Border.all(
+        color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
+        width: 2,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.15),
+          blurRadius: 4,
+          offset: const Offset(0, 2),
         ),
       ],
+    ),
+    child: Icon(
+      Icons.person,
+      size: 14,
+      color: _locationButtonPressed ? Colors.white : Colors.blue.shade600,
     ),
   );
 }

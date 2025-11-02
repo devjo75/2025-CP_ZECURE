@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:zecure/screens/map_screen.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
+import 'package:zecure/services/firebase_service.dart';
 import 'package:zecure/screens/landing_screen.dart';
 import 'package:zecure/auth/login_screen.dart';
-import 'package:zecure/desktop/desktop_landing_screen.dart'; // Added import for desktop landing
-// import 'package:zecure/utils/url_handler.dart'; // Temporarily commented out
+import 'package:zecure/desktop/desktop_landing_screen.dart';
 
 // Global flag to detect logout
 bool isLoggingOut = false;
@@ -24,6 +26,23 @@ Future<void> main() async {
     await dotenv.load(fileName: ".env");
   }
 
+  // ✅ Initialize Firebase (skip on web - notifications not supported)
+  if (!kIsWeb) {
+    try {
+      await Firebase.initializeApp();
+      print('✅ Firebase initialized successfully');
+      
+      // ✅ Initialize Firebase Service (notifications) - mobile only
+      await FirebaseService().initialize();
+      print('✅ Firebase Service initialized successfully');
+    } catch (e) {
+      print('❌ Firebase initialization error: $e');
+    }
+  } else {
+    print('⚠️ Running on web - Firebase push notifications disabled');
+  }
+
+  // Initialize Supabase
   await Supabase.initialize(
     url: supabaseUrl.isNotEmpty ? supabaseUrl : dotenv.env['SUPABASE_URL']!,
     anonKey: supabaseAnonKey.isNotEmpty ? supabaseAnonKey : dotenv.env['SUPABASE_ANON_KEY']!,
@@ -105,6 +124,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
   void initState() {
     super.initState();
     _initializeUrlHandling();
+    
+    // ✅ Only setup auth listener on mobile (Firebase not available on web)
+    if (!kIsWeb) {
+      _setupAuthListener();
+    }
   }
 
   Future<void> _initializeUrlHandling() async {
@@ -114,6 +138,58 @@ class _AuthWrapperState extends State<AuthWrapper> {
     setState(() {
       _isInitialized = true;
     });
+  }
+
+  // ✅ Setup auth listener to handle FCM token on login/logout (mobile only)
+  void _setupAuthListener() {
+    Supabase.instance.client.auth.onAuthStateChange.listen((event) {
+      final session = event.session;
+      
+      if (session != null) {
+        // User logged in - save FCM token
+        _saveFCMToken();
+      } else {
+        // User logged out - clear FCM token
+        _clearFCMToken();
+      }
+    });
+  }
+
+  // ✅ Save FCM token when user logs in (mobile only)
+  Future<void> _saveFCMToken() async {
+    if (kIsWeb) return; // Skip on web
+    
+    try {
+      final token = FirebaseService().fcmToken;
+      if (token != null) {
+        final user = Supabase.instance.client.auth.currentUser;
+        if (user != null) {
+          await Supabase.instance.client
+              .from('users')
+              .update({
+                'fcm_token': token,
+                'updated_at': DateTime.now().toIso8601String(),
+              })
+              .eq('email', user.email!);
+          
+          print('✅ FCM token saved for user: ${user.email}');
+        }
+      }
+    } catch (e) {
+      print('❌ Error saving FCM token: $e');
+    }
+  }
+
+  // ✅ Clear FCM token when user logs out (mobile only)
+  Future<void> _clearFCMToken() async {
+    if (kIsWeb) return; // Skip on web
+    
+    try {
+      await FirebaseService().clearToken();
+      print('✅ FCM token cleared on logout');
+    } catch (e) {
+      print('❌ Error clearing FCM token: $e');
+    }
   }
 
   @override

@@ -6,8 +6,14 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/auth/auth_service.dart';
 import 'package:zecure/screens/admin_dashboard.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as path;
+
 
 enum SaveButtonState { normal, saving, saved,  }
+enum ProfilePictureState { normal, uploading, success, error }
+
 class ProfileScreen {
   final AuthService _authService;
   Map<String, dynamic>? userProfile;
@@ -19,6 +25,9 @@ class ProfileScreen {
   final ScrollController _profileViewScrollController = ScrollController(); 
 
   ProfileScreen(this._authService, this.userProfile, this.isAdmin, this.hasAdminPermissions);
+  ProfilePictureState _profilePictureState = ProfilePictureState.normal;
+  Timer? _profilePictureStateTimer;
+  final ImagePicker _imagePicker = ImagePicker();
 
   // Controllers and state
   late TextEditingController _firstNameController;
@@ -115,6 +124,7 @@ void disposeControllers() {
     focusNode.dispose();
   }
   */
+  _profilePictureStateTimer?.cancel();
   _buttonStateTimer?.cancel();
   _emailResendTimer?.cancel();
 }
@@ -164,6 +174,906 @@ bool _hasProfileChanges() {
 // In your ProfileScreen class, add this method:
 void resetSaveButtonState() {
   _saveButtonState = SaveButtonState.normal;
+}
+
+
+//PROFILE PICTURE METHOD 
+Future<void> _uploadProfilePicture(BuildContext context, {
+  Function(VoidCallback)? onStateChange,
+}) async {
+  try {
+    // Pick image from gallery
+    final XFile? image = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
+    );
+
+    if (image == null) {
+      if (kDebugMode) {
+        print('Image picker returned null - user cancelled or error occurred');
+      }
+      return;
+    }
+
+    if (kDebugMode) {
+      print('Image picked: ${image.path}');
+      print('Image name: ${image.name}');
+    }
+
+    // Set uploading state
+    onStateChange?.call(() {
+      _profilePictureState = ProfilePictureState.uploading;
+    });
+
+    final userId = userProfile!['id'] as String;
+    final fileExtension = path.extension(image.path).toLowerCase();
+    final fileName = 'profile_${DateTime.now().millisecondsSinceEpoch}$fileExtension';
+    final filePath = '$userId/$fileName';
+    
+    // Get clean extension without dot for content type
+    final cleanExtension = fileExtension.replaceAll('.', '');
+    
+    if (kDebugMode) {
+      print('File path: $filePath');
+      print('Extension: $fileExtension');
+      print('Clean extension: $cleanExtension');
+    }
+
+    // Delete old profile picture if exists
+    final oldPicturePath = userProfile?['profile_picture_path'];
+    if (oldPicturePath != null && oldPicturePath.isNotEmpty) {
+      try {
+        if (kDebugMode) {
+          print('Deleting old picture: $oldPicturePath');
+        }
+        await Supabase.instance.client.storage
+            .from('profile-pictures')
+            .remove([oldPicturePath]);
+        if (kDebugMode) {
+          print('Old picture deleted successfully');
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('Error deleting old profile picture: $e');
+        }
+      }
+    }
+
+    // Upload new profile picture
+    if (kDebugMode) {
+      print('Reading image bytes...');
+    }
+    final bytes = await image.readAsBytes();
+    if (kDebugMode) {
+      print('Bytes read: ${bytes.length} bytes');
+      print('Uploading to Supabase...');
+      print('Content type will be: image/$cleanExtension');
+    }
+    
+    // Map common extensions to proper MIME types
+    String contentType;
+    switch (cleanExtension) {
+      case 'jpg':
+      case 'jpeg':
+        contentType = 'image/jpeg';
+        break;
+      case 'png':
+        contentType = 'image/png';
+        break;
+      case 'gif':
+        contentType = 'image/gif';
+        break;
+      case 'webp':
+        contentType = 'image/webp';
+        break;
+      default:
+        contentType = 'image/jpeg'; // Default fallback
+    }
+    
+    if (kDebugMode) {
+      print('Final content type: $contentType');
+    }
+    
+    await Supabase.instance.client.storage
+        .from('profile-pictures')
+        .uploadBinary(
+          filePath,
+          bytes,
+          fileOptions: FileOptions(
+            contentType: contentType,
+            upsert: false,
+          ),
+        );
+    
+    if (kDebugMode) {
+      print('Upload successful');
+    }
+
+    // Get public URL
+    final publicUrl = Supabase.instance.client.storage
+        .from('profile-pictures')
+        .getPublicUrl(filePath);
+
+    // Update user profile in database
+    final response = await Supabase.instance.client
+        .from('users')
+        .update({
+          'profile_picture_url': publicUrl,
+          'profile_picture_path': filePath,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', userId)
+        .select()
+        .single();
+
+    // Update local profile
+    userProfile = response;
+
+    // Set success state
+    onStateChange?.call(() {
+      _profilePictureState = ProfilePictureState.success;
+    });
+
+    // Reset to normal after 2 seconds
+    _profilePictureStateTimer?.cancel();
+    _profilePictureStateTimer = Timer(const Duration(seconds: 2), () {
+      onStateChange?.call(() {
+        _profilePictureState = ProfilePictureState.normal;
+      });
+    });
+
+  } catch (e, stackTrace) {
+    if (kDebugMode) {
+      print('========================================');
+      print('Error uploading profile picture: $e');
+      print('Stack trace: $stackTrace');
+      print('========================================');
+    }
+
+    // Set error state
+    onStateChange?.call(() {
+      _profilePictureState = ProfilePictureState.error;
+    });
+
+    // Show error dialog on desktop for better debugging
+    if (!kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Upload Error'),
+            content: Text('Failed to upload: ${e.toString()}'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+
+    // Reset to normal after 2 seconds
+    _profilePictureStateTimer?.cancel();
+    _profilePictureStateTimer = Timer(const Duration(seconds: 2), () {
+      onStateChange?.call(() {
+        _profilePictureState = ProfilePictureState.normal;
+      });
+    });
+  }
+}
+
+// Add this method to handle profile picture removal
+Future<void> _removeProfilePicture(BuildContext context, {
+  Function(VoidCallback)? onStateChange,
+}) async {
+  try {
+    // Set uploading state
+    onStateChange?.call(() {
+      _profilePictureState = ProfilePictureState.uploading;
+    });
+
+    final userId = userProfile!['id'] as String;
+    final oldPicturePath = userProfile?['profile_picture_path'];
+
+    if (oldPicturePath != null && oldPicturePath.isNotEmpty) {
+      // Delete from storage
+      await Supabase.instance.client.storage
+          .from('profile-pictures')
+          .remove([oldPicturePath]);
+    }
+
+    // Update user profile in database
+    final response = await Supabase.instance.client
+        .from('users')
+        .update({
+          'profile_picture_url': null,
+          'profile_picture_path': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', userId)
+        .select()
+        .single();
+
+    // Update local profile
+    userProfile = response;
+
+    // Set success state
+    onStateChange?.call(() {
+      _profilePictureState = ProfilePictureState.success;
+    });
+
+    // Reset to normal after 2 seconds
+    _profilePictureStateTimer?.cancel();
+    _profilePictureStateTimer = Timer(const Duration(seconds: 2), () {
+      onStateChange?.call(() {
+        _profilePictureState = ProfilePictureState.normal;
+      });
+    });
+
+  } catch (e) {
+    if (kDebugMode) {
+      print('Error removing profile picture: $e');
+    }
+
+    // Set error state
+    onStateChange?.call(() {
+      _profilePictureState = ProfilePictureState.error;
+    });
+
+    // Reset to normal after 2 seconds
+    _profilePictureStateTimer?.cancel();
+    _profilePictureStateTimer = Timer(const Duration(seconds: 2), () {
+      onStateChange?.call(() {
+        _profilePictureState = ProfilePictureState.normal;
+      });
+    });
+  }
+}
+
+// MOBILE: Bottom sheet for mobile devices
+void _showProfilePictureOptionsMobile(
+  BuildContext context, {
+  Function(VoidCallback)? onStateChange,
+}) {
+  final hasProfilePicture = userProfile?['profile_picture_url'] != null;
+
+  showDialog(
+    context: context,
+    barrierColor: Colors.black.withOpacity(0.4),
+    builder: (context) {
+      return Center( // Centers modal vertically and horizontally
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 30, vertical: 24),
+          contentPadding: EdgeInsets.zero,
+          backgroundColor: Colors.white,
+          content: Container(
+            width: MediaQuery.of(context).size.width * 0.85, // Responsive width
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 30,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 28),
+
+                // Icon
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.photo_camera_outlined,
+                    color: Colors.grey.shade700,
+                    size: 30,
+                  ),
+                ),
+
+                const SizedBox(height: 18),
+
+                // Title
+                Text(
+                  'Profile Photo',
+                  style: GoogleFonts.poppins(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade900,
+                  ),
+                ),
+
+                const SizedBox(height: 8),
+
+                // Subtitle
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 22),
+                  child: Text(
+                    hasProfilePicture
+                        ? 'Update or remove your photo'
+                        : 'Add a profile photo',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 28),
+
+                // Buttons
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Column(
+                    children: [
+                      // Upload/Change button
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _uploadProfilePicture(context,
+                                onStateChange: onStateChange);
+                          },
+                          style: TextButton.styleFrom(
+                            backgroundColor:
+                                const Color.fromARGB(255, 43, 68, 105),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            hasProfilePicture
+                                ? 'Change Photo'
+                                : 'Upload Photo',
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      if (hasProfilePicture) ...[
+                        const SizedBox(height: 10),
+                        // Remove button
+                        SizedBox(
+                          width: double.infinity,
+                          child: TextButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              _removeProfilePicture(context,
+                                  onStateChange: onStateChange);
+                            },
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.red.shade600,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: Text(
+                              'Remove Photo',
+                              style: GoogleFonts.poppins(
+                                fontWeight: FontWeight.w500,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 10),
+
+                      // Cancel button
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.grey.shade600,
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            'Cancel',
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+
+// DESKTOP: Minimal modern modal
+void _showProfilePictureOptionsDesktop(
+  BuildContext context, {
+  required bool isSidebarVisible,
+  Function(VoidCallback)? onStateChange,
+}) {
+  final hasProfilePicture = userProfile?['profile_picture_url'] != null;
+
+  showDialog(
+    context: context,
+    barrierColor: Colors.black.withOpacity(0.4),
+    builder: (context) {
+      Widget dialogContent = AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        contentPadding: EdgeInsets.zero,
+        backgroundColor: Colors.white,
+        content: Container(
+          width: 280,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 30,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 32),
+              
+              // Icon
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.photo_camera_outlined,
+                  color: Colors.grey.shade700,
+                  size: 32,
+                ),
+              ),
+              
+              const SizedBox(height: 20),
+              
+              // Title
+              Text(
+                'Profile Photo',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade900,
+                ),
+              ),
+              
+              const SizedBox(height: 8),
+              
+              // Subtitle
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  hasProfilePicture 
+                    ? 'Update or remove your photo'
+                    : 'Add a profile photo',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.grey.shade600,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 32),
+              
+              // Options
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: [
+                    // Upload/Change Button
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _uploadProfilePicture(context, onStateChange: onStateChange);
+                        },
+                        style: TextButton.styleFrom(
+                          backgroundColor: const Color.fromARGB(255, 43, 68, 105),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          hasProfilePicture ? 'Change Photo' : 'Upload Photo',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w500,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                    
+                    if (hasProfilePicture) ...[
+                      const SizedBox(height: 10),
+                      // Remove Button
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _removeProfilePicture(context, onStateChange: onStateChange);
+                          },
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.red.shade600,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            'Remove Photo',
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    
+                    const SizedBox(height: 10),
+                    
+                    // Cancel Button
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.grey.shade600,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'Cancel',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w500,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      );
+
+      // Position modal centered within profile view
+      final profileLeft = isSidebarVisible ? 245.0 : 45.0;
+      final profileWidth = 450.0;
+      final modalWidth = 280.0;
+      final centeredLeft = profileLeft + (profileWidth - modalWidth) / 2;
+      
+      return Stack(
+        children: [
+          Positioned(
+            left: centeredLeft,
+            top: 260,
+            child: dialogContent,
+          ),
+        ],
+      );
+    },
+  );
+}
+
+// MOBILE AVATAR - Uses bottom sheet
+Widget _buildMobileProfileAvatar({
+  required BuildContext context,
+  bool isEditable = false,
+  Function(VoidCallback)? onStateChange,
+}) {
+  final hasProfilePicture = userProfile?['profile_picture_url'] != null;
+  
+  Color borderColor;
+  switch (_profilePictureState) {
+    case ProfilePictureState.success:
+      borderColor = Colors.green;
+      break;
+    case ProfilePictureState.error:
+      borderColor = Colors.red;
+      break;
+    case ProfilePictureState.uploading:
+      borderColor = Colors.blue;
+      break;
+    default:
+      borderColor = Colors.grey.shade300;
+  }
+
+  return GestureDetector(
+    onTap: isEditable
+        ? () => _showProfilePictureOptionsMobile(
+              context,
+              onStateChange: onStateChange,
+            )
+        : null,
+    child: Stack(
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 15,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: borderColor,
+                width: _profilePictureState != ProfilePictureState.normal ? 4 : 0,
+              ),
+            ),
+            child: CircleAvatar(
+              backgroundColor: Colors.white,
+              radius: 50,
+              child: _profilePictureState == ProfilePictureState.uploading
+                  ? const CircularProgressIndicator()
+                  : hasProfilePicture
+                      ? ClipOval(
+                          child: Image.network(
+                            userProfile!['profile_picture_url'],
+                            width: 94,
+                            height: 94,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return CircleAvatar(
+                                backgroundColor: Colors.white,
+                                radius: 47,
+                                child: Icon(
+                                  _getGenderIcon(userProfile?['gender']),
+                                  size: 50,
+                                  color: Colors.grey.shade700,
+                                ),
+                              );
+                            },
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return Center(
+                                child: CircularProgressIndicator(
+                                  value: loadingProgress.expectedTotalBytes != null
+                                      ? loadingProgress.cumulativeBytesLoaded /
+                                          loadingProgress.expectedTotalBytes!
+                                      : null,
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                      : CircleAvatar(
+                          backgroundColor: Colors.white,
+                          radius: 47,
+                          child: Icon(
+                            _getGenderIcon(userProfile?['gender']),
+                            size: 50,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+            ),
+          ),
+        ),
+        if (isEditable)
+          Positioned(
+            bottom: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.grey.shade300,
+                  width: 2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Icon(
+                hasProfilePicture ? Icons.edit : Icons.camera_alt,
+                size: 16,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+// DESKTOP AVATAR - Uses centered modal
+Widget _buildDesktopProfileAvatar({
+  required BuildContext context,
+  required bool isSidebarVisible,
+  bool isEditable = false,
+  Function(VoidCallback)? onStateChange,
+}) {
+  final hasProfilePicture = userProfile?['profile_picture_url'] != null;
+  
+  Color borderColor;
+  switch (_profilePictureState) {
+    case ProfilePictureState.success:
+      borderColor = Colors.green;
+      break;
+    case ProfilePictureState.error:
+      borderColor = Colors.red;
+      break;
+    case ProfilePictureState.uploading:
+      borderColor = Colors.blue;
+      break;
+    default:
+      borderColor = Colors.grey.shade300;
+  }
+
+  return GestureDetector(
+    onTap: isEditable
+        ? () => _showProfilePictureOptionsDesktop(
+              context,
+              isSidebarVisible: isSidebarVisible,
+              onStateChange: onStateChange,
+            )
+        : null,
+    child: Stack(
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 15,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: borderColor,
+                width: _profilePictureState != ProfilePictureState.normal ? 4 : 0,
+              ),
+            ),
+            child: CircleAvatar(
+              backgroundColor: Colors.white,
+              radius: 50,
+              child: _profilePictureState == ProfilePictureState.uploading
+                  ? const CircularProgressIndicator()
+                  : hasProfilePicture
+                      ? ClipOval(
+                          child: Image.network(
+                            userProfile!['profile_picture_url'],
+                            width: 94,
+                            height: 94,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return CircleAvatar(
+                                backgroundColor: Colors.white,
+                                radius: 47,
+                                child: Icon(
+                                  _getGenderIcon(userProfile?['gender']),
+                                  size: 50,
+                                  color: Colors.grey.shade700,
+                                ),
+                              );
+                            },
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return Center(
+                                child: CircularProgressIndicator(
+                                  value: loadingProgress.expectedTotalBytes != null
+                                      ? loadingProgress.cumulativeBytesLoaded /
+                                          loadingProgress.expectedTotalBytes!
+                                      : null,
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                      : CircleAvatar(
+                          backgroundColor: Colors.white,
+                          radius: 47,
+                          child: Icon(
+                            _getGenderIcon(userProfile?['gender']),
+                            size: 50,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+            ),
+          ),
+        ),
+        if (isEditable)
+          Positioned(
+            bottom: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.grey.shade300,
+                  width: 2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Icon(
+                hasProfilePicture ? Icons.edit : Icons.camera_alt,
+                size: 16,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 // Updated updateProfile method with consistent button states for both desktop and mobile
@@ -1713,9 +2623,7 @@ Future<void> _loadPoliceData() async {
   }
 }
 
-
-
-//PROFILE PAGE MOBILE
+//PROFILE VIEW MOBILE
 Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback onEditPressed) {
   // Only scroll to top when explicitly requested (when returning from edit mode)
   if (_shouldScrollToTop) {
@@ -1738,147 +2646,99 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Header section with background image
-      Container(
-  width: double.infinity,
-  height: 280,
-  decoration: const BoxDecoration(
-    image: DecorationImage(
-      image: AssetImage('assets/images/DARK.jpg'),
-      fit: BoxFit.cover,
-    ),
-  ),
-  child: Container(
-
-    child: Column(
-      children: [
-        const SizedBox(height: 40),
-        // Profile avatar
-        Stack(
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
-                    blurRadius: 15,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: CircleAvatar(
-                backgroundColor: Colors.white,
-                radius: 50,
-                child: CircleAvatar(
-                  backgroundColor: Colors.white,
-                  radius: 47,
-                  child: Icon(
-                    _getGenderIcon(userProfile?['gender']),
-                    size: 50,
-                    color: Colors.grey.shade700,
-                  ),
+        // Header section with background image - WRAP THIS IN StatefulBuilder
+        StatefulBuilder(
+          builder: (context, setStateHeader) {
+            return Container(
+              width: double.infinity,
+              height: 280,
+              decoration: const BoxDecoration(
+                image: DecorationImage(
+                  image: AssetImage('assets/images/DARK.jpg'),
+                  fit: BoxFit.cover,
                 ),
               ),
-            ),
-            Positioned(
-              bottom: 0,
-              right: 0,
               child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.grey.shade300,
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 40),
+                    // Profile avatar - MOBILE VERSION (Bottom Sheet)
+                    _buildMobileProfileAvatar(
+                      context: context,
+                      isEditable: true,
+                      onStateChange: setStateHeader, // Use the StatefulBuilder's setState
                     ),
+                    const SizedBox(height: 16),
+
+                    // Full name
+                    Text(
+                      '${userProfile?['first_name'] ?? ''}'
+                      '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                      ' ${userProfile?['last_name'] ?? ''}'
+                      '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        height: 1.2,
+                        shadows: [
+                          Shadow(
+                            offset: Offset(0, 2),
+                            blurRadius: 4,
+                            color: Colors.black45,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // Role badge
+                    if (userProfile?['role'] != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4A6B8A),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              userProfile?['role']?.toUpperCase() ?? 'USER',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 30),
                   ],
                 ),
-                child: Icon(
-                  Icons.camera_alt,
-                  size: 16,
-                  color: Colors.grey.shade600,
-                ),
               ),
-            ),
-          ],
+            );
+          },
         ),
-        const SizedBox(height: 16),
-
-        // Full name
-        Text(
-          '${userProfile?['first_name'] ?? ''}'
-          '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-          ' ${userProfile?['last_name'] ?? ''}'
-          '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-            height: 1.2,
-            shadows: [
-              Shadow(
-                offset: Offset(0, 2),
-                blurRadius: 4,
-                color: Colors.black45,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        // Role badge
-        if (userProfile?['role'] != null)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFF4A6B8A),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  userProfile?['role']?.toUpperCase() ?? 'USER',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        const SizedBox(height: 30),
-      ],
-    ),
-  ),
-),
 
         // --- Tabs section ---
         StatefulBuilder(
@@ -2046,7 +2906,6 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
     ),
   );
 }
-
 
 // Personal info items
 List<Widget> _buildPersonalInfoItems(BuildContext context) {
@@ -2699,7 +3558,7 @@ Widget buildEditProfileForm(
                           ),
                         ),
                       ),
-                      // Police Information Card (shown only for officers)
+                     // Police Information Card (shown only for officers)
                       if ((userProfile?['role'] ?? '') == 'officer') ...[
                         const SizedBox(height: 20),
                         Container(
@@ -2745,8 +3604,196 @@ Widget buildEditProfileForm(
                                   ],
                                 ),
                                 const SizedBox(height: 20),
-                                // Police dropdowns with FutureBuilder...
-                                // (Rest of police information section remains the same but add null checks where needed)
+                                FutureBuilder<void>(
+                                  future: _policeRanks.isEmpty ? _loadPoliceData() : null,
+                                  builder: (context, snapshot) {
+                                    if (snapshot.connectionState == ConnectionState.waiting) {
+                                      return Container(
+                                        height: 56,
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade100,
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: Colors.grey.shade200, width: 1),
+                                        ),
+                                        child: const Center(
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(strokeWidth: 2),
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'Loading ranks...',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w400,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                    return Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.grey.shade200, width: 1),
+                                      ),
+                                      child: DropdownButtonFormField<int>(
+                                        value: _selectedPoliceRankId,
+                                        decoration: InputDecoration(
+                                          labelText: 'Police Rank',
+                                          labelStyle: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.grey.shade700,
+                                          ),
+                                          border: InputBorder.none,
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                          prefixIcon: Container(
+                                            margin: const EdgeInsets.only(right: 16),
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey.shade100,
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: Icon(
+                                              Icons.military_tech_outlined,
+                                              size: 20,
+                                              color: Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ),
+                                        isExpanded: true,
+                                        items: _policeRanks
+                                            .map((rank) => DropdownMenuItem<int>(
+                                                  value: rank['id'],
+                                                  child: Text(
+                                                    rank['new_rank'] ?? 'Unknown',
+                                                    style: const TextStyle(
+                                                      fontSize: 16,
+                                                      fontWeight: FontWeight.w400,
+                                                      color: Colors.black87,
+                                                    ),
+                                                    overflow: TextOverflow.ellipsis,
+                                                    maxLines: 1,
+                                                  ),
+                                                ))
+                                            .toList(),
+                                        onChanged: (value) {
+                                          setState(() {
+                                            _selectedPoliceRankId = value;
+                                          });
+                                        },
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w400,
+                                          color: Colors.black87,
+                                        ),
+                                        dropdownColor: Colors.white,
+                                      ),
+                                    );
+                                  },
+                                ),
+                                const SizedBox(height: 16),
+                                FutureBuilder<void>(
+                                  future: _policeStations.isEmpty ? _loadPoliceData() : null,
+                                  builder: (context, snapshot) {
+                                    if (snapshot.connectionState == ConnectionState.waiting) {
+                                      return Container(
+                                        height: 56,
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade100,
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: Colors.grey.shade200, width: 1),
+                                        ),
+                                        child: const Center(
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(strokeWidth: 2),
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'Loading stations...',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w400,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                    return Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.grey.shade200, width: 1),
+                                      ),
+                                      child: DropdownButtonFormField<int>(
+                                        value: _selectedPoliceStationId,
+                                        decoration: InputDecoration(
+                                          labelText: 'Assigned Station',
+                                          labelStyle: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.grey.shade700,
+                                          ),
+                                          border: InputBorder.none,
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                          prefixIcon: Container(
+                                            margin: const EdgeInsets.only(right: 16),
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey.shade100,
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: Icon(
+                                              Icons.location_on_outlined,
+                                              size: 20,
+                                              color: Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ),
+                                        items: _policeStations
+                                            .map((station) => DropdownMenuItem<int>(
+                                                  value: station['id'],
+                                                  child: Text(
+                                                    station['name'] ?? 'Unknown',
+                                                    style: const TextStyle(
+                                                      fontSize: 16,
+                                                      fontWeight: FontWeight.w400,
+                                                      color: Colors.black87,
+                                                    ),
+                                                  ),
+                                                ))
+                                            .toList(),
+                                        onChanged: (value) {
+                                          setState(() {
+                                            _selectedPoliceStationId = value;
+                                          });
+                                        },
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w400,
+                                          color: Colors.black87,
+                                        ),
+                                        dropdownColor: Colors.white,
+                                      ),
+                                    );
+                                  },
+                                ),
                               ],
                             ),
                           ),
@@ -2879,12 +3926,11 @@ Widget _buildEnhancedTextField({
 }
 
 
-
 //PROFILE VIEW DESKTOP
 Widget buildDesktopProfileView(
   BuildContext context,
   VoidCallback onEditPressed,
-  {VoidCallback? onClosePressed, required bool isSidebarVisible} // Added isSidebarVisible
+  {VoidCallback? onClosePressed, required bool isSidebarVisible}
 ) {
   // Scroll to top when requested
   if (_shouldScrollToTop) {
@@ -2901,17 +3947,17 @@ Widget buildDesktopProfileView(
   }
 
   return Positioned(
-    left: isSidebarVisible ? 5 : 20, // Match QuickAccessDesktopScreen
+    left: isSidebarVisible ? 5 : 20,
     top: 100,
     child: GestureDetector(
-      onTap: () {}, // Prevent propagation to overlay
+      onTap: () {},
       child: Material(
-        elevation: 16, // Match QuickAccessDesktopScreen elevation
+        elevation: 16,
         borderRadius: BorderRadius.circular(16),
         shadowColor: Colors.black.withOpacity(0.3),
         child: Container(
-          width: 450, // Match QuickAccessDesktopScreen
-          height: 800, // Match QuickAccessDesktopScreen
+          width: 450,
+          height: 800,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
@@ -2919,173 +3965,127 @@ Widget buildDesktopProfileView(
           ),
           child: Column(
             children: [
-            // Header section
-Container(
-  width: double.infinity,
-  height: 280,
-  decoration: BoxDecoration(
-    borderRadius: const BorderRadius.only(
-      topLeft: Radius.circular(16),
-      topRight: Radius.circular(16),
-    ),
-    image: const DecorationImage(
-      image: AssetImage('assets/images/DARK.jpg'),
-      fit: BoxFit.cover,
-    ),
-  ),
-  child: Container(
-
-    child: Stack(
-      children: [
-        Positioned(
-          top: 16,
-          right: 16,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.close, size: 18, color: Colors.white),
-              onPressed: onClosePressed ?? () {},
-            ),
-          ),
-        ),
-        Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const SizedBox(height: 40),
-              Stack(
-                children: [
-                  Container(
+              // Header section - WRAP THIS IN StatefulBuilder
+              StatefulBuilder(
+                builder: (context, setStateHeader) {
+                  return Container(
+                    width: double.infinity,
+                    height: 280,
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.3),
-                          blurRadius: 15,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: CircleAvatar(
-                      backgroundColor: Colors.white,
-                      radius: 50,
-                      child: CircleAvatar(
-                        backgroundColor: Colors.white,
-                        radius: 47,
-                        child: Icon(
-                          _getGenderIcon(userProfile?['gender']),
-                          size: 50,
-                          color: Colors.grey.shade700,
-                        ),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(16),
+                        topRight: Radius.circular(16),
+                      ),
+                      image: const DecorationImage(
+                        image: AssetImage('assets/images/DARK.jpg'),
+                        fit: BoxFit.cover,
                       ),
                     ),
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    right: 0,
                     child: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.grey.shade300,
-                          width: 2,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            top: 16,
+                            right: 16,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                              ),
+                              child: IconButton(
+                                icon: const Icon(Icons.close, size: 18, color: Colors.white),
+                                onPressed: onClosePressed ?? () {},
+                              ),
+                            ),
+                          ),
+                          Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                const SizedBox(height: 40),
+                                // Profile avatar - DESKTOP VERSION (Centered Modal)
+                                _buildDesktopProfileAvatar(
+                                  context: context,
+                                  isSidebarVisible: isSidebarVisible,
+                                  isEditable: true,
+                                  onStateChange: setStateHeader,
+                                ),
+                                const SizedBox(height: 16),
+                                Container(
+                                  width: double.infinity,
+                                  child: Text(
+                                    '${userProfile?['first_name'] ?? ''}'
+                                    '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                                    ' ${userProfile?['last_name'] ?? ''}'
+                                    '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                      height: 1.2,
+                                      shadows: [
+                                        Shadow(
+                                          offset: Offset(0, 2),
+                                          blurRadius: 4,
+                                          color: Colors.black45,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                if (userProfile?['role'] != null)
+                                  Center(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF4A6B8A),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(0.2),
+                                            blurRadius: 4,
+                                            offset: const Offset(0, 2),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(
+                                            width: 8,
+                                            height: 8,
+                                            decoration: BoxDecoration(
+                                              color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            userProfile?['role']?.toUpperCase() ?? 'USER',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
-                      child: Icon(
-                        Icons.camera_alt,
-                        size: 16,
-                        color: Colors.grey.shade600,
-                      ),
                     ),
-                  ),
-                ],
+                  );
+                },
               ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                child: Text(
-                  '${userProfile?['first_name'] ?? ''}'
-                  '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-                  ' ${userProfile?['last_name'] ?? ''}'
-                  '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                    height: 1.2,
-                    shadows: [
-                      Shadow(
-                        offset: Offset(0, 2),
-                        blurRadius: 4,
-                        color: Colors.black45,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              if (userProfile?['role'] != null)
-                Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF4A6B8A),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.2),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          userProfile?['role']?.toUpperCase() ?? 'USER',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  ),
-),
               Expanded(
                 child: StatefulBuilder(
                   builder: (context, setState) {

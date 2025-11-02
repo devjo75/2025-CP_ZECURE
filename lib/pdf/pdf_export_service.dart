@@ -10,28 +10,37 @@ class PdfExportService {
   static const Map<String, PdfPageFormat> paperSizes = {
     'A4': PdfPageFormat.a4,
     'Letter': PdfPageFormat.letter,
-
   };
-
-  // Cache for addresses to avoid redundant API calls
-  static final Map<String, String> _addressCache = {};
 
   // Export reports to PDF with address enrichment
   static Future<void> exportReportsToPdf({
     required List<Map<String, dynamic>> reports,
     required String fileName,
     required PdfPageFormat pageFormat,
+    Map<String, String>? addressCache, // ADDED: Optional address cache
+    Function(Map<String, String>)? onCacheUpdate, // ADDED: Callback to update cache
     String? sortBy,
     bool ascending = false,
     DateTime? startDate,
     DateTime? endDate,
     Function(int current, int total)? onProgress,
   }) async {
+    // Use provided cache or create new one
+    Map<String, String> workingCache = addressCache != null 
+        ? Map.from(addressCache) 
+        : {};
+
     // Enrich reports with full addresses before generating PDF
     List<Map<String, dynamic>> enrichedReports = await _enrichReportsWithAddresses(
       reports,
+      addressCache: workingCache,
       onProgress: onProgress,
     );
+
+    // Update parent cache if new addresses were fetched
+    if (onCacheUpdate != null && addressCache != null) {
+      onCacheUpdate(workingCache);
+    }
 
     final pdf = pw.Document();
 
@@ -42,7 +51,7 @@ class PdfExportService {
     }
 
     // Split data into pages
-    const int rowsPerPage = 15; // Adjust based on page size
+    const int rowsPerPage = 15;
     int totalPages = (sortedReports.length / rowsPerPage).ceil();
 
     for (int pageIndex = 0; pageIndex < totalPages; pageIndex++) {
@@ -60,7 +69,6 @@ class PdfExportService {
             return pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
-                // Header
                 _buildPdfHeader(
                   pageIndex + 1,
                   totalPages,
@@ -69,13 +77,8 @@ class PdfExportService {
                   endDate,
                 ),
                 pw.SizedBox(height: 20),
-                
-                // Table
-                _buildPdfTable(pageReports),
-                
+                _buildPdfTable(pageReports, startIndex: startIndex), // ADDED: Pass startIndex
                 pw.Spacer(),
-                
-                // Footer
                 _buildPdfFooter(),
               ],
             );
@@ -84,16 +87,18 @@ class PdfExportService {
       );
     }
 
-    // Save or print PDF
+    // Save PDF - Use Printing.layoutPdf for both web and mobile
     await Printing.layoutPdf(
       onLayout: (format) async => pdf.save(),
       name: fileName,
+      format: pageFormat,
     );
   }
 
   // Enrich reports with full address information
   static Future<List<Map<String, dynamic>>> _enrichReportsWithAddresses(
     List<Map<String, dynamic>> reports, {
+    required Map<String, String> addressCache,
     Function(int current, int total)? onProgress,
   }) async {
     List<Map<String, dynamic>> enrichedReports = [];
@@ -102,21 +107,20 @@ class PdfExportService {
     for (var report in reports) {
       Map<String, dynamic> enrichedReport = Map.from(report);
       
-      // Check if full_address_display is already available and not empty
       if ((enrichedReport['full_address_display']?.toString() ?? '').isEmpty) {
-        // Try to get address from location coordinates
         if (enrichedReport['location'] != null) {
           try {
-            String address = await _getAddressFromCoordinates(enrichedReport['location']);
+            String address = await _getAddressFromCoordinates(
+              enrichedReport['location'],
+              addressCache: addressCache,
+            );
             enrichedReport['full_address_display'] = address;
           } catch (e) {
             print('Error getting address for report ${enrichedReport['id']}: $e');
-            // Fallback to cached barangay or Unknown
             enrichedReport['full_address_display'] = 
               enrichedReport['cached_barangay']?.toString() ?? 'Unknown Location';
           }
         } else {
-          // No location data, use cached barangay or Unknown
           enrichedReport['full_address_display'] = 
             enrichedReport['cached_barangay']?.toString() ?? 'Unknown Location';
         }
@@ -125,7 +129,6 @@ class PdfExportService {
       enrichedReports.add(enrichedReport);
       processedCount++;
       
-      // Report progress if callback provided
       if (onProgress != null) {
         onProgress(processedCount, reports.length);
       }
@@ -135,7 +138,10 @@ class PdfExportService {
   }
 
   // Get address from coordinates using Nominatim
-  static Future<String> _getAddressFromCoordinates(dynamic location) async {
+  static Future<String> _getAddressFromCoordinates(
+    dynamic location, {
+    required Map<String, String> addressCache,
+  }) async {
     if (location == null) return 'Unknown Location';
    
     try {
@@ -145,15 +151,13 @@ class PdfExportService {
           final lng = coords[0];
           final lat = coords[1];
          
-          // Create a cache key
           final cacheKey = '${lat}_${lng}';
          
-          // Return cached address if available
-          if (_addressCache.containsKey(cacheKey)) {
-            return _addressCache[cacheKey]!;
+          // Check cache first
+          if (addressCache.containsKey(cacheKey)) {
+            return addressCache[cacheKey]!;
           }
          
-          // Add a small delay to respect Nominatim's usage policy (1 request per second)
           await Future.delayed(const Duration(milliseconds: 1000));
          
           final response = await http.get(
@@ -165,31 +169,26 @@ class PdfExportService {
             final address = data['address'] as Map<String, dynamic>?;
            
             if (address != null) {
-              // Build detailed address
               final List<String> addressParts = [];
              
-              // Add house number + road
               if (address['house_number'] != null && address['road'] != null) {
                 addressParts.add('${address['house_number']} ${address['road']}');
               } else if (address['road'] != null) {
                 addressParts.add(address['road'].toString());
               }
              
-              // Add suburb/neighbourhood
               if (address['suburb'] != null) {
                 addressParts.add(address['suburb'].toString());
               } else if (address['neighbourhood'] != null) {
                 addressParts.add(address['neighbourhood'].toString());
               }
              
-              // Add village/hamlet if available
               if (address['village'] != null) {
                 addressParts.add(address['village'].toString());
               } else if (address['hamlet'] != null) {
                 addressParts.add(address['hamlet'].toString());
               }
              
-              // Add barangay/city district
               String? barangay;
               if (address['city_district'] != null) {
                 barangay = address['city_district'].toString();
@@ -201,7 +200,6 @@ class PdfExportService {
                 addressParts.add(barangay);
               }
              
-              // Add city/municipality
               if (address['city'] != null) {
                 addressParts.add(address['city'].toString());
               } else if (address['municipality'] != null) {
@@ -210,33 +208,29 @@ class PdfExportService {
                 addressParts.add(address['town'].toString());
               }
              
-              // Add state/region
               if (address['state'] != null) {
                 addressParts.add(address['state'].toString());
               } else if (address['region'] != null) {
                 addressParts.add(address['region'].toString());
               }
              
-              // Add postal code if available
               if (address['postcode'] != null) {
                 addressParts.add(address['postcode'].toString());
               }
              
-              // Add country
               if (address['country'] != null) {
                 addressParts.add(address['country'].toString());
               }
              
               final fullAddress = addressParts.join(', ');
              
-              // Cache and return
-              _addressCache[cacheKey] = fullAddress.isNotEmpty ? fullAddress : data['display_name'] ?? 'Unknown Location';
-              return _addressCache[cacheKey]!;
+              // Cache the result
+              addressCache[cacheKey] = fullAddress.isNotEmpty ? fullAddress : data['display_name'] ?? 'Unknown Location';
+              return addressCache[cacheKey]!;
             }
            
-            // Fallback to display_name if address parsing fails
             final displayName = data['display_name']?.toString() ?? 'Unknown Location';
-            _addressCache[cacheKey] = displayName;
+            addressCache[cacheKey] = displayName;
             return displayName;
           }
         }
@@ -309,47 +303,42 @@ class PdfExportService {
   }
 
   // Build PDF table
-  static pw.Widget _buildPdfTable(List<Map<String, dynamic>> reports) {
-  return pw.Table(
-    border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
-    columnWidths: {
-      0: const pw.FlexColumnWidth(0.5), // Number column
-      1: const pw.FlexColumnWidth(2),   // Crime Type
-      2: const pw.FlexColumnWidth(1.5), // Category
-      3: const pw.FlexColumnWidth(1),   // Level
-      4: const pw.FlexColumnWidth(1.5), // Status
-      5: const pw.FlexColumnWidth(2.5), // Location
-      6: const pw.FlexColumnWidth(2),   // Time
-      7: const pw.FlexColumnWidth(1.5), // Reporter
-    },
-    children: [
-      // Header row
-      pw.TableRow(
-        decoration: const pw.BoxDecoration(color: PdfColors.grey200),
-        children: [
-          _buildTableHeader('#'), // 👈 New column header
-          _buildTableHeader('Crime Type'),
-          _buildTableHeader('Category'),
-          _buildTableHeader('Level'),
-          _buildTableHeader('Status'),
-          _buildTableHeader('Location'),
-          _buildTableHeader('Time of Incident'),
-          _buildTableHeader('Reporter'),
-        ],
-      ),
-      // Data rows with index numbers
-      ...reports.asMap().entries.map((entry) {
-        final index = entry.key + 1; // Start numbering from 1
-        final report = entry.value;
-        return _buildTableRow(report, index);
-      // ignore: unnecessary_to_list_in_spreads
-      }).toList(),
-    ],
-  );
-}
+  static pw.Widget _buildPdfTable(List<Map<String, dynamic>> reports, {int startIndex = 0}) { // ADDED: startIndex parameter
+    return pw.Table(
+      border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+      columnWidths: {
+        0: const pw.FlexColumnWidth(0.5),
+        1: const pw.FlexColumnWidth(2),
+        2: const pw.FlexColumnWidth(1.5),
+        3: const pw.FlexColumnWidth(1),
+        4: const pw.FlexColumnWidth(1.5),
+        5: const pw.FlexColumnWidth(2.5),
+        6: const pw.FlexColumnWidth(2),
+        7: const pw.FlexColumnWidth(1.5),
+      },
+      children: [
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+          children: [
+            _buildTableHeader('#'),
+            _buildTableHeader('Crime Type'),
+            _buildTableHeader('Category'),
+            _buildTableHeader('Level'),
+            _buildTableHeader('Status'),
+            _buildTableHeader('Location'),
+            _buildTableHeader('Time of Incident'),
+            _buildTableHeader('Reporter'),
+          ],
+        ),
+        ...reports.asMap().entries.map((entry) {
+          final index = startIndex + entry.key + 1; // CHANGED: Add startIndex to continue numbering
+          final report = entry.value;
+          return _buildTableRow(report, index);
+        }).toList(),
+      ],
+    );
+  }
 
-
-  // Build table header cell
   static pw.Widget _buildTableHeader(String text) {
     return pw.Padding(
       padding: const pw.EdgeInsets.all(6),
@@ -363,45 +352,42 @@ class PdfExportService {
     );
   }
 
-  // Build table row
   static pw.TableRow _buildTableRow(Map<String, dynamic> report, int index) {
-  return pw.TableRow(
-    children: [
-      _buildTableCell(index.toString()), // 👈 New number cell
-      _buildTableCell(
-        report['crime_type']?['name']?.toString() ?? 'Unknown',
-      ),
-      _buildTableCell(
-        report['crime_type']?['category']?.toString() ?? 'N/A',
-      ),
-      _buildTableCell(
-        (report['crime_type']?['level']?.toString() ?? 'N/A').toUpperCase(),
-      ),
-      _buildTableCell(
-        '${(report['status']?.toString() ?? 'PENDING').toUpperCase()}\n${(report['active_status']?.toString() ?? 'ACTIVE').toUpperCase()}',
-      ),
-      _buildTableCell(
-        (report['full_address_display']?.toString() ?? '').isNotEmpty
-            ? report['full_address_display'].toString()
-            : (report['cached_barangay']?.toString() ?? '').isNotEmpty
-                ? report['cached_barangay'].toString()
-                : 'Unknown Location',
-        fontSize: 7,
-      ),
-      _buildTableCell(
-        report['time'] != null
-            ? DateFormat('MMM d, yyyy\nh:mm a').format(DateTime.parse(report['time']))
-            : 'N/A',
-      ),
-      _buildTableCell(
-        _getReporterName(report),
-      ),
-    ],
-  );
-}
+    return pw.TableRow(
+      children: [
+        _buildTableCell(index.toString()),
+        _buildTableCell(
+          report['crime_type']?['name']?.toString() ?? 'Unknown',
+        ),
+        _buildTableCell(
+          report['crime_type']?['category']?.toString() ?? 'N/A',
+        ),
+        _buildTableCell(
+          (report['crime_type']?['level']?.toString() ?? 'N/A').toUpperCase(),
+        ),
+        _buildTableCell(
+          '${(report['status']?.toString() ?? 'PENDING').toUpperCase()}\n${(report['active_status']?.toString() ?? 'ACTIVE').toUpperCase()}',
+        ),
+        _buildTableCell(
+          (report['full_address_display']?.toString() ?? '').isNotEmpty
+              ? report['full_address_display'].toString()
+              : (report['cached_barangay']?.toString() ?? '').isNotEmpty
+                  ? report['cached_barangay'].toString()
+                  : 'Unknown Location',
+          fontSize: 7,
+        ),
+        _buildTableCell(
+          report['time'] != null
+              ? DateFormat('MMM d, yyyy\nh:mm a').format(DateTime.parse(report['time']))
+              : 'N/A',
+        ),
+        _buildTableCell(
+          _getReporterName(report),
+        ),
+      ],
+    );
+  }
 
-
-  // Build table cell
   static pw.Widget _buildTableCell(String text, {double fontSize = 7}) {
     return pw.Padding(
       padding: const pw.EdgeInsets.all(4),
@@ -414,7 +400,6 @@ class PdfExportService {
     );
   }
 
-  // Get reporter name
   static String _getReporterName(Map<String, dynamic> report) {
     if (report['reporter'] != null && report['reported_by'] != null) {
       final firstName = report['reporter']['first_name']?.toString() ?? '';
@@ -428,7 +413,6 @@ class PdfExportService {
     return 'Admin';
   }
 
-  // Build PDF footer
   static pw.Widget _buildPdfFooter() {
     return pw.Column(
       children: [
@@ -451,7 +435,6 @@ class PdfExportService {
     );
   }
 
-  // Sort reports
   static void _sortReports(
     List<Map<String, dynamic>> reports,
     String sortBy,
@@ -515,10 +498,5 @@ class PdfExportService {
       int comparison = aValue.toString().compareTo(bValue.toString());
       return ascending ? comparison : -comparison;
     });
-  }
-
-  // Clear address cache (useful for memory management)
-  static void clearAddressCache() {
-    _addressCache.clear();
   }
 }

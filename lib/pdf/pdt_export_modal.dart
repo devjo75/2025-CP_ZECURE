@@ -9,6 +9,8 @@ class PdfExportModal {
     required List<Map<String, dynamic>> reports,
     DateTime? startDate,
     DateTime? endDate,
+    Map<String, String>? addressCache, // ADDED
+    Function(Map<String, String>)? onCacheUpdate, // ADDED
   }) {
     showDialog(
       context: context,
@@ -16,6 +18,8 @@ class PdfExportModal {
         reports: reports,
         startDate: startDate,
         endDate: endDate,
+        addressCache: addressCache, // ADDED
+        onCacheUpdate: onCacheUpdate, // ADDED
       ),
     );
   }
@@ -25,11 +29,15 @@ class _PdfExportDialog extends StatefulWidget {
   final List<Map<String, dynamic>> reports;
   final DateTime? startDate;
   final DateTime? endDate;
+  final Map<String, String>? addressCache; // ADDED
+  final Function(Map<String, String>)? onCacheUpdate; // ADDED
 
   const _PdfExportDialog({
     required this.reports,
     this.startDate,
     this.endDate,
+    this.addressCache, // ADDED
+    this.onCacheUpdate, // ADDED
   });
 
   @override
@@ -826,74 +834,76 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
   }
 
   Future<void> _exportPdf() async {
-    final filteredReports = _getFilteredReports();
+  final filteredReports = _getFilteredReports();
 
-    if (filteredReports.isEmpty) {
+  if (filteredReports.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('No reports match the selected filters'),
+        backgroundColor: Color(0xFFEF4444),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
+
+  setState(() {
+    _isExporting = true;
+    _exportingMessage = 'Preparing PDF...';
+  });
+
+  try {
+    final pageFormat = PdfExportService.paperSizes[_selectedPaperSize]!;
+    final fileName = 'crime_reports_${DateFormat('yyyy-MM-dd_HHmmss').format(DateTime.now())}.pdf';
+
+    await PdfExportService.exportReportsToPdf(
+      reports: filteredReports,
+      fileName: fileName,
+      pageFormat: pageFormat,
+      addressCache: widget.addressCache, // ADDED: Pass cache from parent
+      onCacheUpdate: widget.onCacheUpdate, // ADDED: Pass callback
+      sortBy: _selectedSortBy,
+      ascending: _sortAscending,
+      startDate: widget.startDate,
+      endDate: widget.endDate,
+      onProgress: (current, total) {
+        if (mounted) {
+          setState(() {
+            _exportingMessage = 'Fetching Addresses: $current of $total';
+          });
+        }
+      },
+    );
+
+    if (mounted) {
+      Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No reports match the selected filters'),
-          backgroundColor: Color(0xFFEF4444),
+        SnackBar(
+          content: Text('PDF exported successfully (${filteredReports.length} reports)'),
+          backgroundColor: const Color(0xFF10B981),
           behavior: SnackBarBehavior.floating,
         ),
       );
-      return;
     }
-
-    setState(() {
-      _isExporting = true;
-      _exportingMessage = 'Preparing PDF...'; // Initial message
-    });
-
-    try {
-      final pageFormat = PdfExportService.paperSizes[_selectedPaperSize]!;
-      final fileName = 'crime_reports_${DateFormat('yyyy-MM-dd_HHmmss').format(DateTime.now())}.pdf';
-
-      await PdfExportService.exportReportsToPdf(
-        reports: filteredReports,
-        fileName: fileName,
-        pageFormat: pageFormat,
-        sortBy: _selectedSortBy,
-        ascending: _sortAscending,
-        startDate: widget.startDate,
-        endDate: widget.endDate,
-        onProgress: (current, total) { // ADDED: Progress callback
-          if (mounted) {
-            setState(() {
-              _exportingMessage = 'Fetching Addresses: $current of $total';
-            });
-          }
-        },
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error exporting PDF: $e'),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
-
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('PDF exported successfully (${filteredReports.length} reports)'),
-            backgroundColor: const Color(0xFF10B981),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error exporting PDF: $e'),
-            backgroundColor: const Color(0xFFEF4444),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isExporting = false;
-          _exportingMessage = ''; // Reset message
-        });
-      }
+    }
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isExporting = false;
+        _exportingMessage = '';
+      });
     }
   }
+}
 }
 
 class _MultiSelectDialog extends StatefulWidget {

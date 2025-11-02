@@ -12,6 +12,7 @@ class MiniLegend extends StatefulWidget {
 
 class _MiniLegendState extends State<MiniLegend> with SingleTickerProviderStateMixin {
   bool _isExpanded = true; // Default to expanded
+  bool _showCrimeTypes = true; // Toggle between crime types and safe spots
   late AnimationController _animationController;
   late Animation<double> _expandAnimation;
 
@@ -45,6 +46,12 @@ class _MiniLegendState extends State<MiniLegend> with SingleTickerProviderStateM
       } else {
         _animationController.reverse();
       }
+    });
+  }
+
+  void _toggleView() {
+    setState(() {
+      _showCrimeTypes = !_showCrimeTypes;
     });
   }
 
@@ -104,7 +111,7 @@ class _MiniLegendState extends State<MiniLegend> with SingleTickerProviderStateM
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Crime Types',
+                            _showCrimeTypes ? 'Crime Types' : 'Safe Spots',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
@@ -134,7 +141,98 @@ class _MiniLegendState extends State<MiniLegend> with SingleTickerProviderStateM
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (filterService.isShowingCrimes) ...[
+                        // Toggle button between Crime Types and Safe Spots
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    if (!_showCrimeTypes) _toggleView();
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: _showCrimeTypes
+                                          ? Colors.blue.shade600
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.warning_rounded,
+                                          size: 14,
+                                          color: _showCrimeTypes
+                                              ? Colors.white
+                                              : Colors.grey.shade600,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Crime',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: _showCrimeTypes
+                                                ? Colors.white
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    if (_showCrimeTypes) _toggleView();
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: !_showCrimeTypes
+                                          ? Colors.green.shade600
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.shield_rounded,
+                                          size: 14,
+                                          color: !_showCrimeTypes
+                                              ? Colors.white
+                                              : Colors.grey.shade600,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Safe',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: !_showCrimeTypes
+                                                ? Colors.white
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        if (_showCrimeTypes) ...[
                           // Crime Severity Legend
                           _buildSectionTitle('Severity Levels'),
                           const SizedBox(height: 8),

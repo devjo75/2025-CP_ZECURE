@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:zecure/pdf/pdt_export_modal.dart';
@@ -82,6 +85,7 @@ String _selectedOfficerRank = 'All Ranks';
 String _selectedOfficerStation = 'All Stations';
 
 
+
   // Animation controllers
   late AnimationController _fadeController;
   late AnimationController _slideController;
@@ -153,38 +157,57 @@ List<String> _availableCategories = ['All Categories'];
 List<String> _availableActivityStatuses = ['All Activity'];
 
 
+// Method to get the current address cache for PDF export
+Map<String, String> getAddressCacheForPdfExport() {
+  return Map.from(_addressCache);
+}
 
+// Method to update address cache from PDF export (if new addresses were fetched)
+void updateAddressCacheFromPdfExport(Map<String, String> pdfCache) {
+  _addressCache.addAll(pdfCache);
+  // Save to persistent storage
+  _saveCachedLocations();
+}
 
 
 
 
 @override
-  void initState() {
-    super.initState();
-    
-    // Initialize dashboard dates
-    _dashboardStartDate = DateTime(_dashboardStartDate.year, _dashboardStartDate.month, _dashboardStartDate.day);
-    _dashboardEndDate = DateTime(_dashboardEndDate.year, _dashboardEndDate.month, _dashboardEndDate.day);
+void initState() {
+  super.initState();
+  
+  // Initialize dates
+  _dashboardStartDate = DateTime(_dashboardStartDate.year, _dashboardStartDate.month, _dashboardStartDate.day);
+  _dashboardEndDate = DateTime(_dashboardEndDate.year, _dashboardEndDate.month, _dashboardEndDate.day);
+  _reportsStartDate = DateTime(_reportsStartDate.year, _reportsStartDate.month, _reportsStartDate.day);
+  _reportsEndDate = DateTime(_reportsEndDate.year, _reportsEndDate.month, _reportsEndDate.day);
+  _startDate = _dashboardStartDate;
+  _endDate = _dashboardEndDate;
+  
+  _initAnimations();
+  
+  // CRITICAL: Load cache first and wait for it
+  _initializeData();
+  
+  _loadCurrentUserProfile();
+  
+  // Add listeners
+  _userSearchController.addListener(_filterUsers);
+  _reportSearchController.addListener(_filterReports);
+  _safeSpotSearchController.addListener(_filterSafeSpots);
+  _officerSearchController.addListener(_filterOfficers);
+}
 
-    // Initialize reports dates
-    _reportsStartDate = DateTime(_reportsStartDate.year, _reportsStartDate.month, _reportsStartDate.day);
-    _reportsEndDate = DateTime(_reportsEndDate.year, _reportsEndDate.month, _reportsEndDate.day);
+// Add this new method:
+Future<void> _initializeData() async {
+  // Load cached locations first
+  await _loadCachedLocations();
+  
+  // Then load dashboard data
+  _loadDashboardData();
+}
 
-    // Keep old variables for backward compatibility (initially same as dashboard)
-    _startDate = _dashboardStartDate;
-    _endDate = _dashboardEndDate;
-    
-    
-    _initAnimations();
-    _loadDashboardData();
-    _loadCurrentUserProfile();
-    
-    // Add listeners for search controllers
-    _userSearchController.addListener(_filterUsers);
-    _reportSearchController.addListener(_filterReports);
-    _safeSpotSearchController.addListener(_filterSafeSpots);
-    _officerSearchController.addListener(_filterOfficers);
-  }
+
 
   void _initAnimations() {
     _fadeController = AnimationController(
@@ -573,6 +596,7 @@ Future<void> _cacheSafeSpotBarangayData() async {
   setState(() => _isLoadingSafeSpotBarangays = true);
   
   int processedCount = 0;
+  int newCacheCount = 0;
   
   for (var safeSpot in _safeSpotsData) {
     if (safeSpot['location'] != null) {
@@ -587,6 +611,7 @@ Future<void> _cacheSafeSpotBarangayData() async {
           
           _safeSpotBarangayCache[cacheKey] = barangay;
           safeSpot['cached_barangay'] = barangay;
+          newCacheCount++;
         }
         
         processedCount++;
@@ -615,7 +640,14 @@ Future<void> _cacheSafeSpotBarangayData() async {
   
   // Refresh filters after all barangays are cached
   _filterSafeSpots();
+  
+  // Save to persistent storage if we cached any new locations
+  if (newCacheCount > 0) {
+    print('Cached $newCacheCount new safe spot locations, saving to persistent storage...');
+    await _saveCachedLocations();
+  }
 }
+
 
 // UPDATE YOUR _loadSafeSpotsData METHOD
 Future<void> _loadSafeSpotsData() async {
@@ -910,42 +942,49 @@ String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const 
     }
   }
 
-  Future<void> _loadDashboardData() async {
-    setState(() {
-      _isLoading = true;
-      _addressCache.clear();
+
+Future<void> _loadDashboardData() async {
+  setState(() {
+    _isLoading = true;
+  });
+  try {
+    await Future.wait([
+      _loadUserStats(),
+      _loadCrimeStats(),
+      _loadUsersData(),
+      _loadReportStats(),
+      _loadActivityStats(),
+      _loadHotspotData(),
+      _loadSafeSpotsData(),
+      _loadOfficersData(),
+      // DON'T INCLUDE _loadBarangayCrimeData() here
+    ]);
+    
+    // Start animations after data loads
+    _fadeController.forward();
+    _slideController.forward();
+    Future.delayed(const Duration(milliseconds: 300), () {
+      _chartController.forward();
     });
-    try {
-      await Future.wait([
-        _loadUserStats(),
-        _loadCrimeStats(),
-        _loadUsersData(),
-        _loadReportStats(),
-        _loadActivityStats(),
-        _loadHotspotData(),
-        _loadSafeSpotsData(),
-        _loadOfficersData(),
-      ]);
-      
-      // Start animations after data loads
-      _fadeController.forward();
-      _slideController.forward();
-      Future.delayed(const Duration(milliseconds: 300), () {
-        _chartController.forward();
-      });
-    } catch (e) {
-      print('Error loading dashboard data: $e');
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
+    
+    // Load barangay data independently AFTER main data loads
+    _loadBarangayCrimeData();
+    
+  } catch (e) {
+    print('Error loading dashboard data: $e');
+  } finally {
+    setState(() {
+      _isLoading = false;
+    });
   }
+}
 
 final Map<String, String> _addressCache = {};
 
 
 // Enhanced version - matches your map page formatting
+// Replace your _getAddressFromCoordinates method with this improved version:
+
 Future<String> _getAddressFromCoordinates(dynamic location) async {
   if (location == null) return 'Unknown Location';
   
@@ -961,95 +1000,117 @@ Future<String> _getAddressFromCoordinates(dynamic location) async {
         
         // Return cached address if available
         if (_addressCache.containsKey(cacheKey)) {
+          print('Using cached address for: $cacheKey');
           return _addressCache[cacheKey]!;
         }
         
-        // Add a small delay to respect Nominatim's usage policy
-        await Future.delayed(const Duration(milliseconds: 1000));
+        // Add delay and timeout for API call
+        await Future.delayed(const Duration(milliseconds: 1200)); // Slightly longer delay
         
-        final response = await http.get(
-          Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1'),
-        );
-
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final address = data['address'] as Map<String, dynamic>?;
+        try {
+          final response = await http.get(
+            Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1'),
+            headers: {
+              'User-Agent': 'YourAppName/1.0', // IMPORTANT: Add a user agent
+            },
+          ).timeout(
+            const Duration(seconds: 10), // Add timeout
+            onTimeout: () {
+              print('Geocoding request timed out for: $cacheKey');
+              throw TimeoutException('Request timeout');
+            },
+          );
           
-          if (address != null) {
-            // Build detailed address matching your map page format
-            final List<String> addressParts = [];
+          if (response.statusCode == 200) {
+            final data = json.decode(response.body);
+            final address = data['address'] as Map<String, dynamic>?;
             
-            // Add house number + road (like "Star Street")
-            if (address['house_number'] != null && address['road'] != null) {
-              addressParts.add('${address['house_number']} ${address['road']}');
-            } else if (address['road'] != null) {
-              addressParts.add(address['road'].toString());
+            if (address != null) {
+              // Build detailed address
+              final List<String> addressParts = [];
+              
+              // Add house number + road
+              if (address['house_number'] != null && address['road'] != null) {
+                addressParts.add('${address['house_number']} ${address['road']}');
+              } else if (address['road'] != null) {
+                addressParts.add(address['road'].toString());
+              }
+              
+              // Add suburb/neighbourhood
+              if (address['suburb'] != null) {
+                addressParts.add(address['suburb'].toString());
+              } else if (address['neighbourhood'] != null) {
+                addressParts.add(address['neighbourhood'].toString());
+              }
+              
+              // Add village/hamlet
+              if (address['village'] != null) {
+                addressParts.add(address['village'].toString());
+              } else if (address['hamlet'] != null) {
+                addressParts.add(address['hamlet'].toString());
+              }
+              
+              // Add barangay/city district
+              String? barangay;
+              if (address['city_district'] != null) {
+                barangay = address['city_district'].toString();
+              } else if (address['quarter'] != null) {
+                barangay = address['quarter'].toString();
+              }
+              
+              if (barangay != null && !addressParts.contains(barangay)) {
+                addressParts.add(barangay);
+              }
+              
+              // Add city/municipality
+              if (address['city'] != null) {
+                addressParts.add(address['city'].toString());
+              } else if (address['municipality'] != null) {
+                addressParts.add(address['municipality'].toString());
+              } else if (address['town'] != null) {
+                addressParts.add(address['town'].toString());
+              }
+              
+              // Add state/region
+              if (address['state'] != null) {
+                addressParts.add(address['state'].toString());
+              } else if (address['region'] != null) {
+                addressParts.add(address['region'].toString());
+              }
+              
+              // Add postal code
+              if (address['postcode'] != null) {
+                addressParts.add(address['postcode'].toString());
+              }
+              
+              // Add country
+              if (address['country'] != null) {
+                addressParts.add(address['country'].toString());
+              }
+              
+              final fullAddress = addressParts.join(', ');
+              
+              // Cache and save
+              _addressCache[cacheKey] = fullAddress.isNotEmpty ? fullAddress : data['display_name'] ?? 'Unknown Location';
+              
+              // Save to persistent storage immediately
+              _saveCachedLocations();
+              
+              return _addressCache[cacheKey]!;
             }
             
-            // Add suburb/neighbourhood (like "Tumaga Por Centro")
-            if (address['suburb'] != null) {
-              addressParts.add(address['suburb'].toString());
-            } else if (address['neighbourhood'] != null) {
-              addressParts.add(address['neighbourhood'].toString());
-            }
-            
-            // Add village/hamlet if available (additional local area detail)
-            if (address['village'] != null) {
-              addressParts.add(address['village'].toString());
-            } else if (address['hamlet'] != null) {
-              addressParts.add(address['hamlet'].toString());
-            }
-            
-            // Add barangay/city district (like "Tumaga")
-            // Check multiple possible keys for barangay
-            String? barangay;
-            if (address['city_district'] != null) {
-              barangay = address['city_district'].toString();
-            } else if (address['quarter'] != null) {
-              barangay = address['quarter'].toString();
-            }
-            
-            if (barangay != null && !addressParts.contains(barangay)) {
-              addressParts.add(barangay);
-            }
-            
-            // Add city/municipality (always "Zamboanga City")
-            if (address['city'] != null) {
-              addressParts.add(address['city'].toString());
-            } else if (address['municipality'] != null) {
-              addressParts.add(address['municipality'].toString());
-            } else if (address['town'] != null) {
-              addressParts.add(address['town'].toString());
-            }
-            
-            // Add state/region (like "Zamboanga Peninsula")
-            if (address['state'] != null) {
-              addressParts.add(address['state'].toString());
-            } else if (address['region'] != null) {
-              addressParts.add(address['region'].toString());
-            }
-            
-            // Add postal code if available
-            if (address['postcode'] != null) {
-              addressParts.add(address['postcode'].toString());
-            }
-            
-            // Add country
-            if (address['country'] != null) {
-              addressParts.add(address['country'].toString());
-            }
-            
-            final fullAddress = addressParts.join(', ');
-            
-            // Cache and return
-            _addressCache[cacheKey] = fullAddress.isNotEmpty ? fullAddress : data['display_name'] ?? 'Unknown Location';
-            return _addressCache[cacheKey]!;
+            // Fallback to display_name
+            final displayName = data['display_name']?.toString() ?? 'Unknown Location';
+            _addressCache[cacheKey] = displayName;
+            _saveCachedLocations();
+            return displayName;
+          } else {
+            print('Geocoding API error: ${response.statusCode}');
           }
-          
-          // Fallback to display_name if address parsing fails
-          final displayName = data['display_name']?.toString() ?? 'Unknown Location';
-          _addressCache[cacheKey] = displayName;
-          return displayName;
+        } on TimeoutException catch (e) {
+          print('Timeout fetching address: $e');
+        } catch (e) {
+          print('Error in API call: $e');
         }
       }
     }
@@ -1236,6 +1297,70 @@ String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const 
   }
 }
 
+List<Map<String, dynamic>> _barangayCrimeData = [];
+bool _isLoadingBarangayCrime = false;
+
+// UPDATED: Load barangay crime data independently without setState
+Future<void> _loadBarangayCrimeData() async {
+  // Don't use setState here to avoid full page reload
+  _isLoadingBarangayCrime = true;
+  
+  try {
+    String startDateStr = DateFormat('yyyy-MM-dd').format(_dashboardStartDate);
+    String endDateStr = DateFormat('yyyy-MM-dd').format(_dashboardEndDate.add(const Duration(days: 1)));
+
+    final response = await Supabase.instance.client
+        .from('hotspot')
+        .select('location')
+        .gte('time', startDateStr)
+        .lt('time', endDateStr)
+        .eq('status', 'approved');
+
+    Map<String, int> barangayCounts = {};
+
+    for (var report in response) {
+      if (report['location'] != null) {
+        String cacheKey = _getLocationCoordinates(report['location']);
+        
+        String barangay;
+        if (_barangayCache.containsKey(cacheKey)) {
+          barangay = _barangayCache[cacheKey]!;
+        } else {
+          String address = await _getAddressFromCoordinates(report['location']);
+          barangay = SearchAndFilterService.extractBarangayFromAddress(address);
+          _barangayCache[cacheKey] = barangay;
+        }
+        
+        if (barangay.isNotEmpty && barangay != 'Unknown') {
+          barangayCounts[barangay] = (barangayCounts[barangay] ?? 0) + 1;
+        }
+      }
+    }
+
+    List<Map<String, dynamic>> chartData = barangayCounts.entries
+        .map((e) => {'barangay': e.key, 'count': e.value})
+        .toList()
+      ..sort((a, b) => (b['count'] as int).compareTo(a['count'] as int));
+
+    // Only update the specific data, not the whole state
+    if (mounted) {
+      setState(() {
+        _barangayCrimeData = chartData;
+        _isLoadingBarangayCrime = false;
+      });
+    }
+    
+    await _saveCachedLocations();
+  } catch (e) {
+    print('Error loading barangay crime data: $e');
+    if (mounted) {
+      setState(() {
+        _isLoadingBarangayCrime = false;
+      });
+    }
+  }
+}
+
 Future<void> _loadReportsData() async {
   try {
     String startDateStr = DateFormat('yyyy-MM-dd').format(_reportsStartDate);
@@ -1270,19 +1395,19 @@ Future<void> _loadReportsData() async {
       _filteredReportsData = List.from(_reportsData);
     });
     
-    // Cache barangay data after loading reports
-    await _cacheBarangayData();
+    // Cache barangay data in the background (don't await)
+    // This allows filtering to happen immediately
+    _cacheBarangayData();
     
-    _filterReports();
   } catch (e) {
     print('Error loading reports data: $e');
   }
 }
-
 Future<void> _cacheBarangayData() async {
   setState(() => _isLoadingBarangays = true);
   
   int processedCount = 0;
+  int newCacheCount = 0; // Track how many new locations we cached
   
   for (var report in _reportsData) {
     if (report['location'] != null) {
@@ -1303,13 +1428,19 @@ Future<void> _cacheBarangayData() async {
           // Cache it
           _barangayCache[cacheKey] = barangay;
           report['cached_barangay'] = barangay;
+          newCacheCount++;
         }
         
         processedCount++;
         
-        // Update UI every 10 reports to show progress
+        // Update UI every 10 reports to show progress and re-apply filters
         if (processedCount % 10 == 0) {
-          setState(() {});
+          setState(() {
+            // Update available barangays as we go
+            _availableBarangays = SearchAndFilterService.getUniqueBarangays(_reportsData);
+          });
+          // Re-apply current filters to include newly cached barangays
+          _filterReports();
         }
         
       } catch (e) {
@@ -1323,9 +1454,284 @@ Future<void> _cacheBarangayData() async {
   
   setState(() {
     _isLoadingBarangays = false;
-    // Update available barangays based on cached data
+    // Final update of available barangays
     _availableBarangays = SearchAndFilterService.getUniqueBarangays(_reportsData);
   });
+  
+  // Final filter application to ensure everything is up to date
+  _filterReports();
+  
+  // Save to persistent storage if we cached any new locations
+  if (newCacheCount > 0) {
+    print('Cached $newCacheCount new locations, saving to persistent storage...');
+    await _saveCachedLocations();
+  }
+}
+
+Future<void> _loadCachedLocations() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Load barangay cache
+    final barangayCacheJson = prefs.getString('barangay_cache');
+    if (barangayCacheJson != null) {
+      final Map<String, dynamic> decoded = json.decode(barangayCacheJson);
+      _barangayCache.clear();
+      decoded.forEach((key, value) {
+        _barangayCache[key] = value.toString();
+      });
+      print('Loaded ${_barangayCache.length} barangay cache entries');
+    }
+    
+    // Load address cache
+    final addressCacheJson = prefs.getString('address_cache');
+    if (addressCacheJson != null) {
+      final Map<String, dynamic> decoded = json.decode(addressCacheJson);
+      _addressCache.clear();
+      decoded.forEach((key, value) {
+        _addressCache[key] = value.toString();
+      });
+      print('Loaded ${_addressCache.length} address cache entries');
+    }
+    
+    // Load safe spot barangay cache
+    final safeSpotBarangayCacheJson = prefs.getString('safespot_barangay_cache');
+    if (safeSpotBarangayCacheJson != null) {
+      final Map<String, dynamic> decoded = json.decode(safeSpotBarangayCacheJson);
+      _safeSpotBarangayCache.clear();
+      decoded.forEach((key, value) {
+        _safeSpotBarangayCache[key] = value.toString();
+      });
+      print('Loaded ${_safeSpotBarangayCache.length} safe spot barangay cache entries');
+    }
+    
+    // IMPORTANT: Add a small delay to ensure cache is fully loaded
+    await Future.delayed(const Duration(milliseconds: 100));
+    
+  } catch (e) {
+    print('Error loading cached locations: $e');
+  }
+}
+
+// Save barangay and address caches to SharedPreferences
+Future<void> _saveCachedLocations() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Save barangay cache
+    await prefs.setString('barangay_cache', json.encode(_barangayCache));
+    
+    // Save address cache
+    await prefs.setString('address_cache', json.encode(_addressCache));
+    
+    // Save safe spot barangay cache
+    await prefs.setString('safespot_barangay_cache', json.encode(_safeSpotBarangayCache));
+    
+    print('Saved location caches to persistent storage');
+  } catch (e) {
+    print('Error saving cached locations: $e');
+  }
+}
+
+// Optional: Clear all cached locations (useful for debugging or reset)
+Future<void> _clearCachedLocations() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('barangay_cache');
+    await prefs.remove('address_cache');
+    await prefs.remove('safespot_barangay_cache');
+    
+    _barangayCache.clear();
+    _addressCache.clear();
+    _safeSpotBarangayCache.clear();
+    
+    print('Cleared all location caches');
+    
+    // Show confirmation to user
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Location cache cleared successfully'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  } catch (e) {
+    print('Error clearing cached locations: $e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error clearing cache: $e'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+}
+// Show confirmation dialog before clearing cache
+Future<void> _showClearCacheConfirmation() async {
+  final shouldClear = await showDialog<bool>(
+    context: context,
+    builder: (context) => Dialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(15),
+      ),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 400), // Changed from 500 to 400
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Title
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.delete_sweep, color: Colors.orange, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Clear Location Cache?',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              
+              // Description
+              const Text(
+                'This will remove all cached location data including:',
+                style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              
+              // Cache info rows
+              _buildCacheInfoRow(Icons.location_on, 'Report locations', _barangayCache.length),
+              const SizedBox(height: 6),
+              _buildCacheInfoRow(Icons.home, 'Addresses', _addressCache.length),
+              const SizedBox(height: 6),
+              _buildCacheInfoRow(Icons.verified_user, 'Safe spot locations', _safeSpotBarangayCache.length),
+              const SizedBox(height: 16),
+              
+              // Info box
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.info_outline, size: 20, color: Colors.blue),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Locations will be fetched again on next use.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.blue.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              
+              // Action buttons
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Cancel'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    ),
+                    child: const Text('Clear Cache'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  if (shouldClear == true) {
+    await _clearCachedLocations();
+    
+    // Refresh current page data
+    if (_currentPage == 'dashboard') {
+      _fadeController.reset();
+      _slideController.reset();
+      _chartController.reset();
+      await _loadDashboardData();
+    } else if (_currentPage == 'reports') {
+      await _loadReportsData();
+    } else if (_currentPage == 'safespots') {
+      await _loadSafeSpotsData();
+    }
+  }
+}
+
+Widget _buildCacheInfoRow(IconData icon, String label, int count) {
+  return Row(
+    children: [
+      Icon(icon, size: 16, color: Colors.grey.shade600),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          label,
+          style: TextStyle(
+            color: Colors.grey.shade700,
+            fontSize: 13,
+          ),
+        ),
+      ),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          '$count cached',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey.shade700,
+          ),
+        ),
+      ),
+    ],
+  );
 }
 
 
@@ -1387,8 +1793,6 @@ Future<void> _selectDateRange() async {
     setState(() {
       _dashboardStartDate = DateTime(picked.start.year, picked.start.month, picked.start.day);
       _dashboardEndDate = DateTime(picked.end.year, picked.end.month, picked.end.day);
-      
-      // Update old variables for backward compatibility
       _startDate = _dashboardStartDate;
       _endDate = _dashboardEndDate;
     });
@@ -1396,9 +1800,8 @@ Future<void> _selectDateRange() async {
     _fadeController.reset();
     _slideController.reset();
     _chartController.reset();
-    _addressCache.clear();
 
-    _loadDashboardData();
+    _loadDashboardData(); // This will load barangay data independently
   }
 }
 
@@ -1928,18 +2331,19 @@ void _navigateToPage(String page, {Map<String, String>? filterPresets}) {
   setState(() {
     _currentPage = page;
     _isSidebarOpen = false;
-    _addressCache.clear();
+    // DON'T CLEAR _addressCache here anymore!
+    // _addressCache.clear(); // REMOVE THIS LINE
   });
-  
+
   _sidebarController.reverse();
-  
+
   // Load data based on page, then apply or reset filters
   if (page == 'users') {
     // Reset filters if no presets provided
     if (filterPresets == null) {
       _resetUserFilters();
     }
-    
+
     _loadUsersData().then((_) {
       if (filterPresets != null) {
         setState(() {
@@ -1958,8 +2362,10 @@ void _navigateToPage(String page, {Map<String, String>? filterPresets}) {
     if (filterPresets == null) {
       _resetReportFilters();
     }
-    
+
     _loadReportsData().then((_) {
+      // Apply filter presets immediately after loading data
+      // Don't wait for barangay caching
       if (filterPresets != null) {
         setState(() {
           if (filterPresets.containsKey('status')) {
@@ -1975,6 +2381,7 @@ void _navigateToPage(String page, {Map<String, String>? filterPresets}) {
             _selectedActivityStatus = filterPresets['activity']!;
           }
         });
+        // Apply filters immediately
         _filterReports();
       }
     });
@@ -1983,7 +2390,7 @@ void _navigateToPage(String page, {Map<String, String>? filterPresets}) {
     if (filterPresets == null) {
       _resetSafeSpotFilters();
     }
-    
+
     _loadSafeSpotsData().then((_) {
       if (filterPresets != null) {
         setState(() {
@@ -2005,7 +2412,7 @@ void _navigateToPage(String page, {Map<String, String>? filterPresets}) {
     if (filterPresets == null) {
       _resetOfficerFilters();
     }
-    
+
     _loadOfficersData();
   }
 }
@@ -4545,7 +4952,6 @@ DataCell(
   );
 }
 
-
 // SAFE SPOTS PAGE MOBILE
 Widget _buildSafeSpotsPage() {
   return LayoutBuilder(
@@ -6896,61 +7302,58 @@ Widget _buildModernAppBar() {
           ),
         ),
 
-        // Dashboard Refresh Button
-        if (_currentPage == 'dashboard')
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF334155),
-              borderRadius: BorderRadius.circular(15),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white),
-              onPressed: () {
-                _fadeController.reset();
-                _slideController.reset();
-                _chartController.reset();
-                _loadDashboardData();
-              },
-              tooltip: 'Refresh Data',
-            ),
-          ),
+// Dashboard Refresh Button
+if (_currentPage == 'dashboard')
+  Container(
+    decoration: BoxDecoration(
+      color: const Color(0xFF334155),
+      borderRadius: BorderRadius.circular(15),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.1),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: IconButton(
+      icon: const Icon(Icons.refresh, color: Colors.white),
+      onPressed: _showClearCacheConfirmation, // Changed to show confirmation
+      tooltip: 'Refresh & Clear Cache',
+    ),
+  ),
 
-        // Reports Page Buttons (Desktop)
-        if (_currentPage == 'reports' && MediaQuery.of(context).size.width > 768) ...[
-          // Download PDF Button
-          Container(
-            margin: const EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF10B981),
-              borderRadius: BorderRadius.circular(15),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF10B981).withOpacity(0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.download, color: Colors.white),
-              tooltip: 'Export to PDF',
-              onPressed: () {
-                PdfExportModal.show(
-                  context: context,
-                  reports: _filteredReportsData,
-                  startDate: _reportsStartDate,
-                  endDate: _reportsEndDate,
-                );
-              },
-            ),
-          ),
+// Reports Page Buttons (Desktop)
+if (_currentPage == 'reports' && MediaQuery.of(context).size.width > 768) ...[
+  // Download PDF Button
+  Container(
+    margin: const EdgeInsets.only(right: 12),
+    decoration: BoxDecoration(
+      color: const Color(0xFF10B981),
+      borderRadius: BorderRadius.circular(15),
+      boxShadow: [
+        BoxShadow(
+          color: const Color(0xFF10B981).withOpacity(0.3),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: IconButton(
+      icon: const Icon(Icons.download, color: Colors.white),
+      tooltip: 'Export to PDF',
+      onPressed: () {
+        PdfExportModal.show(
+          context: context,
+          reports: _filteredReportsData,
+          startDate: _reportsStartDate,
+          endDate: _reportsEndDate,
+          addressCache: getAddressCacheForPdfExport(), // ADD THIS
+          onCacheUpdate: updateAddressCacheFromPdfExport, // ADD THIS
+        );
+      },
+    ),
+  ),
 
           // Calendar Button
           GestureDetector(
@@ -10222,22 +10625,398 @@ Widget _buildActivityStatusChart() {
   );
 }
 
+Widget _buildBarangayCrimeChart() {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      final screenWidth = MediaQuery.of(context).size.width;
+      final isSmallScreen = screenWidth < 600;
+      final isMediumScreen = screenWidth >= 600 && screenWidth < 900;
+
+      // Return empty SizedBox for mobile devices
+      if (isSmallScreen) {
+        return const SizedBox.shrink();
+      }
+
+      final fontSize = 11.0; // Desktop font size
+      final barWidth = isMediumScreen ? 60.0 : 70.0;
+      final barSpacing = 24.0;
+      final chartHeight = isMediumScreen ? 350.0 : 380.0;
+
+      // Create a ScrollController for desktop navigation
+      final ScrollController _scrollController = ScrollController();
+
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24.0),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with navigation buttons for desktop
+            if (!_isLoadingBarangayCrime && _barangayCrimeData.isNotEmpty) ...[
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDC2626).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.location_city,
+                      color: Color(0xFFDC2626),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Crime Reports by Barangay',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF1F2937),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Desktop Navigation Buttons
+                  Row(
+                    children: [
+                      MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () {
+                            _scrollController.animateTo(
+                              _scrollController.offset - 200,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeInOut,
+                            );
+                          },
+                          child: _LeftNavButton(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () {
+                            _scrollController.animateTo(
+                              _scrollController.offset + 200,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeInOut,
+                            );
+                          },
+                          child: _RightNavButton(),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDC2626).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFFDC2626).withOpacity(0.2),
+                      ),
+                    ),
+                    child: Text(
+                      '${_barangayCrimeData.length} Barangays',
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFFDC2626),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+            ],
+
+            // Chart with desktop buttons
+            _isLoadingBarangayCrime
+                ? SizedBox(
+                    height: chartHeight,
+                    child: const Center(
+                      child: CircularProgressIndicator(color: Color(0xFFDC2626)),
+                    ),
+                  )
+                : _barangayCrimeData.isEmpty
+                    ? SizedBox(
+                        height: 130,
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.analytics_outlined,
+                                size: 48,
+                                color: Colors.grey[400],
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No barangay crime data available',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey[600],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : SizedBox(
+                        height: chartHeight,
+                        child: Container(
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: NotificationListener<ScrollNotification>(
+                              onNotification: (notification) {
+                                return true;
+                              },
+                              child: SingleChildScrollView(
+                                controller: _scrollController,
+                                scrollDirection: Axis.horizontal,
+                                physics: const NeverScrollableScrollPhysics(),
+                                padding: const EdgeInsets.only(
+                                  left: 20,
+                                  right: 20,
+                                  top: 16,
+                                  bottom: 20,
+                                ),
+                                child: _buildChartContent(
+                                  barWidth,
+                                  barSpacing,
+                                  chartHeight,
+                                  fontSize,
+                                  false, // isSmallScreen is false for desktop
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+            // Summary stats for desktop
+            if (!_isLoadingBarangayCrime && _barangayCrimeData.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildStatItem(
+                    'Highest',
+                    _barangayCrimeData.first['count'].toString(),
+                    const Color(0xFFDC2626),
+                  ),
+                  _buildStatItem(
+                    'Total Reports',
+                    _barangayCrimeData.fold(0, (sum, item) => sum + (item['count'] as int)).toString(),
+                    const Color(0xFF6366F1),
+                  ),
+                  _buildStatItem(
+                    'Areas',
+                    _barangayCrimeData.length.toString(),
+                    const Color(0xFF10B981),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      );
+    },
+  );
+}
+// Extracted chart content widget
+Widget _buildChartContent(
+  double barWidth,
+  double barSpacing,
+  double chartHeight,
+  double fontSize,
+  bool isSmallScreen,
+) {
+  return SizedBox(
+    width: _barangayCrimeData.length * (barWidth + barSpacing) + 40,
+    height: chartHeight - 40,
+    child: AnimatedBuilder(
+      animation: _chartAnimation,
+      builder: (context, child) {
+        final maxCount = _barangayCrimeData.first['count'] as int;
+        final maxBarHeight = chartHeight - 160;
+
+        // Color based on crime severity/ranking
+        Color getColor(int count, int maxCount) {
+          final percentage = count / maxCount;
+          
+          if (percentage >= 0.8) {
+            // Highest (80-100%) - Red shades
+            return const Color(0xFFDC2626);
+          } else if (percentage >= 0.6) {
+            // High (60-80%) - Orange
+            return const Color(0xFFF97316);
+          } else if (percentage >= 0.4) {
+            // Medium-High (40-60%) - Amber
+            return const Color(0xFFF59E0B);
+          } else if (percentage >= 0.3) {
+            // Medium (30-40%) - Yellow
+            return const Color(0xFFFBBF24);
+          } else if (percentage >= 0.2) {
+            // Medium-Low (20-30%) - Blue
+            return const Color(0xFF3B82F6);
+          } else {
+            // Low (0-20%) - Green
+            return const Color(0xFF10B981);
+          }
+        }
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Bars area
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: _barangayCrimeData.asMap().entries.map((entry) {
+                  final data = entry.value;
+                  final count = data['count'] as int;
+                  final barColor = getColor(count, maxCount);
+                  final barHeight = (count / maxCount) * maxBarHeight * _chartAnimation.value;
+
+                  return Padding(
+                    padding: EdgeInsets.only(right: barSpacing),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        // Count
+                        SizedBox(
+                          height: 20,
+                          child: Text(
+                            count.toString(),
+                            style: TextStyle(
+                              fontSize: fontSize + 2,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF1F2937),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        
+                        // Bar
+                        Container(
+                          width: barWidth,
+                          height: barHeight < 8 ? 8 : barHeight,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [barColor, barColor.withOpacity(0.7)],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(8),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: barColor.withOpacity(0.3),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            
+            const SizedBox(height: 6),
+            
+            // Labels
+            SizedBox(
+              height: 60,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _barangayCrimeData.asMap().entries.map((entry) {
+                  final barangay = entry.value['barangay'] as String;
+                  
+                  return SizedBox(
+                    width: barWidth + barSpacing,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        left: isSmallScreen ? 4 : 8, 
+                        top: 4,
+                      ),
+                      child: Transform.rotate(
+                        angle: -0.5,
+                        alignment: Alignment.topLeft,
+                        child: SizedBox(
+                          width: isSmallScreen ? 70 : 85,
+                          child: Text(
+                            barangay,
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 10 : 11,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF374151),
+                              height: 1.1,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
 
 
 
 // LINE CHART FOR HOTSPOT
 
- Widget _buildHotspotTrendSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-
-  
-        _buildHotspotLineChart(),
-      ],
-    );
-  }
-
+Widget _buildHotspotTrendSection() {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // Barangay chart - FULL WIDTH, outside of padding
+      _buildBarangayCrimeChart(),
+      const SizedBox(height: 24),
+      // Line chart - normal padding
+      _buildHotspotLineChart(),
+    ],
+  );
+}
 Widget _buildHotspotLineChart() {
   if (_hotspotData.isEmpty) {
     return _buildEmptyCard('No hotspot trend data available');
@@ -10778,6 +11557,74 @@ DateTime _convertToPhilippinesTime(String utcTimeString) {
   // directly as the correct local time of incident, matching the PDF output.
   return DateTime.parse(utcTimeString);
 }
+}
+
+class _RightNavButton extends StatefulWidget {
+  @override
+  State<_RightNavButton> createState() => _RightNavButtonState();
+}
+
+class _RightNavButtonState extends State<_RightNavButton> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: _isHovered ? const Color(0xFF3B82F6) : const Color(0xFFE5E7EB),
+            width: 1,
+          ),
+        ),
+        child: Icon(
+          Icons.chevron_right,
+          color: _isHovered ? const Color(0xFF3B82F6) : const Color(0xFF6B7280),
+          size: 20,
+        ),
+      ),
+    );
+  }
+}
+
+class _LeftNavButton extends StatefulWidget {
+  @override
+  State<_LeftNavButton> createState() => _LeftNavButtonState();
+}
+
+class _LeftNavButtonState extends State<_LeftNavButton> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: _isHovered ? const Color(0xFF3B82F6) : const Color(0xFFE5E7EB),
+            width: 1,
+          ),
+        ),
+        child: Icon(
+          Icons.chevron_left,
+          color: _isHovered ? const Color(0xFF3B82F6) : const Color(0xFF6B7280),
+          size: 20,
+        ),
+      ),
+    );
+  }
 }
 
 IconData? _getActivityIcon(String key) {
