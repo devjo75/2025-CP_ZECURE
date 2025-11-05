@@ -5,12 +5,14 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/auth/auth_service.dart';
+import 'package:zecure/auth/login_screen.dart';
 import 'package:zecure/screens/admin_dashboard.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 
 
+enum PasswordButtonState {normal, changing, changed, }
 enum SaveButtonState { normal, saving, saved,  }
 enum ProfilePictureState { normal, uploading, success, error }
 
@@ -78,6 +80,19 @@ bool _isUpdatingEmail = false;
 bool _isEmailFieldReadOnly = false;
 StateSetter? _currentModalSetState;
 
+// Change Password Modal State
+final TextEditingController _currentPasswordController = TextEditingController();
+final TextEditingController _newPasswordController = TextEditingController();
+final TextEditingController _confirmPasswordController = TextEditingController();
+bool _obscureCurrentPassword = true;
+bool _obscureNewPassword = true;
+bool _obscureConfirmPassword = true;
+PasswordButtonState _passwordButtonState = PasswordButtonState.normal;
+String? _currentPasswordError;
+String? _newPasswordError;
+String? _confirmPasswordError;
+Timer? _passwordButtonStateTimer;
+
 
 
   void initControllers() {
@@ -115,15 +130,9 @@ void disposeControllers() {
   _scrollController.dispose();
   _profileViewScrollController.dispose();
   _emailController.dispose();
-  // REMOVE the OTP controllers disposal:
-  /*
-  for (var controller in _emailOtpControllers) {
-    controller.dispose();
-  }
-  for (var focusNode in _emailOtpFocusNodes) {
-    focusNode.dispose();
-  }
-  */
+  _currentPasswordController.dispose();
+  _newPasswordController.dispose();
+  _confirmPasswordController.dispose();
   _profilePictureStateTimer?.cancel();
   _buttonStateTimer?.cancel();
   _emailResendTimer?.cancel();
@@ -931,7 +940,7 @@ Widget _buildMobileProfileAvatar({
                 ],
               ),
               child: Icon(
-                hasProfilePicture ? Icons.edit : Icons.camera_alt,
+                Icons.camera_alt,  // Changed to camera icon
                 size: 16,
                 color: Colors.grey.shade600,
               ),
@@ -941,6 +950,7 @@ Widget _buildMobileProfileAvatar({
     ),
   );
 }
+
 
 // DESKTOP AVATAR - Uses centered modal
 Widget _buildDesktopProfileAvatar({
@@ -2383,6 +2393,8 @@ Future<void> refreshUserProfile() async {
     print('Error refreshing user profile: $e');
   }
 }
+
+
 void _showErrorDialog(BuildContext context, String message, {required bool isSidebarVisible}) {
   final useDesktopLayout = _shouldUseDesktopLayout(context);
 
@@ -2646,7 +2658,7 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Header section with background image - WRAP THIS IN StatefulBuilder
+        // Header section with background image and edit button
         StatefulBuilder(
           builder: (context, setStateHeader) {
             return Container(
@@ -2658,93 +2670,120 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
                   fit: BoxFit.cover,
                 ),
               ),
-              child: Container(
-                child: Column(
-                  children: [
-                    const SizedBox(height: 40),
-                    // Profile avatar - MOBILE VERSION (Bottom Sheet)
-                    _buildMobileProfileAvatar(
-                      context: context,
-                      isEditable: true,
-                      onStateChange: setStateHeader, // Use the StatefulBuilder's setState
+              child: Stack(
+                children: [
+                  // Center the main content to ensure badge alignment
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.center, // Ensure horizontal centering
+                      children: [
+                        const SizedBox(height: 40),
+                        // Profile avatar
+                        _buildMobileProfileAvatar(
+                          context: context,
+                          isEditable: true,
+                          onStateChange: setStateHeader,
+                        ),
+                        const SizedBox(height: 16),
+                        // Full name
+                        Text(
+                          '${userProfile?['first_name'] ?? ''}'
+                          '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                          ' ${userProfile?['last_name'] ?? ''}'
+                          '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                            height: 1.2,
+                            shadows: [
+                              Shadow(
+                                offset: Offset(0, 2),
+                                blurRadius: 4,
+                                color: Colors.black45,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        // Role badge
+                        if (userProfile?['role'] != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF4A6B8A),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.2),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  userProfile?['role']?.toUpperCase() ?? 'USER',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        const SizedBox(height: 30),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-
-                    // Full name
-                    Text(
-                      '${userProfile?['first_name'] ?? ''}'
-                      '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-                      ' ${userProfile?['last_name'] ?? ''}'
-                      '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
+                  ),
+                  // Edit Profile Icon Button (Top Right)
+                  Positioned(
+                    top: 20,
+                    right: 16,
+                    child: Container(
+                      decoration: BoxDecoration(
                         color: Colors.white,
-                        height: 1.2,
-                        shadows: [
-                          Shadow(
-                            offset: Offset(0, 2),
-                            blurRadius: 4,
-                            color: Colors.black45,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Role badge
-                    if (userProfile?['role'] != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF4A6B8A),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              userProfile?['role']?.toUpperCase() ?? 'USER',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
+                      child: IconButton(
+                        onPressed: onEditPressed,
+                        icon: const Icon(Icons.edit, size: 20),
+                        color: const Color.fromARGB(255, 43, 68, 105),
+                        tooltip: 'Edit Profile',
                       ),
-                    const SizedBox(height: 30),
-                  ],
-                ),
+                    ),
+                  ),
+                ],
               ),
             );
           },
         ),
-
         // --- Tabs section ---
         StatefulBuilder(
           builder: (context, setState) {
             bool showPersonalInfo = _selectedTab == 0;
-
             return Column(
               children: [
                 Container(
@@ -2811,9 +2850,7 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
                     ],
                   ),
                 ),
-
                 const SizedBox(height: 20),
-
                 // Tab content
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 20),
@@ -2839,39 +2876,9 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
             );
           },
         ),
-
         const SizedBox(height: 30),
-
-        // Edit button
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton(
-              onPressed: onEditPressed,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color.fromARGB(255, 43, 68, 105),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 2,
-              ),
-              child: const Text(
-                'Edit Profile',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-        ),
-
-        // Admin dashboard button
+        // Admin dashboard button (moved above Change Password)
         if (hasAdminPermissions) ...[
-          const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: SizedBox(
@@ -2885,26 +2892,143 @@ Widget buildProfileView(BuildContext context, bool isDesktopOrWeb, VoidCallback 
                   ),
                 ),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Theme.of(context).primaryColor),
+                  side: const BorderSide(color: Color.fromARGB(255, 43, 68, 105)),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                child: Text(
+                child: const Text(
                   'System Dashboard',
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 16,
-                    color: Theme.of(context).primaryColor,
+                    color: Color.fromARGB(255, 43, 68, 105),
                   ),
                 ),
               ),
             ),
           ),
+          const SizedBox(height: 12),
         ],
+        // Change Password Button (grey filled button)
+          Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: OutlinedButton.icon(
+              onPressed: () => showChangePasswordModal(context),
+              icon: Icon(Icons.lock_outline, size: 20, color: Colors.grey.shade800),
+              label: Text(
+                'Change Password',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                  color: Colors.grey.shade800,
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                backgroundColor: Colors.white, // White background
+                side: BorderSide(color: Colors.grey.shade800), // Dark grey border
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ),
+        // Logout Button (blue-grey background with white text/icon)
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              onPressed: () => _showLogoutConfirmation(context),
+              icon: const Icon(Icons.logout, size: 20, color: Colors.white),
+              label: const Text(
+                'Logout',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                  color: Colors.white,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color.fromARGB(255, 43, 68, 105), // Blue-grey background
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 2,
+              ),
+            ),
+          ),
+        ),
+
       ],
     ),
   );
+}
+
+void _showLogoutConfirmation(BuildContext context) async {
+  final shouldLogout = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      title: Text(
+        'Confirm Logout',
+        style: GoogleFonts.poppins(
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      content: Text(
+        'Are you sure you want to logout?',
+        style: GoogleFonts.poppins(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(
+            'Cancel',
+            style: GoogleFonts.poppins(
+              color: Colors.grey.shade600,
+            ),
+          ),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue.shade600,
+            foregroundColor: Colors.white,
+          ),
+          child: Text(
+            'Logout',
+            style: GoogleFonts.poppins(),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  if (shouldLogout == true && context.mounted) {
+    _logout(context);
+  }
+}
+
+Future<void> _logout(BuildContext context) async {
+  await _authService.signOut();
+  
+  if (context.mounted) {
+    // Navigate and remove all previous routes
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+      (route) => false,
+    );
+  }
 }
 
 // Personal info items
@@ -3965,7 +4089,7 @@ Widget buildDesktopProfileView(
           ),
           child: Column(
             children: [
-              // Header section - WRAP THIS IN StatefulBuilder
+              // Header section
               StatefulBuilder(
                 builder: (context, setStateHeader) {
                   return Container(
@@ -3981,107 +4105,128 @@ Widget buildDesktopProfileView(
                         fit: BoxFit.cover,
                       ),
                     ),
-                    child: Container(
-                      child: Stack(
-                        children: [
-                          Positioned(
-                            top: 16,
-                            right: 16,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
-                              ),
-                              child: IconButton(
-                                icon: const Icon(Icons.close, size: 18, color: Colors.white),
-                                onPressed: onClosePressed ?? () {},
-                              ),
+                    child: Stack(
+                      children: [
+                        // Close button (Top Left)
+                        Positioned(
+                          top: 16,
+                          left: 16,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                            ),
+                            child: IconButton(
+                              icon: const Icon(Icons.close, size: 18, color: Colors.white),
+                              onPressed: onClosePressed ?? () {},
                             ),
                           ),
-                          Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                const SizedBox(height: 40),
-                                // Profile avatar - DESKTOP VERSION (Centered Modal)
-                                _buildDesktopProfileAvatar(
-                                  context: context,
-                                  isSidebarVisible: isSidebarVisible,
-                                  isEditable: true,
-                                  onStateChange: setStateHeader,
+                        ),
+                        // Edit button (Top Right) - NEW
+                        Positioned(
+                          top: 16,
+                          right: 16,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.2),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
                                 ),
-                                const SizedBox(height: 16),
-                                Container(
-                                  width: double.infinity,
-                                  child: Text(
-                                    '${userProfile?['first_name'] ?? ''}'
-                                    '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
-                                    ' ${userProfile?['last_name'] ?? ''}'
-                                    '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.white,
-                                      height: 1.2,
-                                      shadows: [
-                                        Shadow(
-                                          offset: Offset(0, 2),
-                                          blurRadius: 4,
-                                          color: Colors.black45,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                if (userProfile?['role'] != null)
-                                  Center(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF4A6B8A),
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withOpacity(0.2),
-                                            blurRadius: 4,
-                                            offset: const Offset(0, 2),
-                                          ),
-                                        ],
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Container(
-                                            width: 8,
-                                            height: 8,
-                                            decoration: BoxDecoration(
-                                              color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
-                                              shape: BoxShape.circle,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            userProfile?['role']?.toUpperCase() ?? 'USER',
-                                            style: const TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                              color: Colors.white,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
                               ],
                             ),
+                            child: IconButton(
+                              onPressed: onEditPressed,
+                              icon: const Icon(Icons.edit, size: 20),
+                              color: const Color.fromARGB(255, 43, 68, 105),
+                              tooltip: 'Edit Profile',
+                            ),
                           ),
-                        ],
-                      ),
+                        ),
+                        Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const SizedBox(height: 40),
+                              // Profile avatar
+                              _buildDesktopProfileAvatar(
+                                context: context,
+                                isSidebarVisible: isSidebarVisible,
+                                isEditable: true,
+                                onStateChange: setStateHeader,
+                              ),
+                              const SizedBox(height: 16),
+                              Container(
+                                width: double.infinity,
+                                child: Text(
+                                  '${userProfile?['first_name'] ?? ''}'
+                                  '${userProfile?['middle_name'] != null ? ' ${userProfile?['middle_name']}' : ''}'
+                                  ' ${userProfile?['last_name'] ?? ''}'
+                                  '${userProfile?['ext_name'] != null ? ' ${userProfile?['ext_name']}' : ''}',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                    height: 1.2,
+                                    shadows: [
+                                      Shadow(
+                                        offset: Offset(0, 2),
+                                        blurRadius: 4,
+                                        color: Colors.black45,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              if (userProfile?['role'] != null)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF4A6B8A),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: BoxDecoration(
+                                          color: userProfile?['role'] == 'officer' ? Colors.green : Colors.lightBlueAccent,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        userProfile?['role']?.toUpperCase() ?? 'USER',
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 },
@@ -4183,30 +4328,8 @@ Widget buildDesktopProfileView(
                                   ),
                                 ),
                                 const SizedBox(height: 30),
-                                SizedBox(
-                                  width: double.infinity,
-                                  height: 50,
-                                  child: ElevatedButton(
-                                    onPressed: onEditPressed,
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color.fromARGB(255, 43, 68, 105),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      elevation: 2,
-                                    ),
-                                    child: const Text(
-                                      'Edit Profile',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 16,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ),
+                                // System Dashboard Button
                                 if (hasAdminPermissions) ...[
-                                  const SizedBox(height: 12),
                                   SizedBox(
                                     width: double.infinity,
                                     height: 50,
@@ -4218,22 +4341,72 @@ Widget buildDesktopProfileView(
                                         ),
                                       ),
                                       style: OutlinedButton.styleFrom(
-                                        side: BorderSide(color: Theme.of(context).primaryColor),
+                                        side: const BorderSide(color: Color.fromARGB(255, 43, 68, 105)),
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(12),
                                         ),
                                       ),
-                                      child: Text(
+                                      child: const Text(
                                         'System Dashboard',
                                         style: TextStyle(
                                           fontWeight: FontWeight.w600,
                                           fontSize: 16,
-                                          color: Theme.of(context).primaryColor,
+                                          color: Color.fromARGB(255, 43, 68, 105),
                                         ),
                                       ),
                                     ),
                                   ),
+                                  const SizedBox(height: 12),
                                 ],
+                                // Change Password Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () => showChangePasswordModalDesktop(context, isSidebarVisible: isSidebarVisible),
+                                    icon: Icon(Icons.lock_outline, size: 20, color: Colors.grey.shade800),
+                                    label: Text(
+                                      'Change Password',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 16,
+                                        color: Colors.grey.shade800,
+                                      ),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.white,
+                                      side: BorderSide(color: Colors.grey.shade800),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                // Logout Button
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: ElevatedButton.icon(
+                                    onPressed: () => _showLogoutConfirmation(context),
+                                    icon: const Icon(Icons.logout, size: 20, color: Colors.white),
+                                    label: const Text(
+                                      'Logout',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 16,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color.fromARGB(255, 43, 68, 105),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      elevation: 2,
+                                    ),
+                                  ),
+                                ),
                                 const SizedBox(height: 20),
                               ],
                             ),
@@ -5348,7 +5521,751 @@ String? _getPoliceStationName(int? stationId) {
 }
 
 
+//CHANGE PASSWORD MOBILE
+void showChangePasswordModal(BuildContext context) {
+  // Reset controllers and errors
+  _currentPasswordController.clear();
+  _newPasswordController.clear();
+  _confirmPasswordController.clear();
+  _obscureCurrentPassword = true;
+  _obscureNewPassword = true;
+  _obscureConfirmPassword = true;
+  _passwordButtonState = PasswordButtonState.normal;
+  _currentPasswordError = null;
+  _newPasswordError = null;
+  _confirmPasswordError = null;
 
+  showDialog(
+    context: context,
+    barrierDismissible: _passwordButtonState != PasswordButtonState.changing,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setModalState) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: MediaQuery.of(context).size.width * 0.025, // 2.5% padding = 95% width
+          vertical: 20,
+        ),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.95,
+          constraints: const BoxConstraints(maxWidth: 500), // Max width for larger screens
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF2B4469),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    topRight: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lock_outline, color: Colors.white, size: 24),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Change Password',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: _passwordButtonState == PasswordButtonState.changing 
+                          ? null 
+                          : () => Navigator.pop(context),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Content
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Info Card
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Colors.blue.shade600, size: 24),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Password must be at least 6 characters long',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.blue.shade800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // Current Password
+                      _buildPasswordField(
+                        context: context,
+                        controller: _currentPasswordController,
+                        label: 'Current Password',
+                        obscureText: _obscureCurrentPassword,
+                        errorText: _currentPasswordError,
+                        onToggleVisibility: () {
+                          setModalState(() {
+                            _obscureCurrentPassword = !_obscureCurrentPassword;
+                          });
+                        },
+                        onChanged: (value) {
+                          if (_currentPasswordError != null) {
+                            setModalState(() {
+                              _currentPasswordError = null;
+                            });
+                          }
+                        },
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // New Password
+                      _buildPasswordField(
+                        context: context,
+                        controller: _newPasswordController,
+                        label: 'New Password',
+                        obscureText: _obscureNewPassword,
+                        errorText: _newPasswordError,
+                        onToggleVisibility: () {
+                          setModalState(() {
+                            _obscureNewPassword = !_obscureNewPassword;
+                          });
+                        },
+                        onChanged: (value) {
+                          if (_newPasswordError != null) {
+                            setModalState(() {
+                              _newPasswordError = null;
+                            });
+                          }
+                        },
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Confirm Password
+                      _buildPasswordField(
+                        context: context,
+                        controller: _confirmPasswordController,
+                        label: 'Confirm New Password',
+                        obscureText: _obscureConfirmPassword,
+                        errorText: _confirmPasswordError,
+                        onToggleVisibility: () {
+                          setModalState(() {
+                            _obscureConfirmPassword = !_obscureConfirmPassword;
+                          });
+                        },
+                        onChanged: (value) {
+                          if (_confirmPasswordError != null) {
+                            setModalState(() {
+                              _confirmPasswordError = null;
+                            });
+                          }
+                        },
+                      ),
+
+                      const SizedBox(height: 30),
+
+                      // Change Password Button
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton(
+                          onPressed: _passwordButtonState != PasswordButtonState.normal
+                              ? null
+                              : () => _handleChangePassword(context, setModalState),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _getPasswordButtonColor(),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 2,
+                            disabledBackgroundColor: _getPasswordButtonColor(),
+                          ),
+                          child: _buildPasswordButtonContent(),
+                        ),
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      // Cancel Button
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: OutlinedButton(
+                          onPressed: _passwordButtonState == PasswordButtonState.changing 
+                              ? null 
+                              : () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color: _passwordButtonState == PasswordButtonState.changing 
+                                  ? Colors.grey.shade400 
+                                  : const Color(0xFF2B4469),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            'CANCEL',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                              color: _passwordButtonState == PasswordButtonState.changing 
+                                  ? Colors.grey.shade400 
+                                  : const Color(0xFF2B4469),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// Helper method for button color
+Color _getPasswordButtonColor() {
+  switch (_passwordButtonState) {
+    case PasswordButtonState.changed:
+      return Colors.grey.shade500;
+    case PasswordButtonState.changing:
+    case PasswordButtonState.normal:
+      return const Color(0xFF2B4469);
+  }
+}
+
+// Helper method for button content
+Widget _buildPasswordButtonContent() {
+  switch (_passwordButtonState) {
+    case PasswordButtonState.changing:
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
+          ),
+          SizedBox(width: 8),
+          Text(
+            'CHANGING...',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      );
+    
+    case PasswordButtonState.changed:
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          Icon(
+            Icons.check,
+            color: Colors.white,
+            size: 20,
+          ),
+          SizedBox(width: 8),
+          Text(
+            'CHANGED',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      );
+
+    case PasswordButtonState.normal:
+      return const Text(
+        'CHANGE PASSWORD',
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
+          color: Colors.white,
+        ),
+      );
+  }
+}
+
+// Add this helper method for password fields with inline error display:
+Widget _buildPasswordField({
+  required BuildContext context,
+  required TextEditingController controller,
+  required String label,
+  required bool obscureText,
+  required VoidCallback onToggleVisibility,
+  String? errorText,
+  Function(String)? onChanged,
+}) {
+  final hasError = errorText != null;
+  
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Container(
+        decoration: BoxDecoration(
+          color: hasError ? Colors.red.shade50 : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: hasError ? Colors.red.shade400 : Colors.grey.shade200,
+            width: hasError ? 2 : 1,
+          ),
+        ),
+        child: TextField(
+          controller: controller,
+          obscureText: obscureText,
+          onChanged: onChanged,
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: hasError ? Colors.red.shade700 : Colors.grey.shade700,
+            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            prefixIcon: Icon(
+              Icons.lock_outline,
+              size: 20,
+              color: hasError ? Colors.red.shade600 : Colors.grey.shade600,
+            ),
+            suffixIcon: IconButton(
+              icon: Icon(
+                obscureText ? Icons.visibility_off : Icons.visibility,
+                size: 20,
+                color: hasError ? Colors.red.shade600 : Colors.grey.shade600,
+              ),
+              onPressed: onToggleVisibility,
+            ),
+          ),
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: Colors.black87,
+          ),
+        ),
+      ),
+      if (hasError) ...[
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: Row(
+            children: [
+              Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  errorText,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.red.shade700,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
+// Add this method to handle password change with inline validation:
+Future<void> _handleChangePassword(
+  BuildContext context,
+  StateSetter setModalState,
+) async {
+  // Clear all errors first
+  setModalState(() {
+    _currentPasswordError = null;
+    _newPasswordError = null;
+    _confirmPasswordError = null;
+  });
+
+  bool hasError = false;
+
+  // Validate current password
+  if (_currentPasswordController.text.isEmpty) {
+    setModalState(() {
+      _currentPasswordError = 'Current password is required';
+    });
+    hasError = true;
+  }
+
+  // Validate new password
+  if (_newPasswordController.text.isEmpty) {
+    setModalState(() {
+      _newPasswordError = 'New password is required';
+    });
+    hasError = true;
+  } else if (_newPasswordController.text.length < 6) {
+    setModalState(() {
+      _newPasswordError = 'Password must be at least 6 characters';
+    });
+    hasError = true;
+  }
+
+  // Validate confirm password
+  if (_confirmPasswordController.text.isEmpty) {
+    setModalState(() {
+      _confirmPasswordError = 'Please confirm your new password';
+    });
+    hasError = true;
+  } else if (_confirmPasswordController.text.length < 6) {
+    setModalState(() {
+      _confirmPasswordError = 'Password must be at least 6 characters';
+    });
+    hasError = true;
+  }
+
+  // Check if passwords match
+  if (!hasError && _newPasswordController.text != _confirmPasswordController.text) {
+    setModalState(() {
+      _newPasswordError = 'Passwords do not match';
+      _confirmPasswordError = 'Passwords do not match';
+    });
+    hasError = true;
+  }
+
+  // Check if new password is same as current password
+  if (!hasError && _currentPasswordController.text == _newPasswordController.text) {
+    setModalState(() {
+      _newPasswordError = 'New password must be different from current password';
+    });
+    hasError = true;
+  }
+
+  if (hasError) return;
+
+  setModalState(() => _passwordButtonState = PasswordButtonState.changing);
+
+  try {
+    await _authService.updatePassword(
+      currentPassword: _currentPasswordController.text,
+      newPassword: _newPasswordController.text,
+    );
+
+    if (!context.mounted) return;
+
+    // Show changed state briefly
+    setModalState(() {
+      _passwordButtonState = PasswordButtonState.changed;
+    });
+
+    // Wait 1 second then close modal
+    _passwordButtonStateTimer?.cancel();
+    _passwordButtonStateTimer = Timer(const Duration(seconds: 1), () {
+      if (context.mounted) {
+        Navigator.pop(context);
+      }
+      _passwordButtonState = PasswordButtonState.normal;
+    });
+
+  } on AuthException catch (e) {
+    if (!context.mounted) return;
+    
+    // Handle specific auth errors
+    setModalState(() {
+      _passwordButtonState = PasswordButtonState.normal;
+      if (e.message.toLowerCase().contains('current password')) {
+        _currentPasswordError = e.message;
+      } else {
+        _newPasswordError = e.message;
+      }
+    });
+  } catch (e) {
+    if (!context.mounted) return;
+    
+    setModalState(() {
+      _passwordButtonState = PasswordButtonState.normal;
+      _currentPasswordError = 'Failed to change password. Please try again.';
+    });
+  }
+  }
+  
+void showChangePasswordModalDesktop(BuildContext context, {required bool isSidebarVisible}) {
+  // Reset controllers and errors
+  _currentPasswordController.clear();
+  _newPasswordController.clear();
+  _confirmPasswordController.clear();
+  _obscureCurrentPassword = true;
+  _obscureNewPassword = true;
+  _obscureConfirmPassword = true;
+  _passwordButtonState = PasswordButtonState.normal;
+  _currentPasswordError = null;
+  _newPasswordError = null;
+  _confirmPasswordError = null;
+
+  showDialog(
+    context: context,
+    barrierDismissible: _passwordButtonState != PasswordButtonState.changing,
+    barrierColor: Colors.black.withOpacity(0.3),
+    builder: (context) => StatefulBuilder(
+      builder: (context, setModalState) {
+        // Calculate position based on profile view location (same as error dialog)
+         final profileLeft = isSidebarVisible ? 310.0 : 110.0;
+        final profileWidth = 400.0;
+        final modalWidth = 400.0;
+        final centeredLeft = profileLeft + (profileWidth - modalWidth) / 2;
+        
+        return Stack(
+          children: [
+            Positioned(
+              left: centeredLeft,
+              top: 250,
+              child: Material(
+                elevation: 16,
+                borderRadius: BorderRadius.circular(16),
+                shadowColor: Colors.black.withOpacity(0.3),
+                child: Container(
+                  width: 400,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey[200]!),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Header
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF2B4469),
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(16),
+                            topRight: Radius.circular(16),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.lock_outline, color: Colors.white, size: 24),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                'Change Password',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, color: Colors.white),
+                              onPressed: _passwordButtonState == PasswordButtonState.changing 
+                                  ? null 
+                                  : () => Navigator.pop(context),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Content
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 500),
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Info Card
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.blue.shade200),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.info_outline, color: Colors.blue.shade600, size: 24),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        'Password must be at least 6 characters long',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.blue.shade800,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+                              // Current Password
+                              _buildPasswordField(
+                                context: context,
+                                controller: _currentPasswordController,
+                                label: 'Current Password',
+                                obscureText: _obscureCurrentPassword,
+                                errorText: _currentPasswordError,
+                                onToggleVisibility: () {
+                                  setModalState(() {
+                                    _obscureCurrentPassword = !_obscureCurrentPassword;
+                                  });
+                                },
+                                onChanged: (value) {
+                                  if (_currentPasswordError != null) {
+                                    setModalState(() {
+                                      _currentPasswordError = null;
+                                    });
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              // New Password
+                              _buildPasswordField(
+                                context: context,
+                                controller: _newPasswordController,
+                                label: 'New Password',
+                                obscureText: _obscureNewPassword,
+                                errorText: _newPasswordError,
+                                onToggleVisibility: () {
+                                  setModalState(() {
+                                    _obscureNewPassword = !_obscureNewPassword;
+                                  });
+                                },
+                                onChanged: (value) {
+                                  if (_newPasswordError != null) {
+                                    setModalState(() {
+                                      _newPasswordError = null;
+                                    });
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              // Confirm Password
+                              _buildPasswordField(
+                                context: context,
+                                controller: _confirmPasswordController,
+                                label: 'Confirm New Password',
+                                obscureText: _obscureConfirmPassword,
+                                errorText: _confirmPasswordError,
+                                onToggleVisibility: () {
+                                  setModalState(() {
+                                    _obscureConfirmPassword = !_obscureConfirmPassword;
+                                  });
+                                },
+                                onChanged: (value) {
+                                  if (_confirmPasswordError != null) {
+                                    setModalState(() {
+                                      _confirmPasswordError = null;
+                                    });
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 30),
+                              // Change Password Button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 50,
+                                child: ElevatedButton(
+                                  onPressed: _passwordButtonState != PasswordButtonState.normal
+                                      ? null
+                                      : () => _handleChangePassword(context, setModalState),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _getPasswordButtonColor(),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    elevation: 2,
+                                    disabledBackgroundColor: _getPasswordButtonColor(),
+                                  ),
+                                  child: _buildPasswordButtonContent(),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              // Cancel Button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 50,
+                                child: OutlinedButton(
+                                  onPressed: _passwordButtonState == PasswordButtonState.changing 
+                                      ? null 
+                                      : () => Navigator.pop(context),
+                                  style: OutlinedButton.styleFrom(
+                                    side: BorderSide(
+                                      color: _passwordButtonState == PasswordButtonState.changing 
+                                          ? Colors.grey.shade400 
+                                          : const Color(0xFF2B4469),
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'CANCEL',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 16,
+                                      color: _passwordButtonState == PasswordButtonState.changing 
+                                          ? Colors.grey.shade400 
+                                          : const Color(0xFF2B4469),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
 }
 
 // Helper function to get gender-specific icon

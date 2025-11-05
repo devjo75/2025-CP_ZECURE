@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:zecure/auth/login_screen.dart';
 import 'package:zecure/screens/map_screen.dart';
+import 'package:zecure/services/hotline_service.dart';
 
 class DesktopLandingScreen extends StatefulWidget {
   const DesktopLandingScreen({super.key});
@@ -28,6 +29,10 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
   final GlobalKey _featuresKey = GlobalKey();
   final GlobalKey _benefitsKey = GlobalKey();
   final GlobalKey _ctaKey = GlobalKey();
+
+  List<Map<String, dynamic>> _hotlines = [];
+  bool _isLoadingHotlines = false;
+  final HotlineService _hotlineService = HotlineService();
 
   int _currentPage = 0;
   Timer? _autoPlayTimer;  // Add this
@@ -254,291 +259,7 @@ Future<void> _loadCrimeData() async {
     ];
   }
 
-  final List<Map<String, dynamic>> _hotlines = [
-
-    {
-      'category': 'Emergency Ciudad Medical',
-      'numbers': [
-        {'name': 'EMS', 'number': '926-1849'},
-      ]
-    },
-
-    {
-      'category': 'ZC Mobile Force Company',
-      'numbers': [
-        {'name': '1ST ZCMFC', 'number': '0995-279-1449'},
-        {'name': '2ND ZCMFC', 'number': '0905-886-0405'},
-      ]
-    },
-    {
-      'category': 'ZC Police Office (ZCPO)',
-      'numbers': [
-        {'name': 'ZCPO', 'number': '0977-855-8138'},
-      ]
-    },
-    {
-      'category': 'Join Task Force Zamboanga',
-      'numbers': [
-        {'name': 'JTFZ', 'number': '0917-710-2326'},
-        {'name': 'JTFZ', 'number': '0916-535-8106'},
-        {'name': 'JTFZ', 'number': '0928-396-9926'},
-      ]
-    },
-
-    {
-      'category': 'CDRRMO',
-      'numbers': [
-        {'name': 'CDRRMO', 'number': '0917-711-3536'},
-        {'name': 'CDRRMO', 'number': '0918-933-7858'},
-        {'name': 'CDRRMO', 'number': '926-9274'},
-      ]
-    },
-
-    {
-      'category': 'ZCDRRMO',
-      'numbers': [
-        {'name': 'ZCDRRMO', 'number': '986-1171'},
-        {'name': 'ZCDRRMO', 'number': '826-1848'},
-        {'name': 'ZCDRRMO', 'number': '955-9801'},
-        {'name': 'ZCDRRMO', 'number': '955-3850'},
-        {'name': 'ZCDRRMO', 'number': '956-1871'},
-        {'name': 'Emergency Operations Center', 'number': '0966-731-6242'},
-        {'name': 'Emergency Operations Center', 'number': '0955-604-3882'},
-        {'name': 'Emergency Operations Center', 'number': '0925-502-3829'},
-        {'name': 'Technical Rescue/Fire Auxiliary', 'number': '0926-091-2492'},
-        {'name': 'Services/Emergency Medical', 'number': '926-1848'},
-      ]
-    },
-
-
-
-
-
-    {
-      'category': 'Police Stations',
-      'stations': [
-        {
-          'name': 'PS1-Vitali',
-          'numbers': [
-            '0935-604-9139',
-            '0988-967-3923',
-          ]
-        },
-        {
-          'name': 'PS2-Curuan',
-          'numbers': [
-            '0935-457-3483',
-            '0918-230-7135',
-          ]
-        },
-        {
-          'name': 'PS3-Sangali',
-          'numbers': [
-            '0917-146-2400',
-            '939-930-7144',
-            '955-0156',
-          ]
-        },
-        {
-          'name': 'PS4-Culianan',
-          'numbers': [
-            '0975-333-9826',
-            '0935-562-7161',
-            '955-0255',
-          ]
-        },
-        {
-          'name': 'PS5-Divisoria',
-          'numbers': [
-            '0917-837-8907',
-            '0998-967-3927',
-            '955-6887',
-          ]
-        },
-        {
-          'name': 'PS6-Tetuan',
-          'numbers': [
-            '0997-746-6666',
-            '0926-174-0151',
-            '901-0678',
-          ]
-        },
-        {
-          'name': 'PS7-Sta. Maria',
-          'numbers': [
-            '0917-397-8098',
-            '0998-967-3929',
-            '985-9001',
-          ]
-        },
-        {
-          'name': 'PS8-Sininuc',
-          'numbers': [
-            '0906-853-9806',
-            '0988-967-3930',
-            '985-9001',
-          ]
-        },
-        {
-          'name': 'PS9-Ayala',
-          'numbers': [
-            '0998-967-3931',
-            '0917-864-8553',
-            '983-0001',
-          ]
-        },
-        {
-          'name': 'PS10-Labuan',
-          'numbers': [
-            '0917-309-3887',
-            '0935-993-8033',
-          ]
-        },
-        {
-          'name': 'PS11-Central',
-          'numbers': [
-            '0917-701-4340',
-            '0998-967-3934',
-            '310-2030',
-          ]
-        },
-      ]
-    },
-
-    {
-      'category': 'Fire Department',
-      'numbers': [
-        {'name': 'Zamboanga City Fire District', 'number': '991-3255'},
-        {'name': 'Zamboanga City Fire District', 'number': '0955-781-6063'},
-      ],
-      'stations': [
-        {
-          'name': 'Putik Fire Sub-Station',
-          'numbers': [
-            '310-9797',
-          ]
-        },
-        {
-          'name': 'Lunzuran Fire Sub-Station',
-          'numbers': [
-            '310-7212',
-            '0935-454-5366',
-          ]
-        },
-        {
-          'name': 'Guiwan Fire Sub-Station',
-          'numbers': [
-            '957-4372',
-            '0916-135-2436',
-          ]
-        },
-        {
-          'name': 'Tumaga Fire Sub-Station',
-          'numbers': [
-            '991-5809',
-          ]
-        },
-        {
-          'name': 'Sta. Maria Fire Sub-Station',
-          'numbers': [
-            '985-0520',
-          ]
-        },
-        {
-          'name': 'Tetuan Fire Sub-Station',
-          'numbers': [
-            '992-0620',
-            '0906-441-1416',
-          ]
-        },
-        {
-          'name': 'Sta Catalina Fire Sub-Station',
-          'numbers': [
-            '957-3160',
-            '0995-071-7746',
-          ]
-        },
-        {
-          'name': 'Mahaman Fire Sub-Station',
-          'numbers': [
-            '0975-074-1376',
-          ]
-        },
-        {
-          'name': 'Boalan Fire Sub-Station',
-          'numbers': [
-            '957-6217',
-            '0997-703-1365',
-          ]
-        },
-        {
-          'name': 'Manicahan Fire Sub-Station',
-          'numbers': [
-            '0975-031-1372',
-          ]
-        },
-        {
-          'name': 'Quiniput Fire Sub-Station',
-          'numbers': [
-            '0975-197-3009',
-          ]
-        },
-        {
-          'name': 'Culianan Fire Sub-Station',
-          'numbers': [
-            '310-0313',
-            '0975-255-3899',
-          ]
-        },
-        {
-          'name': 'Vitalli Fire Sub-Station',
-          'numbers': [
-            '0965-185-7746',
-            '0999-518-4848',
-          ]
-        },
-        {
-          'name': 'San Jose Guling Fire Sub-Station',
-          'numbers': [
-            '0914-701-0209',
-          ]
-        },
-        {
-          'name': 'Calarian Fire Sub-Station',
-          'numbers': [
-            '0917-106-2785',
-            '957-4440',
-          ]
-        },
-        {
-          'name': 'Recodo Fire Sub-Station',
-          'numbers': [
-            '957-3729',
-            '0936-256-7071',
-          ]
-        },
-        {
-          'name': 'Talisayan Fire Sub-Station',
-          'numbers': [
-            '0936-462-2070',
-          ]
-        },
-        {
-          'name': 'Ayala Fire Sub-Station',
-          'numbers': [
-            '957-6209',
-            '0953-149-9756',
-          ]
-        },
-        {
-          'name': 'Labuan Fire Sub-Station',
-          'numbers': [
-            '0927-493-5473',
-          ]
-        },
-      ]
-    },
-  ];
+ 
 
   @override
   Widget build(BuildContext context) {
@@ -1754,109 +1475,170 @@ Widget _buildBenefitCard(Map<String, dynamic> benefit, int index) {
 }
 
 void _showHotlinesModal() {
+  // Show dialog immediately
   showDialog(
     context: context,
     builder: (context) => Dialog(
       backgroundColor: Colors.transparent,
-      child: Container(
-        width: 500,
-        height: 850,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 30,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            // Modern Header
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(24),
-                  topRight: Radius.circular(24),
+      child: StatefulBuilder(  // 👈 Add this wrapper
+        builder: (dialogContext, setDialogState) {  // 👈 Use setDialogState
+          // Start loading on first build
+          if (_hotlines.isEmpty && !_isLoadingHotlines) {
+            Future.microtask(() async {
+              setDialogState(() => _isLoadingHotlines = true);
+              try {
+                final data = await _hotlineService.fetchHotlineData();
+                setDialogState(() {
+                  _hotlines = data;
+                  _isLoadingHotlines = false;
+                });
+              } catch (e) {
+                print("Error loading hotline data: $e");
+                setDialogState(() => _isLoadingHotlines = false);
+              }
+            });
+          }
+          
+          return Container(
+            width: 500,
+            height: 850,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 30,
+                  offset: const Offset(0, 10),
                 ),
-                border: Border(
-                  bottom: BorderSide(
-                    color: Colors.grey.shade200,
-                    width: 1,
+              ],
+            ),
+            child: Column(
+              children: [
+                // Modern Header
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(24),
+                      topRight: Radius.circular(24),
+                    ),
+                    border: Border(
+                      bottom: BorderSide(
+                        color: Colors.grey.shade200,
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2B5876).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.phone_in_talk_rounded,
+                          color: Color(0xFF2B5876),
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Emergency Contacts',
+                              style: GoogleFonts.poppins(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF1a1a1a),
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Quick access to emergency services',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: Icon(Icons.close_rounded, color: Colors.grey.shade700),
+                        iconSize: 24,
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2B5876).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.phone_in_talk_rounded,
-                      color: Color(0xFF2B5876),
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Emergency Contacts',
-                          style: GoogleFonts.poppins(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: const Color(0xFF1a1a1a),
+                
+                // Scrollable list with loading state
+                Expanded(
+                  child: _isLoadingHotlines
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const CircularProgressIndicator(),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Loading hotlines...',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Quick access to emergency services',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey.shade600,
-                            fontWeight: FontWeight.w400,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: Icon(Icons.close_rounded, color: Colors.grey.shade700),
-                    iconSize: 24,
-                  ),
-                ],
-              ),
+                        )
+                      : _hotlines.isEmpty
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.phone_disabled_rounded,
+                                    size: 64,
+                                    color: Colors.grey.shade300,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'No hotlines available',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 16,
+                                      color: Colors.grey.shade600,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : ListView(
+                              padding: const EdgeInsets.all(24),
+                              children: [
+                                // 911 Emergency
+                                _buildEmergencyCard(),
+                                const SizedBox(height: 16),
+                                
+                                // All other hotlines
+                                ..._hotlines.map((hotline) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: _buildHotlineListItem(hotline),
+                                )),
+                              ],
+                            ),
+                ),
+              ],
             ),
-            
-            // Scrollable list
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.all(24),
-                children: [
-                  // 911 Emergency
-                  _buildEmergencyCard(),
-                  const SizedBox(height: 16),
-                  
-                  // All other hotlines
-                  ..._hotlines.map((hotline) => Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _buildHotlineListItem(hotline),
-                  )),
-                ],
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     ),
   );
@@ -2155,7 +1937,7 @@ Widget _buildCallToAction(double screenWidth) {
     padding: const EdgeInsets.fromLTRB(80, 100, 80, 0), // Changed: removed bottom padding
     decoration: BoxDecoration(
       image: DecorationImage(
-        image: AssetImage('assets/images/DARK.jpg'),
+        image: AssetImage('assets/images/VERYDARK.png'),
         fit: BoxFit.cover,
       ),
     ),

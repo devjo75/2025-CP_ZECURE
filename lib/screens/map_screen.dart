@@ -184,6 +184,7 @@ class _MapScreenState extends State<MapScreen> {
   // Directions state
   double _distance = 0;
   String _duration = '';
+  
 
   // Live tracking state
   StreamSubscription<Position>? _positionStream;
@@ -320,7 +321,7 @@ List<Map<String, dynamic>> get _visibleHotspots {
         })
         .take(_maxMarkersToShow)
         .toList();
-  } else if (_currentZoom < 16.0) {
+  } else if (_currentZoom < 15.5) {
     // Below zoom 16: Only show approved+active and pending (NO rejected or inactive)
     return _hotspots
         .where((h) {
@@ -9035,31 +9036,52 @@ Future<void> _logout() async {
 }
 
 //LOGOUT MODAL
-  void _showLogoutConfirmation() async {
-    final shouldLogout = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirm Logout'),
-        content: const Text('Are you sure you want to logout?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              'Logout',
-              style: TextStyle(color: Colors.red),
+void _showLogoutConfirmation() async {
+  final shouldLogout = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      title: Text(
+        'Confirm Logout',
+        style: GoogleFonts.poppins(
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      content: Text(
+        'Are you sure you want to logout?',
+        style: GoogleFonts.poppins(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(
+            'Cancel',
+            style: GoogleFonts.poppins(
+              color: Colors.grey.shade600,
             ),
           ),
-        ],
-      ),
-    );
-    if (shouldLogout == true && mounted) {
-      _logout();
-    }
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue.shade600,
+            foregroundColor: Colors.white,
+          ),
+          child: Text(
+            'Logout',
+            style: GoogleFonts.poppins(),
+          ),
+        ),
+      ],
+    ),
+  );
+  
+  if (shouldLogout == true && mounted) {
+    _logout();
   }
+}
 
   
 void _showProfileDialog() {
@@ -11377,7 +11399,7 @@ void _handleNotificationTap(Map<String, dynamic> notification) {
       // Use post frame callback to ensure UI is ready
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // Move map to safe spot location
-        _mapController.move(safeSpotPosition, 15.5);
+        _mapController.move(safeSpotPosition, 16.0);
         
         // Show safe spot details after a small delay to allow map animation
         Future.delayed(const Duration(milliseconds: 200), () {
@@ -16202,8 +16224,7 @@ Widget _buildAnimatedProximityAlert() {
     },
   );
 }
-
-// BUILD CURRENT SCREEN
+// BUILD CURRENT SCREEN - Updated to remove logout button only on mobile for logged-in users
 Widget _buildCurrentScreen(bool isDesktop) {
   switch (_currentTab) {
     case MainTab.map:
@@ -16221,43 +16242,45 @@ Widget _buildCurrentScreen(bool isDesktop) {
               child: Center(
                 child: Container(
                   width: isDesktop ? 600 : null,
-                  child: Row(
-                    children: [
-                      Expanded(child: _buildSearchBar(isWeb: isDesktop)),
-                      const SizedBox(width: 12),
-                      Container(
-                        width: 45,
-                        height: 45,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
-                              blurRadius: 12,
-                              offset: const Offset(0, 2),
+                  child: (_userProfile != null && !isDesktop)
+                      ? _buildSearchBar(isWeb: isDesktop) // Mobile logged-in: full width search bar
+                      : Row(
+                          children: [
+                            Expanded(child: _buildSearchBar(isWeb: isDesktop)),
+                            const SizedBox(width: 12),
+                            Container(
+                              width: 45,
+                              height: 45,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.08),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: IconButton(
+                                iconSize: 22,
+                                padding: EdgeInsets.zero,
+                                icon: Icon(
+                                  _userProfile == null ? Icons.login : Icons.logout,
+                                  color: Colors.grey.shade700,
+                                ),
+                                onPressed: _userProfile == null
+                                    ? () {
+                                        Navigator.pushReplacement(
+                                          context,
+                                          MaterialPageRoute(builder: (context) => const LoginScreen()),
+                                        );
+                                      }
+                                    : _showLogoutConfirmation,
+                              ),
                             ),
                           ],
                         ),
-                        child: IconButton(
-                          iconSize: 22,
-                          padding: EdgeInsets.zero,
-                          icon: Icon(
-                            _userProfile == null ? Icons.login : Icons.logout,
-                            color: Colors.grey.shade700,
-                          ),
-                          onPressed: _userProfile == null
-                              ? () {
-                                  Navigator.pushReplacement(
-                                    context,
-                                    MaterialPageRoute(builder: (context) => const LoginScreen()),
-                                  );
-                                }
-                              : _showLogoutConfirmation,
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
             ),
@@ -16504,9 +16527,17 @@ Widget _buildCurrentScreen(bool isDesktop) {
 
 Widget _buildProfileScreen() {
   if (_userProfile == null) {
-    return const Center(
-      child: Text('Please login to view profile'),
-    );
+    // Instead of showing a message, redirect to login immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const LoginScreen()),
+        );
+      }
+    });
+    // Return empty container or loading indicator while redirecting
+    return const SizedBox.shrink();
   }
 
   final isDesktop = _isDesktopScreen();

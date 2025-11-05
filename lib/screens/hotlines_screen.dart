@@ -1,724 +1,595 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:zecure/auth/auth_service.dart';
+import 'package:zecure/services/hotline_service.dart';
+import 'package:zecure/screens/hotlines_admin_screen.dart';
 
-class HotlinesScreen extends StatelessWidget {
+
+class HotlinesScreen extends StatefulWidget {
   const HotlinesScreen({super.key});
 
-  final List<Map<String, dynamic>> hotlines = const [
-    {
-      'category': 'CDRRMO',
-      'numbers': [
-        {'name': 'CDRRMO', 'number': '0917-711-3536'},
-        {'name': 'CDRRMO', 'number': '0918-933-7858'},
-        {'name': 'CDRRMO', 'number': '926-9274'},
-      ]
-    },
-    {
-      'category': 'ZCDRRMO',
-      'numbers': [
-        {'name': 'ZCDRRMO', 'number': '986-1171'},
-        {'name': 'ZCDRRMO', 'number': '826-1848'},
-        {'name': 'ZCDRRMO', 'number': '955-9801'},
-        {'name': 'ZCDRRMO', 'number': '955-3850'},
-        {'name': 'ZCDRRMO', 'number': '956-1871'},
-        {'name': 'Emergency Operations Center', 'number': '0966-731-6242'},
-        {'name': 'Emergency Operations Center', 'number': '0955-604-3882'},
-        {'name': 'Emergency Operations Center', 'number': '0925-502-3829'},
-        {'name': 'Technical Rescue/Fire Auxiliary', 'number': '0926-091-2492'},
-        {'name': 'Services/Emergency Medical', 'number': '926-1848'},
-      ]
-    },
-    {
-      'category': 'Emergency Ciudad Medical (EMS)',
-      'numbers': [
-        {'name': 'EMS', 'number': '926-1849'},
-      ]
-    },
-    {
-      'category': 'Join Task Force Zamboanga (JTFZ)',
-      'numbers': [
-        {'name': 'JTFZ', 'number': '0917-710-2326'},
-        {'name': 'JTFZ', 'number': '0916-535-8106'},
-        {'name': 'JTFZ', 'number': '0928-396-9926'},
-      ]
-    },
-    {
-      'category': 'Zamboanga City Police Office (ZCPO)',
-      'numbers': [
-        {'name': 'ZCPO', 'number': '0977-855-8138'},
-      ]
-    },
-    {
-      'category': 'Police Stations',
-      'stations': [
-        {
-          'name': 'PS1-Vitali',
-          'numbers': [
-            '0935-604-9139',
-            '0988-967-3923',
-          ]
-        },
-        {
-          'name': 'PS2-Curuan',
-          'numbers': [
-            '0935-457-3483',
-            '0918-230-7135',
-          ]
-        },
-        {
-          'name': 'PS3-Sangali',
-          'numbers': [
-            '0917-146-2400',
-            '939-930-7144',
-            '955-0156',
-          ]
-        },
-        {
-          'name': 'PS4-Culianan',
-          'numbers': [
-            '0975-333-9826',
-            '0935-562-7161',
-            '955-0255',
-          ]
-        },
-        {
-          'name': 'PS5-Divisoria',
-          'numbers': [
-            '0917-837-8907',
-            '0998-967-3927',
-            '955-6887',
-          ]
-        },
-        {
-          'name': 'PS6-Tetuan',
-          'numbers': [
-            '0997-746-6666',
-            '0926-174-0151',
-            '901-0678',
-          ]
-        },
-        {
-          'name': 'PS7-Sta. Maria',
-          'numbers': [
-            '0917-397-8098',
-            '0998-967-3929',
-            '985-9001',
-          ]
-        },
-        {
-          'name': 'PS8-Sininuc',
-          'numbers': [
-            '0906-853-9806',
-            '0988-967-3930',
-            '985-9001',
-          ]
-        },
-        {
-          'name': 'PS9-Ayala',
-          'numbers': [
-            '0998-967-3931',
-            '0917-864-8553',
-            '983-0001',
-          ]
-        },
-        {
-          'name': 'PS10-Labuan',
-          'numbers': [
-            '0917-309-3887',
-            '0935-993-8033',
-          ]
-        },
-        {
-          'name': 'PS11-Central',
-          'numbers': [
-            '0917-701-4340',
-            '0998-967-3934',
-            '310-2030',
-          ]
-        },
-      ]
-    },
-    {
-      'category': 'Zamboanga City Mobile Force Company',
-      'numbers': [
-        {'name': '1ST ZCMFC', 'number': '0995-279-1449'},
-        {'name': '2ND ZCMFC', 'number': '0905-886-0405'},
-      ]
-    },
-    {
-      'category': 'Fire Department',
-      'numbers': [
-        {'name': 'Zamboanga City Fire District', 'number': '991-3255'},
-        {'name': 'Zamboanga City Fire District', 'number': '0955-781-6063'},
-      ],
-      'stations': [
-        {
-          'name': 'Putik Fire Sub-Station',
-          'numbers': [
-            '310-9797',
-          ]
-        },
-        {
-          'name': 'Lunzuran Fire Sub-Station',
-          'numbers': [
-            '310-7212',
-            '0935-454-5366',
-          ]
-        },
-        {
-          'name': 'Guiwan Fire Sub-Station',
-          'numbers': [
-            '957-4372',
-            '0916-135-2436',
-          ]
-        },
-        {
-          'name': 'Tumaga Fire Sub-Station',
-          'numbers': [
-            '991-5809',
-          ]
-        },
-        {
-          'name': 'Sta. Maria Fire Sub-Station',
-          'numbers': [
-            '985-0520',
-          ]
-        },
-        {
-          'name': 'Tetuan Fire Sub-Station',
-          'numbers': [
-            '992-0620',
-            '0906-441-1416',
-          ]
-        },
-        {
-          'name': 'Sta Catalina Fire Sub-Station',
-          'numbers': [
-            '957-3160',
-            '0995-071-7746',
-          ]
-        },
-        {
-          'name': 'Mahaman Fire Sub-Station',
-          'numbers': [
-            '0975-074-1376',
-          ]
-        },
-        {
-          'name': 'Boalan Fire Sub-Station',
-          'numbers': [
-            '957-6217',
-            '0997-703-1365',
-          ]
-        },
-        {
-          'name': 'Manicahan Fire Sub-Station',
-          'numbers': [
-            '0975-031-1372',
-          ]
-        },
-        {
-          'name': 'Quiniput Fire Sub-Station',
-          'numbers': [
-            '0975-197-3009',
-          ]
-        },
-        {
-          'name': 'Culianan Fire Sub-Station',
-          'numbers': [
-            '310-0313',
-            '0975-255-3899',
-          ]
-        },
-        {
-          'name': 'Vitalli Fire Sub-Station',
-          'numbers': [
-            '0965-185-7746',
-            '0999-518-4848',
-          ]
-        },
-        {
-          'name': 'San Jose Guling Fire Sub-Station',
-          'numbers': [
-            '0914-701-0209',
-          ]
-        },
-        {
-          'name': 'Calarian Fire Sub-Station',
-          'numbers': [
-            '0917-106-2785',
-            '957-4440',
-          ]
-        },
-        {
-          'name': 'Recodo Fire Sub-Station',
-          'numbers': [
-            '957-3729',
-            '0936-256-7071',
-          ]
-        },
-        {
-          'name': 'Talisayan Fire Sub-Station',
-          'numbers': [
-            '0936-462-2070',
-          ]
-        },
-        {
-          'name': 'Ayala Fire Sub-Station',
-          'numbers': [
-            '957-6209',
-            '0953-149-9756',
-          ]
-        },
-        {
-          'name': 'Labuan Fire Sub-Station',
-          'numbers': [
-            '0927-493-5473',
-          ]
-        },
-      ]
-    },
-  ];
+  @override
+  State<HotlinesScreen> createState() => _HotlinesScreenState();
+}
 
-@override
-Widget build(BuildContext context) {
-  return Scaffold(
-    // Set a background color that matches your design to prevent black flash
-    backgroundColor: const Color(0xFFF8FAFC),
+class _HotlinesScreenState extends State<HotlinesScreen> {
+  final HotlineService _hotlineService = HotlineService();
+  final AuthService _authService = AuthService(Supabase.instance.client); // Add this
+  List<Map<String, dynamic>> hotlines = [];
+  bool isLoading = true;
+  String? errorMessage;
+  bool isAdmin = false; // Add this
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHotlines();
+    _checkAdminStatus();
+  }
+
+Future<void> _loadHotlines() async {
+  try {
+    setState(() {
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    // Pass forceRefresh = false to use cache
+    final data = await _hotlineService.fetchHotlineData(forceRefresh: false);
+
+    setState(() {
+      hotlines = data;
+      isLoading = false;
+    });
+  } catch (e) {
+    setState(() {
+      errorMessage = 'Failed to load hotlines: $e';
+      isLoading = false;
+    });
+  }
+}
+
+  Future<void> _checkAdminStatus() async {
+  try {
+    final adminStatus = await _authService.isAdmin();
+    if (mounted) {
+      setState(() {
+        isAdmin = adminStatus;
+      });
+    }
+  } catch (e) {
+    print('Error checking admin status: $e');
+    if (mounted) {
+      setState(() {
+        isAdmin = false;
+      });
+    }
+  }
+}
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: Container(
+        decoration: const BoxDecoration(
+          image: DecorationImage(
+            image: AssetImage('assets/images/LIGHT.jpg'),
+            fit: BoxFit.cover,
+          ),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC).withOpacity(0.2),
+          ),
+          child: NestedScrollView(
+            headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
+              return <Widget>[
+                SliverAppBar(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  surfaceTintColor: Colors.transparent,
+                  pinned: false,
+                  floating: false,
+                  expandedHeight: 0,
+                  flexibleSpace: Container(),
+                  title: const Text(
+                    'Emergency Contacts',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 24,
+                      letterSpacing: -0.8,
+                      color: Color(0xFF1A1D29),
+                    ),
+                  ),
+                  foregroundColor: const Color(0xFF1A1D29),
+                  centerTitle: false,
+                  leading: IconButton(
+                    icon: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: const Color(0xFFE5E7EB),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_back_ios_rounded,
+                        color: Color(0xFF6B7280),
+                        size: 18,
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  actions: [
+                    // Add admin button if user is admin
+                    if (isAdmin)
+IconButton(
+  icon: Container(
+    padding: const EdgeInsets.all(8),
+    decoration: BoxDecoration(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+        color: Colors.grey.shade200,
+        width: 1,
+      ),
+    ),
+    child: Icon(
+      Icons.edit_rounded,
+      color: Colors.grey.shade600,
+      size: 18,
+    ),
+  ),
+  onPressed: () async {
+    // Navigate and wait for return
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const HotlinesAdminScreen(),
+      ),
+    );
     
-    body: Container(
-      decoration: const BoxDecoration(
-        image: DecorationImage(
-          image: AssetImage('assets/images/LIGHT.jpg'),
-          fit: BoxFit.cover,
+    // Refresh from cache (instant, no database call)
+    if (mounted) {
+      final cachedData = await _hotlineService.fetchHotlineData(forceRefresh: false);
+      setState(() {
+        hotlines = cachedData;
+      });
+    }
+  },
+  tooltip: 'Manage Hotlines',
+),
+
+                      //REFRESH BUTTON
+                   // IconButton(
+                   //   icon: const Icon(Icons.refresh_rounded),
+                   //   onPressed: _loadHotlines,
+                   //   tooltip: 'Refresh',
+                  //  ),
+],
+                ),
+              ];
+            },
+            body: isLoading
+                ? _buildLoadingState()
+                : errorMessage != null
+                    ? _buildErrorState()
+                    : _buildContent(),
+          ),
         ),
       ),
-      child: Container(
-        // Colored overlay
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC).withOpacity(0.2),
-        ),
-        child: NestedScrollView(
-          headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
-            return <Widget>[
-              SliverAppBar(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                surfaceTintColor: Colors.transparent,
-                pinned: false,
-                floating: false,
-                expandedHeight: 0,
-                flexibleSpace: Container(), // Add empty container to ensure proper rendering
-                
-                title: const Text(
-                  'Emergency Contacts',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 24,
-                    letterSpacing: -0.8,
-                    color: Color(0xFF1A1D29),
-                  ),
-                ),
-                foregroundColor: const Color(0xFF1A1D29),
-                centerTitle: false,
-                leading: IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: const Color(0xFFE5E7EB),
-                        width: 1,
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.arrow_back_ios_rounded,
-                      color: Color(0xFF6B7280),
-                      size: 18,
-                    ),
-                  ),
-                  onPressed: () => Navigator.pop(context),
+    );
+  }
+
+  Widget _buildLoadingState() {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text(
+            'Loading hotlines...',
+            style: TextStyle(
+              fontSize: 16,
+              color: Color(0xFF6B7280),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline_rounded,
+              size: 64,
+              color: Colors.red.shade400,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              errorMessage ?? 'Something went wrong',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 16,
+                color: Color(0xFF6B7280),
+              ),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _loadHotlines,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
                 ),
               ),
-            ];
-          },
-          body: CustomScrollView(
-            slivers: [
-              // Updated Header Section
-              SliverToBoxAdapter(
-                child: Container(
-                  margin: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (hotlines.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.phone_disabled_rounded,
+              size: 64,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'No hotlines available',
+              style: TextStyle(
+                fontSize: 16,
+                color: Color(0xFF6B7280),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+            child: Column(
+              children: [
+                _buildHeaderCard(),
+                const SizedBox(height: 20),
+                _build911Button(),
+              ],
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final category = hotlines[index];
+              return _buildCategoryCard(category);
+            },
+            childCount: hotlines.length,
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 32)),
+      ],
+    );
+  }
+
+  Widget _buildHeaderCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            Color.fromARGB(255, 92, 118, 165),
+            Color.fromARGB(255, 61, 91, 131),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.2),
+                width: 1.5,
+              ),
+            ),
+            child: const Icon(
+              Icons.phone_in_talk,
+              color: Colors.white,
+              size: 32,
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Tap to call or send SMS instantly',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.white70,
+              fontWeight: FontWeight.w500,
+              letterSpacing: -0.2,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Hotline Services',
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              letterSpacing: -1,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _buildBadge(Icons.access_time_rounded, '24/7 Available'),
+              const SizedBox(width: 12),
+              _buildBadge(Icons.verified_rounded, 'Verified'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBadge(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            color: Colors.white.withOpacity(0.9),
+            size: 14,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.9),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _build911Button() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.shade200.withOpacity(0.4),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _makePhoneCall('911'),
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1e3a8a), Color(0xFF3b82f6)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(
+                    Icons.call_rounded,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Main header card
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(28),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color.fromARGB(255, 92, 118, 165), // Indigo
-                              Color.fromARGB(255, 61, 91, 131), // Purple
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Contact icon instead of logo
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(0.2),
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: const Icon(
-                               Icons.phone_in_talk,
-                                color: Colors.white,
-                                size: 32,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            const Text(
-                              'Tap to call or send SMS instantly',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.white70,
-                                fontWeight: FontWeight.w500,
-                                letterSpacing: -0.2,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Hotline Services',
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
-                                letterSpacing: -1,
-                                height: 1.2,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            // Stats row
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.2),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.access_time_rounded,
-                                        color: Colors.white.withOpacity(0.9),
-                                        size: 14,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        '24/7 Available',
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.9),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.2),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.verified_rounded,
-                                        color: Colors.white.withOpacity(0.9),
-                                        size: 14,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        'Verified',
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.9),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                      Text(
+                        '911',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
                         ),
                       ),
-                      
-                      const SizedBox(height: 20),
-                      
-                      // 911 Emergency button (enhanced)
-                      Container(
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.red.shade200.withOpacity(0.4),
-                              blurRadius: 16,
-                              offset: const Offset(0, 6),
-                            ),
-                          ],
-                        ),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () => _makePhoneCall('911'),
-                            borderRadius: BorderRadius.circular(20),
-                            child: Container(
-                              padding: const EdgeInsets.all(20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                colors: [Color(0xFF1e3a8a), Color(0xFF3b82f6)],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.2),
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: const Icon(
-                                      Icons.call_rounded,
-                                      color: Colors.white,
-                                      size: 28,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  const Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          '911',
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 24,
-                                            fontWeight: FontWeight.w800,
-                                            letterSpacing: -0.5,
-                                          ),
-                                        ),
-                                        Text(
-                                          'Emergency Hotline',
-                                          style: TextStyle(
-                                            color: Colors.white70,
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Icon(
-                                    Icons.arrow_forward_ios_rounded,
-                                    color: Colors.white.withOpacity(0.8),
-                                    size: 18,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
+                      Text(
+                        'Emergency Hotline',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
-
-              const SliverToBoxAdapter(child: SizedBox(height: 24)),
-
-              // Enhanced Hotlines List
-              SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final category = hotlines[index];
-                    return Container(
-                      margin: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.06),
-                            blurRadius: 20,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Theme(
-                        data: Theme.of(context).copyWith(
-                          dividerColor: Colors.transparent,
-                        ),
-                        child: ExpansionTile(
-                          tilePadding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 12,
-                          ),
-                          childrenPadding: const EdgeInsets.only(bottom: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          collapsedShape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          iconColor: Colors.grey[400],
-                          collapsedIconColor: Colors.grey[400],
-                          title: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [
-                                      _getCategoryColor(category['category']).withOpacity(0.1),
-                                      _getCategoryColor(category['category']).withOpacity(0.05),
-                                    ],
-                                  ),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: _getCategoryColor(category['category']).withOpacity(0.2),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Icon(
-                                  _getCategoryIcon(category['category']),
-                                  color: _getCategoryColor(category['category']),
-                                  size: 22,
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      category['category'],
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 16,
-                                        letterSpacing: -0.3,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      _getCategoryDescription(category['category']),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey[600],
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          children: _buildCategoryContent(category),
-                        ),
-                      ),
-                    );
-                  },
-                  childCount: hotlines.length,
+                Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  color: Colors.white.withOpacity(0.8),
+                  size: 18,
                 ),
-              ),
-
-              const SliverToBoxAdapter(child: SizedBox(height: 32)),
-            ],
+              ],
+            ),
           ),
         ),
       ),
-    ),
-  );
-}
-
-// Helper method to get category descriptions
-String _getCategoryDescription(String category) {
-  switch (category.toLowerCase()) {
-    case 'general emergency':
-      return 'All-purpose emergency line';
-    case 'cdrrmo':
-    case 'zcdrrmo':
-      return 'Disaster risk management';
-    case 'emergency ciudad medical (ems)':
-      return 'Medical emergencies';
-    case 'join task force zamboanga (jtfz)':
-      return 'Joint security operations';
-    case 'zamboanga city police office (zcpo)':
-      return 'Police headquarters';
-    case 'police stations':
-      return 'Local police stations';
-    case 'fire department':
-      return 'Fire and rescue services';
-    case 'zamboanga city mobile force company':
-      return 'Mobile security units';
-    default:
-      return 'Emergency services';
+    );
   }
-}
+
+  Widget _buildCategoryCard(Map<String, dynamic> category) {
+    return Container(
+      margin: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(
+          dividerColor: Colors.transparent,
+        ),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 12,
+          ),
+          childrenPadding: const EdgeInsets.only(bottom: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          collapsedShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          iconColor: Colors.grey[400],
+          collapsedIconColor: Colors.grey[400],
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      _getCategoryColorFromString(category['color']).withOpacity(0.1),
+                      _getCategoryColorFromString(category['color']).withOpacity(0.05),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _getCategoryColorFromString(category['color']).withOpacity(0.2),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(
+                  _getIconFromString(category['icon']),
+                  color: _getCategoryColorFromString(category['color']),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      category['category'],
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                    if (category['description'] != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        category['description'],
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          children: _buildCategoryContent(category),
+        ),
+      ),
+    );
+  }
 
   List<Widget> _buildCategoryContent(Map<String, dynamic> category) {
     List<Widget> children = [];
-    
-    // Add regular numbers if they exist
+
     if (category.containsKey('numbers')) {
       children.addAll(
-        (category['numbers'] as List<Map<String, String>>).map(
+        (category['numbers'] as List).map(
           (hotline) => _buildHotlineItem(
-            hotline['name']!,
-            hotline['number']!,
+            hotline['name'],
+            hotline['number'],
           ),
         ),
       );
     }
-    
-    // Add stations if they exist (for Police Stations and Fire Department)
+
     if (category.containsKey('stations')) {
       children.addAll(_buildStations(category['stations']));
     }
-    
+
     return children;
   }
 
-  List<Widget> _buildStations(List<Map<String, dynamic>> stations) {
-    return stations.map((station) {
+  List<Widget> _buildStations(List stations) {
+    return stations.map<Widget>((station) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -733,7 +604,7 @@ String _getCategoryDescription(String category) {
               ),
             ),
           ),
-          ...station['numbers'].map<Widget>(
+          ...(station['numbers'] as List).map<Widget>(
             (number) => _buildHotlineItem(station['name'], number),
           ),
         ],
@@ -819,46 +690,30 @@ String _getCategoryDescription(String category) {
     );
   }
 
-  IconData _getCategoryIcon(String category) {
-    switch (category.toLowerCase()) {
-      case 'cdrrmo':
-      case 'zcdrrmo':
-        return Icons.warning_rounded;
-      case 'emergency ciudad medical (ems)':
-        return Icons.local_hospital_rounded;
-      case 'join task force zamboanga (jtfz)':
-        return Icons.security_rounded;
-      case 'zamboanga city police office (zcpo)':
-      case 'police stations':
-        return Icons.local_police_rounded;
-      case 'fire department':
-        return Icons.local_fire_department_rounded;
-      case 'zamboanga city mobile force company':
-        return Icons.shield_rounded;
-      default:
-        return Icons.contact_phone_rounded;
-    }
+  IconData _getIconFromString(String iconName) {
+    final icons = {
+      'warning_rounded': Icons.warning_rounded,
+      'local_hospital_rounded': Icons.local_hospital_rounded,
+      'security_rounded': Icons.security_rounded,
+      'local_police_rounded': Icons.local_police_rounded,
+      'local_fire_department_rounded': Icons.local_fire_department_rounded,
+      'shield_rounded': Icons.shield_rounded,
+      'contact_phone_rounded': Icons.contact_phone_rounded,
+    };
+    return icons[iconName] ?? Icons.contact_phone_rounded;
   }
 
-  Color _getCategoryColor(String category) {
-    switch (category.toLowerCase()) {
-      case 'cdrrmo':
-      case 'zcdrrmo':
-        return Colors.orange.shade600;
-      case 'emergency ciudad medical (ems)':
-        return Colors.pink.shade600;
-      case 'join task force zamboanga (jtfz)':
-        return Colors.indigo.shade600;
-      case 'zamboanga city police office (zcpo)':
-      case 'police stations':
-        return Colors.blue.shade600;
-      case 'fire department':
-        return Colors.deepOrange.shade600;
-      case 'zamboanga city mobile force company':
-        return Colors.purple.shade600;
-      default:
-        return Colors.grey.shade600;
-    }
+  Color _getCategoryColorFromString(String colorName) {
+    final colors = {
+      'orange_600': Colors.orange.shade600,
+      'pink_600': Colors.pink.shade600,
+      'indigo_600': Colors.indigo.shade600,
+      'blue_600': Colors.blue.shade600,
+      'deepOrange_600': Colors.deepOrange.shade600,
+      'purple_600': Colors.purple.shade600,
+      'grey_600': Colors.grey.shade600,
+    };
+    return colors[colorName] ?? Colors.grey.shade600;
   }
 
   Future<void> _makePhoneCall(String phoneNumber) async {
