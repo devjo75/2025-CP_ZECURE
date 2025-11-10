@@ -13,6 +13,7 @@ class QuickAccessScreen extends StatefulWidget {
   final bool isAdmin;
   final Function(LatLng) onGetDirections;
   final Function(LatLng) onGetSafeRoute;
+  final Function(LatLng)? onGetSafeRouteAndClose;
   final Function(LatLng) onShareLocation;
   final Function(Map<String, dynamic>) onShowOnMap;
   final Function(Map<String, dynamic>) onNavigateToSafeSpot;
@@ -28,11 +29,12 @@ class QuickAccessScreen extends StatefulWidget {
     required this.isAdmin,
     required this.onGetDirections,
     required this.onGetSafeRoute,
+    this.onGetSafeRouteAndClose,
     required this.onShareLocation,
     required this.onShowOnMap,
     required this.onNavigateToSafeSpot,
     required this.onNavigateToHotspot,
-    required this.onRefresh,
+    required this.onRefresh, required Null Function(dynamic destination) onNavigate,
   }) : super(key: key);
 
   @override
@@ -658,20 +660,25 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    // Use the close callback if available, otherwise use regular callback
+                    if (widget.onGetSafeRouteAndClose != null) {
+                      widget.onGetSafeRouteAndClose!(safeSpotLocation);
+                    } else {
                       widget.onGetSafeRoute(safeSpotLocation);
-                    },
-                    icon: const Icon(Icons.safety_check, size: 18),
-                    label: const Text('Safe Route'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                    ),
+                    }
+                  },
+                  icon: const Icon(Icons.safety_check, size: 18),
+                  label: const Text('Safe Route'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
                   ),
                 ),
+              ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(

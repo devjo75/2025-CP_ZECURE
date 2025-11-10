@@ -20,18 +20,17 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:zecure/chatbox/chat_channels_screen.dart';
-import 'package:zecure/chatbox/chat_service.dart';
-import 'package:zecure/chatbox/chat_desktop_screen.dart';
 import 'package:zecure/desktop/desktop_mini_legends.dart';
 import 'package:zecure/desktop/hotlines_desktop.dart';
 import 'package:zecure/desktop/quick_access_desktop.dart';
+import 'package:zecure/desktop/safe_chatbox_screen_desktop.dart';
 import 'package:zecure/main.dart';
 import 'package:zecure/savepoint/add_save_point.dart';
 import 'package:zecure/auth/register_screen.dart';
 import 'package:zecure/quick_access/quick_access_screen.dart';
 import 'package:zecure/savepoint/save_point.dart';
 import 'package:zecure/savepoint/save_point_details.dart';
+import 'package:zecure/screens/safe_chatbox_screen.dart';
 import 'package:zecure/screens/welcome_message_first_timer.dart';
 import 'package:zecure/screens/welcome_message_screen.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
@@ -43,6 +42,7 @@ import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
 import 'package:zecure/desktop/save_point_desktop.dart';
 import 'package:zecure/services/firebase_service.dart';
+import 'package:zecure/services/gemini_service.dart';
 import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
@@ -69,27 +69,17 @@ class MapScreen extends StatefulWidget {
   
 }
 
-enum MainTab { map, chat, quickAccess, notifications, profile, savePoints }
+enum MainTab { map, quickAccess, notifications, profile, savePoints }
 enum TravelMode { walking, driving, cycling }
-enum MapType { defaultMap, standard, satellite, cycleMap }
+enum MapType { standard, satellite, terrain, topographic, dark }
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
   final _authService = AuthService(Supabase.instance.client);
-  
-  // 2. Change the default map type to defaultMap
-  MapType _currentMapType = MapType.defaultMap;
+  MapType _currentMapType = MapType.standard;
 
-  // 3. Update mapConfigurations with defaultMap first
   Map<MapType, Map<String, dynamic>> get mapConfigurations => {
-    MapType.defaultMap: {
-      'name': 'Default',
-      'urlTemplate': 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-      'fallbackUrl': 'https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-      'attribution': '© OpenStreetMap contributors, Humanitarian OpenStreetMap Team',
-    },
-
     MapType.standard: {
       'name': 'Standard',
       'urlTemplate': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -97,19 +87,36 @@ class _MapScreenState extends State<MapScreen> {
       'attribution': '© OpenStreetMap contributors',
     },
 
-    MapType.satellite: {
-      'name': 'Satellite',
-      'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      'fallbackUrl': 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      'attribution': '© Esri, Maxar, Earthstar Geographics',
+
+    MapType.terrain: {
+      'name': 'Terrain',
+      'urlTemplate': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+      'fallbackUrl': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+      'attribution': '© OpenTopoMap (CC-BY-SA)',
     },
 
-    MapType.cycleMap: {
-      'name': 'Cycle Map',
-      'urlTemplate': 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
-      'fallbackUrl': 'https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
-      'attribution': '© OpenStreetMap contributors, CyclOSM',
+  MapType.satellite: {
+    'name': 'Satellite',
+    'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    'fallbackUrl': 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    'attribution': '© Esri, Maxar, Earthstar Geographics',
+  },
+
+  MapType.topographic: {
+    'name': 'Topographic',
+    'urlTemplate': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    'fallbackUrl': 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    'attribution': '© Esri, HERE, Garmin, SafeGraph, METI/NASA, USGS',
+  },
+
+  
+    MapType.dark: {
+      'name': 'Dark',
+      'urlTemplate': 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
+      'fallbackUrl': 'https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
+      'attribution': '© CartoDB',
     },
+    
   };
 
     Map<String, dynamic> getRoutingStatistics() {
@@ -122,11 +129,9 @@ class _MapScreenState extends State<MapScreen> {
   }
 
 
-//CHATBOX
-int _unreadChatCount = 0;
-RealtimeChannel? _chatUpdatesSubscription;
+
+
  
- //TRAVEL MODE
   TravelMode _selectedTravelMode = TravelMode.driving;
   bool _showTravelModeSelector = false;
   bool _showMapTypeSelector = false;
@@ -201,13 +206,6 @@ MainTab _currentTab = MainTab.map;
 late ProfileScreen _profileScreen;
 
 
-//HOTSPOT MARKER LIMIT ON THE MAP
-bool _markersLoaded = false;
-int _maxMarkersToShow = 50; // Progressive loading
-Timer? _deferredLoadTimer;
-
-
-
   // HOTSPOT
   List<Map<String, dynamic>> _hotspots = [];
   Map<String, dynamic>? _selectedHotspot;
@@ -238,12 +236,6 @@ static const Map<String, double> SEVERITY_WEIGHTS = {
   'medium': 0.5,
   'low': 0.25,
 };
-
-// PERSISTENT HEATMAP CLUSTERS
-List<Map<String, dynamic>> _persistentClusters = [];
-RealtimeChannel? _clustersChannel;
-Timer? _clusterUpdateDebouncer;
-bool _hasPendingClusterUpdate = false;
 
   // NOTIFICATIONS
 List<Map<String, dynamic>> _notifications = [];
@@ -278,6 +270,9 @@ bool _showSavePointSelector = false; // New state for savepoint button
 Timer? _timeUpdateTimer;
 
 
+bool _markersLoaded = false;
+int _maxMarkersToShow = 50; // Progressive loading
+Timer? _deferredLoadTimer;
 
 // NEW: Progressive marker loading based on zoom level
 List<Map<String, dynamic>> get _visibleHotspots {
@@ -505,6 +500,7 @@ List<Map<String, dynamic>> _getFilteredNotifications() {
   }
 }
 
+
 @override
 void initState() {
   super.initState();
@@ -540,10 +536,6 @@ void _initializeEssentials() {
             // ✅ Setup Firebase notifications after profile is loaded
             _initializeFirebaseForUser();
             
-            // ✅ Load unread chat count and setup realtime subscription
-            _loadUnreadChatCount();
-            _setupChatRealtimeSubscription();
-            
             // Only setup notifications if not already done
             if (_notificationsChannel == null) {
               _deferredLoadTimer = Timer(Duration(milliseconds: 1000), () {
@@ -572,14 +564,12 @@ void _initializeEssentials() {
           _hotspots = [];
           _notifications = [];
           _unreadNotificationCount = 0;
-          _unreadChatCount = 0; // ✅ Reset chat count on logout
         });
         
         final filterService = Provider.of<HotspotFilterService>(context, listen: false);
         filterService.resetFiltersForUser(null);
         
         _cleanupChannels();
-        _chatUpdatesSubscription?.unsubscribe(); // ✅ Cleanup chat subscription
       }
     });
   }
@@ -643,11 +633,6 @@ void _cleanupChannels() {
   _hotspotsChannel = null;
   _safeSpotsChannel?.unsubscribe();
   _safeSpotsChannel = null;
-
-  if (_clustersChannel != null) {
-  _clustersChannel!.unsubscribe();
-  _clustersChannel = null;
-}
 }
 
 // NEW: Async location loading that doesn't block startup
@@ -741,14 +726,6 @@ void _deferredInitialization() async {
     _setupSafeSpotsRealtime();
   }
 
-  if (_userProfile != null) {
-  await Future.delayed(Duration(milliseconds: 200));
-  if (!mounted) return;
-  
-    print('Loading chat unread count...');
-    _loadUnreadChatCount();
-  }
-
   await Future.delayed(Duration(milliseconds: 200));
   if (!mounted) return;
 
@@ -759,39 +736,42 @@ void _deferredInitialization() async {
     if (!mounted) return;
   }
   
+
+  await Future.delayed(Duration(milliseconds: 200));
+  if (!mounted) return;
+
+  // Initialize Gemini Service
+  print('Initializing Gemini Service...');
+  try {
+    await GeminiService().initialize();
+    print('✅ Gemini Service ready');
+  } catch (e) {
+    print('⚠️ Gemini Service initialization delayed: $e');
+  }
   // Mark markers as loaded
   setState(() {
     _markersLoaded = true;
   });
   
-// HEATMAP INITIALIZATION
-await Future.delayed(Duration(milliseconds: 300));
-if (!mounted) return;
-
-// Load heatmap data (all approved crimes)
-print('Loading heatmap data...');
-await _loadHeatmapData();
-if (!mounted) return;
-
-// Load persistent clusters from database
-print('Loading persistent clusters...');
-await _loadPersistentClusters();
-if (!mounted) return;
-
-// Setup real-time for clusters
-print('Setting up clusters real-time...');
-_setupClustersRealtime();
-
-// Calculate initial heatmap (processes crimes against clusters)
-print('Initializing crime heatmap...');
-await _calculateHeatmap();
-if (!mounted) return;
-
-print('✅ Heatmap ready: ${_heatmapClusters.length} hotspots identified');
+  // HEATMAP INITIALIZATION
+  await Future.delayed(Duration(milliseconds: 300));
+  if (!mounted) return;
+  
+  // Load heatmap data (already filtered by 30-day window)
+  print('Loading heatmap data...');
+  await _loadHeatmapData();
+  if (!mounted) return;
+  
+  // Calculate initial heatmap
+  print('Initializing crime heatmap...');
+  await _calculateHeatmap();
+  if (!mounted) return;
+  
+  print('✅ Heatmap ready: ${_heatmapClusters.length} hotspots identified');
+  // ============================================
   
   // Setup periodic tasks with initial delays (REDUCED FREQUENCY)
   _setupPeriodicTasksOptimized();
-  _startPeriodicClusterMaintenance();
   
   // DELAY location services startup to prevent early proximity checking
   _deferredLoadTimer = Timer(Duration(milliseconds: 2000), () {
@@ -854,8 +834,7 @@ void dispose() {
   _reconnectionTimer?.cancel(); 
   _routeUpdateTimer?.cancel();
   _proximityCheckTimer?.cancel();
-  _deferredLoadTimer?.cancel(); 
-  _chatUpdatesSubscription?.unsubscribe();
+  _deferredLoadTimer?.cancel(); // NEW: Clean up deferred timer
   
   if (_safeSpotsChannel != null) {
     print('Unsubscribing from safe spots real-time channel...');
@@ -866,15 +845,6 @@ void dispose() {
     for (final timer in _updateTimers.values) {
     timer.cancel();
   }
-
-  if (_clustersChannel != null) {
-  print('Unsubscribing from clusters real-time channel...');
-  _clustersChannel!.unsubscribe();
-  _clustersChannel = null;
-}
-_persistentClusters.clear();
-_clusterUpdateDebouncer?.cancel();
-
   _updateTimers.clear();
   _updateDebounceTimer?.cancel();
   _processedUpdateIds.clear();
@@ -1029,6 +999,8 @@ void _removeDuplicateSafeSpots() {
     print('Safe spots count: $originalCount -> $newCount');
   }
 }
+
+
 // Updated _loadSafeSpots method
 Future<void> _loadSafeSpots() async {
   try {
@@ -1120,8 +1092,6 @@ void _setupSafeSpotsRealtime() {
         }
       });
 }
-
-
 
 void _handleSafeSpotInsert(PostgresChangePayload payload) async {
   if (!mounted) return;
@@ -2072,115 +2042,6 @@ Future<void> _loadUserProfile() async {
   }
 }
 
-
-// ============================================
-// SETUP REAL-TIME FOR PERSISTENT CLUSTERS
-// ============================================
-void _setupClustersRealtime() {
-  if (_clustersChannel != null) {
-    print('⚠️ Clusters channel already exists, skipping setup');
-    return;
-  }
-
-  try {
-    _clustersChannel = Supabase.instance.client
-        .channel('heatmap_clusters_changes')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'heatmap_clusters',
-          callback: _handleClusterInsert,
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'heatmap_clusters',
-          callback: _handleClusterUpdate,
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.delete,
-          schema: 'public',
-          table: 'heatmap_clusters',
-          callback: _handleClusterDelete,
-        )
-        .subscribe();
-
-    print('✅ Clusters real-time subscription active');
-  } catch (e) {
-    print('Error setting up clusters real-time: $e');
-  }
-}
-
-// ============================================
-// CLUSTER REAL-TIME HANDLERS
-// ============================================
-void _handleClusterInsert(PostgresChangePayload payload) async {
-  if (!mounted) return;
-  
-  print('📥 Cluster insert received, debouncing...');
-  _hasPendingClusterUpdate = true;
-  
-  _clusterUpdateDebouncer?.cancel();
-  _clusterUpdateDebouncer = Timer(const Duration(milliseconds: 800), () async {
-    if (!mounted || !_hasPendingClusterUpdate) return;
-    _hasPendingClusterUpdate = false;
-    
-    await _loadPersistentClusters();
-    
-    if (mounted) {
-      setState(() {
-        // Convert to display clusters
-        _heatmapClusters = _persistentClusters
-            .where((pc) => pc['status'] == 'active')
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
-      });
-    }
-  });
-}
-
-void _handleClusterUpdate(PostgresChangePayload payload) async {
-  if (!mounted) return;
-  
-  print('📥 Cluster update received, debouncing...');
-  _hasPendingClusterUpdate = true;
-  
-  _clusterUpdateDebouncer?.cancel();
-  _clusterUpdateDebouncer = Timer(const Duration(milliseconds: 800), () async {
-    if (!mounted || !_hasPendingClusterUpdate) return;
-    _hasPendingClusterUpdate = false;
-    
-    await _loadPersistentClusters();
-    
-    if (mounted) {
-      setState(() {
-        _heatmapClusters = _persistentClusters
-            .where((pc) => pc['status'] == 'active')
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
-      });
-    }
-  });
-}
-
-void _handleClusterDelete(PostgresChangePayload payload) {
-  if (!mounted) return;
-  
-  final clusterId = payload.oldRecord['id'];
-  
-  setState(() {
-    _persistentClusters.removeWhere((c) => c['id'] == clusterId);
-    _heatmapClusters = _persistentClusters
-        .where((pc) => pc['status'] == 'active')
-        .map((pc) => _convertPersistentToDisplayCluster(pc))
-        .toList();
-  });
-  
-  print('🗑️ Cluster $clusterId deleted instantly');
-}
-
-
-
 //REAL TIME HOTSPOT 
 void _setupRealtimeSubscription() {
   _hotspotsChannel?.unsubscribe();
@@ -2580,18 +2441,10 @@ String formatTimeRemaining(DateTime? expiresAt) {
 }
 
 // HOTSPOT DELETE
-void _handleHotspotDelete(PostgresChangePayload payload) async {
+void _handleHotspotDelete(PostgresChangePayload payload) {
   if (!mounted) return;
   
   final deletedHotspotId = payload.oldRecord['id'];
-  
-  print('🗑️ Handling hotspot deletion: $deletedHotspotId');
-  
-  // First, clean up clusters BEFORE updating local state
-  await _cleanupClusterAfterCrimeDeletion(deletedHotspotId);
-  
-  // Small delay to ensure database operations complete
-  await Future.delayed(const Duration(milliseconds: 300));
   
   setState(() {
     // Remove the hotspot from local state
@@ -2608,229 +2461,14 @@ void _handleHotspotDelete(PostgresChangePayload payload) async {
     _unreadNotificationCount = _notifications.where((n) => !n['is_read']).length;
   });
   
-  // Force reload clusters from database to ensure UI is in sync
-  await _loadPersistentClusters();
-  
-  if (mounted) {
-    setState(() {
-      _heatmapClusters = _persistentClusters
-          .where((pc) => pc['status'] == 'active')
-          .map((pc) => _convertPersistentToDisplayCluster(pc))
-          .toList();
-    });
-  }
-  
-  print('✅ Crime deletion and cluster cleanup completed');
-  print('   Active clusters: ${_heatmapClusters.length}');
+  print('🔄 Crime deleted - recalculating heatmap...');
+  _updateHeatmapOnDelete();
 }
-
-// ============================================
-// NEW: Cleanup clusters after crime deletion
-// ============================================
-Future<void> _cleanupClusterAfterCrimeDeletion(int deletedCrimeId) async {
-  try {
-    // Find all clusters containing this crime
-    final clusterLinks = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('cluster_id')
-        .eq('hotspot_id', deletedCrimeId);
-    
-    if ((clusterLinks as List).isEmpty) {
-      print('Crime was not in any cluster');
-      return;
-    }
-    
-    // Remove the crime from junction table
-    await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .delete()
-        .eq('hotspot_id', deletedCrimeId);
-    
-    print('✅ Removed crime $deletedCrimeId from heatmap_cluster_crimes');
-    
-    // Check each affected cluster
-    for (final link in clusterLinks) {
-      final clusterId = link['cluster_id'];
-      
-      // Count remaining crimes in this cluster
-      final remainingCrimes = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id, is_still_active')
-          .eq('cluster_id', clusterId);
-      
-      final crimeCount = (remainingCrimes as List).length;
-      final activeCrimeCount = remainingCrimes
-          .where((c) => c['is_still_active'] == true)
-          .length;
-      
-      // Check if cluster should be deleted based on minimum crime requirements
-if (crimeCount == 0 || crimeCount < MIN_CRIMES_FOR_HOTSPOT) {
-  // Not enough crimes to maintain cluster - check special cases
-  bool shouldDelete = true;
-  
-  if (crimeCount > 0) {
-    // Fetch the remaining crimes to check severity
-    final remainingCrimesData = await Supabase.instance.client
-        .from('hotspot')
-        .select('''
-          id,
-          type_id,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-        .inFilter('id', remainingCrimes.map((c) => c['hotspot_id']).toList());
-    
-    final criticalCount = (remainingCrimesData as List)
-        .where((c) => c['crime_type']?['level'] == 'critical')
-        .length;
-    final highCount = remainingCrimesData
-        .where((c) => c['crime_type']?['level'] == 'high')
-        .length;
-    
-    // Check if remaining crimes meet minimum cluster requirements
-    if (criticalCount >= 1 && crimeCount >= 2) {
-      shouldDelete = false; // 1 critical + 1 other crime is enough
-    } else if (highCount >= 2) {
-      shouldDelete = false; // 2 high severity crimes is enough
-    }
-  }
-  
-  if (shouldDelete) {
-    // Delete the cluster
-    await Supabase.instance.client
-        .from('heatmap_clusters')
-        .delete()
-        .eq('id', clusterId);
-    
-    print('🗑️ Deleted cluster $clusterId (only $crimeCount crime(s) remaining - below minimum)');
-    
-    // Remove from local state
-    setState(() {
-      _persistentClusters.removeWhere((c) => c['id'] == clusterId);
-      _heatmapClusters = _persistentClusters
-          .where((pc) => pc['status'] == 'active')
-          .map((pc) => _convertPersistentToDisplayCluster(pc))
-          .toList();
-    });
-    
-    return; // Exit early since cluster is deleted
-  }
-}
-
-if (activeCrimeCount == 0) {
-        // No active crimes left - deactivate cluster
-        await Supabase.instance.client
-            .from('heatmap_clusters')
-            .update({
-              'status': 'inactive',
-              'deactivated_at': DateTime.now().toIso8601String(),
-              'active_crime_count': 0,
-              'total_crime_count': crimeCount,
-            })
-            .eq('id', clusterId);
-        
-        print('⏸️ Deactivated cluster $clusterId (no active crimes)');
-        
-      } else {
-        // Still has crimes - recalculate cluster properties
-        await _recalculateClusterAfterDeletion(clusterId);
-      }
-    }
-    
-  } catch (e) {
-    print('Error cleaning up cluster after crime deletion: $e');
-  }
-}
-
-// ============================================
-// NEW: Recalculate cluster after crime deletion
-// ============================================
-Future<void> _recalculateClusterAfterDeletion(String clusterId) async {
-  try {
-    // Fetch remaining crimes
-    final crimeLinks = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('hotspot_id, is_still_active')
-        .eq('cluster_id', clusterId);
-    
-    final hotspotIds = (crimeLinks as List)
-        .map((link) => link['hotspot_id'])
-        .toList();
-    
-    if (hotspotIds.isEmpty) return;
-    
-    final crimesResponse = await Supabase.instance.client
-        .from('hotspot')
-        .select('''
-          id,
-          type_id,
-          location,
-          time,
-          status,
-          active_status,
-          created_by,
-          reported_by,
-          created_at,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-        .inFilter('id', hotspotIds);
-    
-    final allCrimes = (crimesResponse as List)
-        .map((c) => _formatCrimeForHeatmap(c))
-        .toList();
-    
-    final activeCrimes = allCrimes
-        .where((c) => _isWithinHeatmapTimeWindow(c))
-        .toList();
-    
-    if (activeCrimes.isEmpty) {
-      // Deactivate cluster
-      await Supabase.instance.client
-          .from('heatmap_clusters')
-          .update({
-            'status': 'inactive',
-            'deactivated_at': DateTime.now().toIso8601String(),
-            'active_crime_count': 0,
-            'total_crime_count': allCrimes.length,
-          })
-          .eq('id', clusterId);
-      return;
-    }
-    
-    // Recalculate properties with remaining crimes
-    final clusterData = _calculateClusterProperties(activeCrimes);
-    
-    final reductionFactor = activeCrimes.length / allCrimes.length;
-    final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-      SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-      SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['max']!,
-    );
-    
-    await Supabase.instance.client
-        .from('heatmap_clusters')
-        .update({
-          'center_lat': clusterData['center'].latitude,
-          'center_lng': clusterData['center'].longitude,
-          'current_radius': adjustedRadius,
-          'dominant_severity': clusterData['dominantSeverity'],
-          'intensity': clusterData['intensity'],
-          'active_crime_count': activeCrimes.length,
-          'total_crime_count': allCrimes.length,
-          'last_recalculated_at': DateTime.now().toIso8601String(),
-        })
-        .eq('id', clusterId);
-    
-    print('✅ Recalculated cluster $clusterId after deletion');
-    print('   ${activeCrimes.length} active / ${allCrimes.length} total crimes');
-    
-  } catch (e) {
-    print('Error recalculating cluster after deletion: $e');
-  }
-}
-
 
 // ============================================
 // HEATMAP UPDATE HELPER METHODS
 // ============================================
+
 
 
 void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
@@ -2871,6 +2509,14 @@ void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
     
     final formattedCrime = _formatCrimeForHeatmap(response);
     
+    // Validate with dynamic time window based on severity
+    if (!_isWithinHeatmapTimeWindow(formattedCrime)) {
+      final level = formattedCrime['crime_type']['level'] ?? 'low';
+      final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
+      print('❌ Crime outside $timeWindow-day window (${level}) - not adding to heatmap');
+      return;
+    }
+    
     // Double-check it wasn't added during the async operation
     final stillNotInHeatmap = !_heatmapCrimes.any((c) => c['id'] == newCrime['id']);
     
@@ -2879,16 +2525,19 @@ void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
         _heatmapCrimes.add(formattedCrime);
       });
       
-      print('✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']})');
+      final level = formattedCrime['crime_type']['level'] ?? 'low';
+      final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
+      print('✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']}, ${level}, ${timeWindow}d window)');
     } else {
       print('⚠️ Crime was added to heatmap during fetch, skipping');
     }
     
-    // Trigger cluster processing
     _scheduleHeatmapUpdate();
     
   } catch (e) {
     print('Error fetching complete crime data for heatmap insert: $e');
+    
+    // Even on error, schedule an update to recalculate
     _scheduleHeatmapUpdate();
   }
 }
@@ -2896,8 +2545,10 @@ void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
 // ============================================
 // MODIFIED: Update handler with time validation
 // ============================================
+
 void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
   if (updatedCrime.isEmpty) {
+    // Fallback: just recalculate
     _scheduleHeatmapUpdate();
     return;
   }
@@ -2905,6 +2556,7 @@ void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
   final crimeId = updatedCrime['id'];
   final index = _heatmapCrimes.indexWhere((c) => c['id'] == crimeId);
   
+  // Fetch complete crime data
   try {
     final response = await Supabase.instance.client
         .from('hotspot')
@@ -2925,30 +2577,34 @@ void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
     
     final formattedCrime = _formatCrimeForHeatmap(response);
     
-    final shouldBeInHeatmap = formattedCrime['status'] == 'approved';
+    // ⭐ UPDATED: Check with dynamic time window
+    final shouldBeInHeatmap = formattedCrime['status'] == 'approved' && 
+                              _isWithinHeatmapTimeWindow(formattedCrime);
+    
+    final level = formattedCrime['crime_type']['level'] ?? 'low';
+    final timeWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
     
     if (shouldBeInHeatmap) {
       if (index != -1) {
+        // Update existing
         setState(() {
           _heatmapCrimes[index] = formattedCrime;
         });
-        print('✅ Updated crime in heatmap (${formattedCrime['crime_type']['name']})');
+        print('✅ Updated crime in heatmap (${formattedCrime['crime_type']['name']}, ${level}, ${timeWindow}d window)');
       } else {
+        // Add if newly qualified
         setState(() {
           _heatmapCrimes.add(formattedCrime);
         });
-        print('✅ Added crime to heatmap after update (${formattedCrime['crime_type']['name']})');
+        print('✅ Added crime to heatmap after update (${formattedCrime['crime_type']['name']}, ${level})');
       }
-      
-      // ⭐ NEW: Update is_still_active status in clusters
-      await _updateCrimeActiveStatusInClusters(formattedCrime);
-      
     } else {
+      // Remove if no longer qualified
       if (index != -1) {
         setState(() {
           _heatmapCrimes.removeAt(index);
         });
-        print('❌ Removed crime from heatmap (not approved)');
+        print('❌ Removed crime from heatmap (expired ${timeWindow}d window or not approved)');
       }
     }
     
@@ -2956,112 +2612,8 @@ void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
     
   } catch (e) {
     print('Error fetching complete crime data for heatmap update: $e');
+    // Fallback: just recalculate
     _scheduleHeatmapUpdate();
-  }
-}
-// ============================================
-// SIMPLIFIED: Update is_still_active and recalculate cluster
-// ============================================
-Future<void> _updateCrimeActiveStatusInClusters(Map<String, dynamic> crime) async {
-  try {
-    final crimeId = crime['id'];
-    final isStillActive = _isWithinHeatmapTimeWindow(crime);
-    
-    // Find which clusters contain this crime
-    final clusterLinks = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('cluster_id, is_still_active')
-        .eq('hotspot_id', crimeId);
-    
-    if ((clusterLinks as List).isEmpty) {
-      print('Crime $crimeId not in any cluster');
-      return;
-    }
-    
-    // Update the is_still_active status
-    await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .update({'is_still_active': isStillActive})
-        .eq('hotspot_id', crimeId);
-    
-    print('✅ Updated is_still_active=$isStillActive for crime $crimeId');
-    
-    // Recalculate each affected cluster
-    for (final link in clusterLinks) {
-      final clusterId = link['cluster_id'];
-      
-      // Count active crimes in this cluster
-      final activeCountResponse = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id')
-          .eq('cluster_id', clusterId)
-          .eq('is_still_active', true);
-      
-      final activeCrimeCount = (activeCountResponse as List).length;
-      
-      // ⭐ CRITICAL: Keep active if at least 1 active crime
-      if (activeCrimeCount >= 1) {
-        // Fetch all crimes for full recalculation
-        final allCrimeLinks = await Supabase.instance.client
-            .from('heatmap_cluster_crimes')
-            .select('hotspot_id')
-            .eq('cluster_id', clusterId);
-        
-        final hotspotIds = (allCrimeLinks as List)
-            .map((l) => l['hotspot_id'])
-            .toList();
-        
-        final crimesResponse = await Supabase.instance.client
-            .from('hotspot')
-            .select('''
-              id,
-              type_id,
-              location,
-              time,
-              status,
-              active_status,
-              created_by,
-              reported_by,
-              created_at,
-              crime_type: type_id (id, name, level, category, description)
-            ''')
-            .inFilter('id', hotspotIds);
-        
-        final allCrimes = (crimesResponse as List)
-            .map((c) => _formatCrimeForHeatmap(c))
-            .toList();
-        
-        // Recalculate with all crimes
-        await _recalculateClusterProperties(clusterId, allCrimes);
-      } else {
-        // No active crimes - deactivate
-        await Supabase.instance.client
-            .from('heatmap_clusters')
-            .update({
-              'status': 'inactive',
-              'deactivated_at': DateTime.now().toIso8601String(),
-              'active_crime_count': 0,
-            })
-            .eq('id', clusterId);
-        
-        print('⏸️ Deactivated cluster $clusterId (no active crimes)');
-      }
-    }
-    
-    // Reload clusters to reflect changes
-    await _loadPersistentClusters();
-    
-    if (mounted) {
-      setState(() {
-        _heatmapClusters = _persistentClusters
-            .where((pc) => pc['status'] == 'active')
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
-      });
-    }
-    
-  } catch (e) {
-    print('Error updating crime active status: $e');
   }
 }
 
@@ -3069,6 +2621,10 @@ Future<void> _updateCrimeActiveStatusInClusters(Map<String, dynamic> crime) asyn
 // Delete handler (no changes needed)
 // ============================================
 
+void _updateHeatmapOnDelete() {
+  print('🗑️ Crime deleted - scheduling heatmap recalculation...');
+  _scheduleHeatmapUpdate();
+}
 
 
 
@@ -3083,187 +2639,7 @@ void _scheduleHeatmapUpdate() {
   });
 }
 
-// ============================================
-// PERIODIC CLUSTER MAINTENANCE
-// ============================================
 
-void _startPeriodicClusterMaintenance() {
-  // Run every 5 minutes to check for crimes that expired
-  Timer.periodic(const Duration(minutes: 5), (timer) async {
-    if (!mounted) {
-      timer.cancel();
-      return;
-    }
-    
-    await _performClusterMaintenance();
-  });
-  
-  // Also run once after 30 seconds on startup
-  Timer(const Duration(seconds: 30), () {
-    if (mounted) {
-      _performClusterMaintenance();
-    }
-  });
-}
-
-Future<void> _performClusterMaintenance() async {
-  if (_persistentClusters.isEmpty) return;
-  
-  print('🔧 Running cluster maintenance...');
-  
-  for (final cluster in _persistentClusters) {
-    if (cluster['status'] != 'active') continue;
-    
-    try {
-      // Get all crimes in this cluster
-      final crimeLinks = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id, is_still_active')
-          .eq('cluster_id', cluster['id']);
-      
-      if ((crimeLinks as List).isEmpty) {
-        // No crimes - delete cluster
-        await Supabase.instance.client
-            .from('heatmap_clusters')
-            .delete()
-            .eq('id', cluster['id']);
-        continue;
-      }
-      
-      final hotspotIds = crimeLinks.map((link) => link['hotspot_id']).toList();
-      
-      // Fetch complete crime data
-      final crimesResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('''
-            id,
-            type_id,
-            location,
-            time,
-            status,
-            active_status,
-            created_by,
-            reported_by,
-            created_at,
-            crime_type: type_id (id, name, level, category, description)
-          ''')
-          .inFilter('id', hotspotIds);
-      
-      final allCrimes = (crimesResponse as List)
-          .map((c) => _formatCrimeForHeatmap(c))
-          .toList();
-      
-      // Check each crime's active status
-      bool hasChanges = false;
-      for (final crime in allCrimes) {
-        final isActive = _isWithinHeatmapTimeWindow(crime);
-        final currentLink = crimeLinks.firstWhere(
-          (link) => link['hotspot_id'] == crime['id'],
-          orElse: () => {},
-        );
-        
-        if (currentLink['is_still_active'] != isActive) {
-          // Update the status
-          await Supabase.instance.client
-              .from('heatmap_cluster_crimes')
-              .update({'is_still_active': isActive})
-              .eq('cluster_id', cluster['id'])
-              .eq('hotspot_id', crime['id']);
-          
-          hasChanges = true;
-          print('Updated crime ${crime['id']} active status to $isActive');
-        }
-      }
-      
-      if (hasChanges) {
-        // Recalculate cluster properties
-        await _recalculateClusterProperties(cluster['id'], allCrimes);
-      }
-      
-    } catch (e) {
-      print('Error in cluster maintenance for ${cluster['id']}: $e');
-    }
-  }
-  
-  // Reload clusters after maintenance
-  await _loadPersistentClusters();
-  
-  if (mounted) {
-    setState(() {
-      _heatmapClusters = _persistentClusters
-          .where((pc) => pc['status'] == 'active')
-          .map((pc) => _convertPersistentToDisplayCluster(pc))
-          .toList();
-    });
-  }
-  
-  print('✅ Cluster maintenance complete');
-}
-// ============================================
-// SIMPLIFIED: Just recalculate properties
-// ============================================
-Future<void> _recalculateClusterProperties(String clusterId, List<Map<String, dynamic>> allCrimes) async {
-  try {
-    final activeCrimes = allCrimes.where((c) => _isWithinHeatmapTimeWindow(c)).toList();
-    
-    print('Recalculating cluster $clusterId: ${activeCrimes.length} active / ${allCrimes.length} total');
-    
-    // Even if no active crimes, keep cluster alive (just update counts via trigger)
-    if (activeCrimes.isEmpty) {
-      print('⚠️ No active crimes but cluster remains (historical data)');
-      
-      if (mounted) {
-        await _loadPersistentClusters();
-        setState(() {
-          _heatmapClusters = _persistentClusters
-              .where((pc) => pc['status'] == 'active')
-              .map((pc) => _convertPersistentToDisplayCluster(pc))
-              .toList();
-        });
-      }
-      
-      return;
-    }
-    
-    // ✅ Has active crimes - recalculate properties
-    final clusterData = _calculateClusterProperties(activeCrimes);
-    
-    final reductionFactor = activeCrimes.length / allCrimes.length;
-    final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-      SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-      SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['max']!,
-    );
-    
-    await Supabase.instance.client
-        .from('heatmap_clusters')
-        .update({
-          'center_lat': clusterData['center'].latitude,
-          'center_lng': clusterData['center'].longitude,
-          'current_radius': adjustedRadius,
-          'dominant_severity': clusterData['dominantSeverity'],
-          'intensity': clusterData['intensity'],
-          'active_crime_count': activeCrimes.length,
-          'total_crime_count': allCrimes.length,
-          'last_recalculated_at': DateTime.now().toIso8601String(),
-        })
-        .eq('id', clusterId);
-    
-    print('✅ Recalculated cluster $clusterId (${activeCrimes.length}/${allCrimes.length})');
-    
-    if (mounted) {
-      await _loadPersistentClusters();
-      setState(() {
-        _heatmapClusters = _persistentClusters
-            .where((pc) => pc['status'] == 'active')
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
-      });
-    }
-    
-  } catch (e) {
-    print('Error recalculating cluster properties: $e');
-  }
-}
 
 
 void _handleStatusChangeMessages(Map<String, dynamic> previousHotspot, Map<String, dynamic> newHotspot) {
@@ -3560,6 +2936,7 @@ Future<void> _cleanupOrphanedNotifications() async {
     print('Error cleaning up notifications: $e');
   }
 }
+
 
 Future<void> _loadHotspots() async {
   try {
@@ -9951,7 +9328,6 @@ bool _isDesktopScreen() {
   return MediaQuery.of(context).size.width >= 800;
 }
 
-
 // BOTTOM NAV BARS MAIN WIDGETS
 
 Widget _buildBottomNavBar() {
@@ -9979,66 +9355,28 @@ Widget _buildBottomNavBar() {
         children: [
           // Bottom Nav Bar
           BottomNavigationBar(
-            currentIndex: _getBottomNavIndexFromMainTab(_currentTab),
+            currentIndex: _getCurrentTabIndex(),
             onTap: _handleBottomNavTap,
             items: [
               BottomNavigationBarItem(
                 icon: Icon(
-                  _currentTab == MainTab.map 
-                      ? Icons.explore_rounded 
-                      : Icons.explore_outlined,
+                _currentTab == MainTab.map 
+                    ? Icons.explore_rounded 
+                    : Icons.explore_outlined,
+               
                   size: 26,
                 ),
                 label: 'Map',
               ),
-BottomNavigationBarItem(
-  icon: Stack(
-    clipBehavior: Clip.none,
-    children: [
-      Icon(
-        _currentTab == MainTab.chat
-            ? Icons.chat
-            : Icons.chat_outlined,
-        size: 26,
-        color: _currentTab == MainTab.chat
-            ? Colors.blue.shade600   // ✅ Blue when active
-            : Colors.grey.shade600,  // Gray when inactive
-      ),
-
-      if (_unreadChatCount > 0)
-        Positioned(
-          right: -2,
-          top: -2,
-          child: Container(
-            padding: const EdgeInsets.all(2),
-            decoration: BoxDecoration(
-              color: Colors.red,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white, width: 1.5),
-            ),
-            constraints: const BoxConstraints(
-              minWidth: 16,
-              minHeight: 16,
-            ),
-            child: Text(
-              _unreadChatCount > 99
-                  ? '99+'
-                  : '$_unreadChatCount',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                height: 1.1,
+              BottomNavigationBarItem(
+                icon: Icon(
+                  _currentTab == MainTab.quickAccess
+                      ? Icons.navigation
+                      : Icons.navigation_outlined,
+                  size: 26,
+                ),
+                label: 'Navigate',
               ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ),
-    ],
-  ),
-  label: 'Chat',
-),
-
               const BottomNavigationBarItem(
                 icon: SizedBox(width: 30, height: 30),
                 label: '',
@@ -10086,54 +9424,56 @@ BottomNavigationBarItem(
                 ),
                 label: 'Alerts',
               ),
-              BottomNavigationBarItem(
-                icon: hasProfilePhoto
-                    ? Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: _currentTab == MainTab.profile
-                                ? Colors.blue.shade600
-                                : Colors.grey.shade600,
-                            width: 2.5,
-                          ),
-                        ),
-                        child: ClipOval(
-                          child: Image.network(
-                            profilePictureUrl,
-                            width: 32,
-                            height: 32,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return Icon(
-                                _currentTab == MainTab.profile
-                                    ? Icons.person_rounded
-                                    : Icons.person_outline_rounded,
-                                size: 26,
-                              );
-                            },
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return Icon(
-                                _currentTab == MainTab.profile
-                                    ? Icons.person_rounded
-                                    : Icons.person_outline_rounded,
-                                size: 26,
-                              );
-                            },
-                          ),
-                        ),
-                      )
-                    : Icon(
-                        _currentTab == MainTab.profile
-                            ? Icons.person_rounded
-                            : Icons.person_outline_rounded,
-                        size: 26,
-                      ),
-                label: 'Profile',
-              ),
+              // Profile tab with user photo or default icon
+BottomNavigationBarItem(
+  icon: hasProfilePhoto
+      ? Container(
+          width: 32, // increased from 26
+          height: 32, // increased from 26
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: _currentTab == MainTab.profile
+                  ? Colors.blue.shade600
+                  : Colors.grey.shade600,
+              width: 2.5, // slightly thicker for bigger size
+            ),
+          ),
+          child: ClipOval(
+            child: Image.network(
+              profilePictureUrl,
+              width: 32,
+              height: 32,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Icon(
+                  _currentTab == MainTab.profile
+                      ? Icons.person_rounded
+                      : Icons.person_outline_rounded,
+                  size: 26, // keep default size for fallback
+                );
+              },
+              loadingBuilder: (context, child, loadingProgress) {
+                if (loadingProgress == null) return child;
+                return Icon(
+                  _currentTab == MainTab.profile
+                      ? Icons.person_rounded
+                      : Icons.person_outline_rounded,
+                  size: 26, // keep default size for fallback
+                );
+              },
+            ),
+          ),
+        )
+      : Icon(
+          _currentTab == MainTab.profile
+              ? Icons.person_rounded
+              : Icons.person_outline_rounded,
+          size: 26, // unchanged default icon size
+        ),
+  label: 'Profile',
+),
+
             ],
             selectedItemColor: Colors.blue.shade600,
             unselectedItemColor: Colors.grey.shade600,
@@ -10144,20 +9484,20 @@ BottomNavigationBarItem(
             elevation: 0,
           ),
 
-          // Center + Button
+          // Center + Button (Balanced Style)
           Positioned(
-            top: 11,
+            top: 11, // aligned with icons
             left: 0,
             right: 0,
             child: Center(
               child: GestureDetector(
-                onTap: _showQuickActionDialog,
+                onTap: _showQuickActionDialog, // Updated to show choice dialog
                 child: Container(
-                  width: 36,
+                  width: 36,  // <-- adjust freely
                   height: 36,
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(10), // ⬅️ subtle rounded corners
                     border: Border.all(color: Colors.grey.shade300, width: 1),
                     boxShadow: [
                       BoxShadow(
@@ -10170,7 +9510,7 @@ BottomNavigationBarItem(
                   child: Icon(
                     Icons.add_rounded,
                     color: Colors.grey.shade600,
-                    size: 24,
+                    size: 24, // scaled for smaller button
                   ),
                 ),
               ),
@@ -10422,62 +9762,25 @@ Widget _buildVerticalActionButton({
   );
 }
 
-// Helper for desktop sidebar - maps visual order to MainTab enum
-MainTab _getMainTabFromDesktopIndex(int index) {
-  switch (index) {
-    case 0:
-      return MainTab.map;
-    case 1:
-      return MainTab.quickAccess;
-    case 2:
-      return MainTab.savePoints;  // Desktop has savePoints in sidebar
-    case 3:
-      return MainTab.notifications;
-    case 4:
-      return MainTab.profile;
-    default:
-      return MainTab.map;
-  }
-}
-
-// Helper to get desktop sidebar index from MainTab
-int _getDesktopIndexFromMainTab(MainTab tab) {
-  switch (tab) {
+// HELPER METHODS FOR 5-TAB STRUCTURE
+int _getCurrentTabIndex() {
+  // Map your existing 5-tab enum to bottom navigation structure
+  switch (_currentTab) {
     case MainTab.map:
       return 0;
     case MainTab.quickAccess:
       return 1;
     case MainTab.savePoints:
-      return 2;
+      return 2; // This will be the center button or third tab
     case MainTab.notifications:
       return 3;
     case MainTab.profile:
       return 4;
-    case MainTab.chat:
-      return 0; // Chat not in desktop sidebar, default to map
-  }
-}
-
-// New helper for the mobile bottom navigation bar index
-int _getBottomNavIndexFromMainTab(MainTab tab) {
-  switch (tab) {
-    case MainTab.map:
-      return 0;
-    case MainTab.chat:
-      return 1; // Correct index for Chat tab
-    // Index 2 is the placeholder, so we skip it here.
-    case MainTab.notifications:
-      return 3;
-    case MainTab.profile:
-      return 4;
-    case MainTab.quickAccess:
-    case MainTab.savePoints:
-      // These aren't tabs on the bottom nav, default to map or an error state
-      return 0; 
   }
 }
 
 void _handleBottomNavTap(int index) {
+  // Handle tap avoiding the center button (index 2)
   MainTab? targetTab;
   
   switch (index) {
@@ -10485,10 +9788,10 @@ void _handleBottomNavTap(int index) {
       targetTab = MainTab.map;
       break;
     case 1:
-      targetTab = MainTab.chat;  
+      targetTab = MainTab.quickAccess;
       break;
     case 2:
-      // Center + button - handled by floating button
+      // Center button - do nothing, handled by floating button
       return;
     case 3:
       targetTab = MainTab.notifications;
@@ -10502,18 +9805,14 @@ void _handleBottomNavTap(int index) {
     setState(() {
       _currentTab = targetTab!;
 
-      if (_currentTab == MainTab.profile) {
-        _profileScreen.isEditingProfile = false;
-        _profileScreen.resetTab();
-      }
-      
-      // ✅ Refresh chat count when switching to chat
-      if (_currentTab == MainTab.chat) {
-        _loadUnreadChatCount();
-      }
+    if (_currentTab == MainTab.profile) {
+      _profileScreen.isEditingProfile = false;
+      _profileScreen.resetTab(); //
+    }
     });
   }
 }
+
 //  QUICK REPORT FUNCTION 
 void _quickReportCrime() async {
   // Show loading indicator
@@ -10671,23 +9970,28 @@ Widget? _buildResponsiveBottomNav(bool isDesktop) {
   return _buildBottomNavBar();
 }
 
-
 //  SIDEBAR FOR DESKTOP
 Widget _buildResponsiveDesktopLayout() {
   return Stack(
     children: [
       Row(
         children: [
-        ResponsiveNavigation(
-          currentIndex: _getDesktopIndexFromMainTab(_currentTab),  // ← Use helper
-          onTap: (index) {
-            setState(() {
-              _currentTab = _getMainTabFromDesktopIndex(index);  // ← Use helper
-              if (_currentTab == MainTab.profile) {
-                _profileScreen.isEditingProfile = false;
+          ResponsiveNavigation(
+            currentIndex: _currentTab.index,
+            onTap: (index) {
+              // Handle chatbot separately (index 5)
+              if (index == 5) {
+                _showChatbotDropdown();
+                return; // Don't change tab
               }
-            });
-          },
+              
+              setState(() {
+                _currentTab = MainTab.values[index];
+                if (_currentTab == MainTab.profile) {
+                  _profileScreen.isEditingProfile = false;
+                }
+              });
+            },
             unreadNotificationCount: _unreadNotificationCount,
             isSidebarVisible: _isSidebarVisible,
             isUserLoggedIn: _userProfile != null,
@@ -10791,6 +10095,30 @@ Widget _buildResponsiveDesktopLayout() {
   );
 }
 
+// Add this new method for showing chatbot dropdown
+void _showChatbotDropdown() {
+  showDialog(
+    context: context,
+    barrierColor: Colors.black26,
+    builder: (context) => Stack(
+      children: [
+        Positioned(
+          top: 100,
+          left: _isSidebarVisible ? 285 : 85, // Position after sidebar
+          child: Material(
+            color: Colors.transparent,
+            child: SafetyChatbotDropdown(
+              currentPosition: _currentPosition,
+              hotspots: _hotspots,
+              safeSpots: _safeSpots,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 
 
 
@@ -10863,749 +10191,430 @@ Future<bool> _handleWillPop() async {
 
   return shouldExit;
 }
-
-//MODERN FLOATING ACTION BUTTONS - HORIZONTAL FOR DESKTOP
-
+//MODERN FLOATING ACTION BUTTONS
 Widget _buildFloatingActionButtons() {
   final screenWidth = MediaQuery.of(context).size.width;
   final isDesktop = screenWidth >= 800;
 
-  if (isDesktop) {
-    return _buildDesktopFloatingActions();
-  } else {
-    return _buildMobileFloatingActions();
-  }
-}
-
-// DESKTOP VERSION - HORIZONTAL LAYOUT
-Widget _buildDesktopFloatingActions() {
-  return Row(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.end,
-    children: [
-      // Map Type Selection Container
-      if (_showMapTypeSelector) ...[
-        Container(
-          margin: const EdgeInsets.only(right: 7),
-          padding: const EdgeInsets.all(7),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 4,
-                offset: const Offset(0, 1),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: MapType.values.map((type) {
-              final isSelected = type == _currentMapType;
-              return GestureDetector(
-                onTap: () {
-                  _switchMapType(type);
-                },
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isSelected ? Colors.blue.shade50 : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                    border: isSelected 
-                      ? Border.all(color: Colors.blue.shade300, width: 1)
-                      : null,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _getMapTypeIcon(type),
-                        size: 16,
-                        color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
-                      ),
-                      const SizedBox(width: 7),
-                      Text(
-                        _getMapTypeName(type),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                          color: isSelected ? Colors.blue.shade700 : Colors.grey.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
+  // -----------------------------------------------------------------
+  //  COMMON: Small buttons pill (Column on mobile, Row on desktop)
+  // -----------------------------------------------------------------
+  final Widget smallButtonsPill = Container(
+    padding: const EdgeInsets.all(4),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.08),
+          blurRadius: 16,
+          offset: const Offset(0, 3),
         ),
       ],
-      
-      // Modern Button Container - HORIZONTAL
-      Container(
-        height: 48,
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.08),
-              blurRadius: 16,
-              offset: const Offset(0, 3),
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Map Type Toggle Button
-            _buildModernActionButton(
-              icon: _getMapTypeIcon(_currentMapType),
-              isActive: _showMapTypeSelector,
-              onTap: () {
-                setState(() {
-                  _showMapTypeSelector = !_showMapTypeSelector;
-                });
-              },
-              tooltip: 'Map Style',
-              size: 40,
-            ),
+    ),
+    child: isDesktop
+        ? Row(
+            mainAxisSize: MainAxisSize.min,
+            children: _smallActionButtons(isDesktop),
+          )
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _smallActionButtons(isDesktop),
+          ),
+  );
 
-            const SizedBox(width: 4),
-
-            // Compass button
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOutBack,
-                  top: -48,
-                  left: -10,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 200),
-                    opacity: _showRotationFeedback ? 1.0 : 0.0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: _isRotationLocked 
-                          ? Colors.orange.shade600
-                          : Colors.green.shade600,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.15),
-                            blurRadius: 6,
-                            offset: const Offset(-2, 2),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _isRotationLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
-                            size: 12,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            _isRotationLocked ? 'Locked' : 'Unlocked',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                
-                Tooltip(
-                  message: _isRotationLocked ? 'Unlock Rotation (Double-tap)' : 'Reset Rotation (Double-tap to lock)',
-                  child: GestureDetector(
-                    onTap: () {
-                      if (!_isRotationLocked) {
-                        _mapController.rotate(0);
-                        setState(() {
-                          _currentMapRotation = 0.0;
-                        });
-                      }
-                      if (_showMapTypeSelector) {
-                        setState(() {
-                          _showMapTypeSelector = false;
-                        });
-                      }
-                    },
-                    onDoubleTap: () {
-                      setState(() {
-                        _isRotationLocked = !_isRotationLocked;
-                        _showRotationFeedback = true;
-                      });
-                      
-                      Timer(const Duration(milliseconds: 1500), () {
-                        if (mounted) {
-                          setState(() {
-                            _showRotationFeedback = false;
-                          });
-                        }
-                      });
-                    },
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: _buildCompass(),
-                    ),
-                  ),
+  // -----------------------------------------------------------------
+  //  MOBILE LAYOUT (Vertical)
+  // -----------------------------------------------------------------
+  if (!isDesktop) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        // Map Type Selection Container - Original Mini Style
+        if (_showMapTypeSelector) ...[
+          Container(
+            margin: const EdgeInsets.only(bottom: 7),
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
                 ),
               ],
             ),
-
-            const SizedBox(width: 4),
-            
-            // Filter button
-            _buildModernActionButton(
-              icon: Icons.tune_rounded,
-              isActive: false,
-              onTap: () {
-                _showHotspotFilterDialog();
-                if (_showMapTypeSelector) {
-                  setState(() {
-                    _showMapTypeSelector = false;
-                  });
-                }
-              },
-              tooltip: 'Filter Hotspots',
-              size: 40,
-            ),
-
-            const SizedBox(width: 4),
-
-            // Chat button - for desktop
-            if (_userProfile != null) ...[
-              Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  _buildModernActionButton(
-                    icon: Icons.chat,
-                    isActive: false,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ChatDesktopScreen(
-                            userProfile: _userProfile!,
-                          ),
-                        ),
-                      ).then((_) {
-                        _loadUnreadChatCount();
-                      });
-                      
-                      if (_showMapTypeSelector) {
-                        setState(() {
-                          _showMapTypeSelector = false;
-                        });
-                      }
-                    },
-                    tooltip: 'Community Chat',
-                    size: 40,
-                  ),
-                  if (_unreadChatCount > 0)
-                    Positioned(
-                      right: -4,
-                      top: -4,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: Colors.red,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
-                        constraints: const BoxConstraints(
-                          minWidth: 20,
-                          minHeight: 20,
-                        ),
-                        child: Center(
-                          child: Text(
-                            _unreadChatCount > 99 ? '99+' : '$_unreadChatCount',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: MapType.values.map((type) {
+                final isSelected = type == _currentMapType;
+                return GestureDetector(
+                  onTap: () {
+                    _switchMapType(type);
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected ? Colors.blue.shade50 : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: isSelected
+                          ? Border.all(color: Colors.blue.shade300, width: 1)
+                          : null,
                     ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _getMapTypeIcon(type),
+                          size: 16,
+                          color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          _getMapTypeName(type),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                            color: isSelected ? Colors.blue.shade700 : Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+
+        // Modern Button Container - Aligned with Location Button
+        smallButtonsPill,
+
+        const SizedBox(height: 12),
+
+        // My Location button - BIGGER and more prominent
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.12),
+                blurRadius: 24,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: _buildModernLocationButton(),
+        ),
+      ],
+    );
+  }
+
+  // -----------------------------------------------------------------
+  //  DESKTOP LAYOUT (Horizontal Row, Bottom-Right)
+  // -----------------------------------------------------------------
+  return Padding(
+    padding: const EdgeInsets.all(16),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Map Type Selector (compact horizontal when open)
+        if (_showMapTypeSelector)
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: MapType.values.map((type) {
+                final isSelected = type == _currentMapType;
+                return GestureDetector(
+                  onTap: () => _switchMapType(type),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isSelected ? Colors.blue.shade50 : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                      border: isSelected
+                          ? Border.all(color: Colors.blue.shade300, width: 1)
+                          : null,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _getMapTypeIcon(type),
+                          size: 14,
+                          color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _getMapTypeName(type),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                            color: isSelected ? Colors.blue.shade700 : Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+
+        // Small Buttons Pill (Horizontal)
+        Flexible(
+          child: smallButtonsPill,
+        ),
+
+        const SizedBox(width: 12),
+
+        // My Location Button
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.12),
+                blurRadius: 24,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: _buildModernLocationButton(),
+        ),
+      ],
+    ),
+  );
+}
+
+// -----------------------------------------------------------------
+//  Helper: All action buttons (filters Save Points & Chat on desktop)
+// -----------------------------------------------------------------
+List<Widget> _smallActionButtons(bool isDesktop) {
+  final spacer = isDesktop
+      ? const SizedBox(width: 4)
+      : const SizedBox(height: 4);
+
+  return [
+    // 1. Map Type Toggle
+    _buildModernActionButton(
+      icon: _getMapTypeIcon(_currentMapType),
+      isActive: _showMapTypeSelector,
+      onTap: () {
+        setState(() {
+          _showMapTypeSelector = !_showMapTypeSelector;
+        });
+      },
+      tooltip: 'Map Style',
+      size: 40,
+    ),
+    spacer,
+
+    // 2. Compass with Rotation Lock Feedback
+    Stack(
+      clipBehavior: Clip.none,
+      children: [
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutBack,
+          right: _showRotationFeedback ? 48 : 18,
+          top: 3,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 200),
+            opacity: _showRotationFeedback ? 1.0 : 0.0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _isRotationLocked ? Colors.orange.shade600 : Colors.green.shade600,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    blurRadius: 6,
+                    offset: const Offset(-2, 2),
+                  ),
                 ],
               ),
-              const SizedBox(width: 4),
-            ],
-          ],
-        ),
-      ),
-
-      const SizedBox(width: 12),
-
-      
-      
-const SizedBox(width: 12),
-
-// Vertical stack: Zoom controls on top, Location button below
-Column(
-  mainAxisSize: MainAxisSize.min,
-  children: [
-    // Zoom Controls
-    Container(
-      width: 35,
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 3),
-            spreadRadius: 0,
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Zoom In button
-          _buildModernActionButton(
-            icon: Icons.add_rounded,
-            isActive: false,
-            onTap: () {
-              final currentZoom = _mapController.camera.zoom;
-              final maxZoom = _getMaxZoomForMapType(_currentMapType).toDouble();
-              if (currentZoom < maxZoom) {
-                _mapController.move(
-                  _mapController.camera.center,
-                  (currentZoom + 1).clamp(3.0, maxZoom),
-                );
-              }
-              if (_showMapTypeSelector) {
-                setState(() {
-                  _showMapTypeSelector = false;
-                });
-              }
-            },
-            tooltip: 'Zoom In',
-            size: 30,
-          ),
-          
-          const SizedBox(height: 4),
-          
-          // Zoom Out button
-          _buildModernActionButton(
-            icon: Icons.remove_rounded,
-            isActive: false,
-            onTap: () {
-              final currentZoom = _mapController.camera.zoom;
-              if (currentZoom > 3.0) {
-                _mapController.move(
-                  _mapController.camera.center,
-                  (currentZoom - 1).clamp(3.0, _getMaxZoomForMapType(_currentMapType).toDouble()),
-                );
-              }
-              if (_showMapTypeSelector) {
-                setState(() {
-                  _showMapTypeSelector = false;
-                });
-              }
-            },
-            tooltip: 'Zoom Out',
-            size: 30,
-          ),
-        ],
-      ),
-    ),
-    
-    const SizedBox(height: 12),
-    
-    // My Location button
-    Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 24,
-            offset: const Offset(0, 6),
-            spreadRadius: 0,
-          ),
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-            spreadRadius: 0,
-          ),
-        ],
-      ),
-      child: _buildModernLocationButton(),
-    ),
-  ],
-),
-    ],
-  );
-}
-
-// MOBILE VERSION - VERTICAL LAYOUT (ORIGINAL)
-Widget _buildMobileFloatingActions() {
-  return Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.end,
-    children: [
-      // Map Type Selection Container
-      if (_showMapTypeSelector) ...[
-        Container(
-          margin: const EdgeInsets.only(bottom: 7),
-          padding: const EdgeInsets.all(7),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 4,
-                offset: const Offset(0, 1),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _isRotationLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
+                    size: 12,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _isRotationLocked ? 'Locked' : 'Unlocked',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: MapType.values.map((type) {
-              final isSelected = type == _currentMapType;
-              return GestureDetector(
-                onTap: () {
-                  _switchMapType(type);
-                },
-                child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 2),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isSelected ? Colors.blue.shade50 : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                    border: isSelected 
-                      ? Border.all(color: Colors.blue.shade300, width: 1)
-                      : null,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _getMapTypeIcon(type),
-                        size: 16,
-                        color: isSelected ? Colors.blue.shade700 : Colors.grey.shade600,
-                      ),
-                      const SizedBox(width: 7),
-                      Text(
-                        _getMapTypeName(type),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                          color: isSelected ? Colors.blue.shade700 : Colors.grey.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
+        ),
+        Tooltip(
+          message: _isRotationLocked
+              ? 'Unlock Rotation (Double-tap)'
+              : 'Reset Rotation (Double-tap to lock)',
+          child: GestureDetector(
+            onTap: () {
+              if (!_isRotationLocked) {
+                _mapController.rotate(0);
+                setState(() {
+                  _currentMapRotation = 0.0;
+                });
+              }
+              if (_showMapTypeSelector) {
+                setState(() {
+                  _showMapTypeSelector = false;
+                });
+              }
+            },
+            onDoubleTap: () {
+              setState(() {
+                _isRotationLocked = !_isRotationLocked;
+                _showRotationFeedback = true;
+              });
+              Timer(const Duration(milliseconds: 1500), () {
+                if (mounted) {
+                  setState(() {
+                    _showRotationFeedback = false;
+                  });
+                }
+              });
+            },
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: _buildCompass(),
+            ),
           ),
         ),
       ],
-      
-      // Modern Button Container
-      Container(
-        width: 48,
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.08),
-              blurRadius: 16,
-              offset: const Offset(0, 3),
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Map Type Toggle Button
-            _buildModernActionButton(
-              icon: _getMapTypeIcon(_currentMapType),
-              isActive: _showMapTypeSelector,
-              onTap: () {
-                setState(() {
-                  _showMapTypeSelector = !_showMapTypeSelector;
-                });
-              },
-              tooltip: 'Map Style',
-              size: 40,
-            ),
+    ),
+    spacer,
 
-            const SizedBox(height: 4),
+    // 3. Filter Button
+    _buildModernActionButton(
+      icon: Icons.tune_rounded,
+      isActive: false,
+      onTap: () {
+        _showHotspotFilterDialog();
+        if (_showMapTypeSelector) {
+          setState(() {
+            _showMapTypeSelector = false;
+          });
+        }
+      },
+      tooltip: 'Filter Hotspots',
+      size: 40,
+    ),
+    spacer,
 
-            // Compass button
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOutBack,
-                  right: _showRotationFeedback ? 48 : 18,
-                  top: 3,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 200),
-                    opacity: _showRotationFeedback ? 1.0 : 0.0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: _isRotationLocked 
-                          ? Colors.orange.shade600
-                          : Colors.green.shade600,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.15),
-                            blurRadius: 6,
-                            offset: const Offset(-2, 2),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _isRotationLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
-                            size: 12,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            _isRotationLocked ? 'Locked' : 'Unlocked',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                
-                Tooltip(
-                  message: _isRotationLocked ? 'Unlock Rotation (Double-tap)' : 'Reset Rotation (Double-tap to lock)',
-                  child: GestureDetector(
-                    onTap: () {
-                      if (!_isRotationLocked) {
-                        _mapController.rotate(0);
-                        setState(() {
-                          _currentMapRotation = 0.0;
-                        });
-                      }
-                      if (_showMapTypeSelector) {
-                        setState(() {
-                          _showMapTypeSelector = false;
-                        });
-                      }
-                    },
-                    onDoubleTap: () {
-                      setState(() {
-                        _isRotationLocked = !_isRotationLocked;
-                        _showRotationFeedback = true;
-                      });
-                      
-                      Timer(const Duration(milliseconds: 1500), () {
-                        if (mounted) {
-                          setState(() {
-                            _showRotationFeedback = false;
-                          });
-                        }
-                      });
-                    },
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: _buildCompass(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 4),
-            
-            // Filter button
-            _buildModernActionButton(
-              icon: Icons.tune_rounded,
-              isActive: false,
-              onTap: () {
-                _showHotspotFilterDialog();
-                if (_showMapTypeSelector) {
+    // 4. Save Points (Logged-in only) - HIDDEN ON DESKTOP (in sidebar instead)
+    if (_userProfile != null && !isDesktop) ...[
+      _buildModernActionButton(
+        icon: Icons.bookmark_rounded,
+        isActive: _showSavePointSelector,
+        onTap: () async {
+          final result = await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => SavePointScreen(
+                userProfile: _userProfile,
+                currentPosition: _currentPosition,
+                onNavigateToPoint: (point) {
+                  _mapController.move(point, 16.0);
                   setState(() {
-                    _showMapTypeSelector = false;
+                    _destination = point;
                   });
-                }
-              },
-              tooltip: 'Filter Hotspots',
-              size: 40,
-            ),
-
-            const SizedBox(height: 4),
-
-            // Navigate button - Opens full screen
-            _buildModernActionButton(
-              icon: Icons.navigation_rounded,
-              isActive: false,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => QuickAccessScreen(
-                      safeSpots: _safeSpots,
-                      hotspots: _hotspots,
-                      currentPosition: _currentPosition,
-                      userProfile: _userProfile,
-                      isAdmin: _hasAdminPermissions,
-                      onGetDirections: _getDirections,
-                      onGetSafeRoute: _getSafeRoute,
-                      onShareLocation: _shareLocation,
-                      onShowOnMap: (location) {
-                        Navigator.pop(context);
-                        _showOnMap(location);
-                      },
-                      onNavigateToSafeSpot: (spot) {
-                        Navigator.pop(context);
-                        _navigateToSafeSpot(spot);
-                      },
-                      onNavigateToHotspot: (hotspot) {
-                        Navigator.pop(context);
-                        _navigateToHotspot(hotspot);
-                      },
-                      onRefresh: _loadSafeSpots,
-                      onNavigate: (destination) {
-                        Navigator.pop(context);
-                        setState(() {
-                          _destination = destination;
-                          _currentTab = MainTab.map;
-                        });
-                        _mapController.move(destination, 16.0);
-                      },
-                      // ADD THIS NEW PARAMETER:
-                      onGetSafeRouteAndClose: (location) {
-                        Navigator.pop(context);
-                        _getSafeRoute(location);
-                      },
-                    ),
-                  ),
-                );
-                
-                if (_showMapTypeSelector) {
-                  setState(() {
-                    _showMapTypeSelector = false;
-                  });
-                }
-              },
-              tooltip: 'Quick Navigate',
-              size: 40,
-            ),
-
-            const SizedBox(height: 4),
-
-            // Save Points button - Only for logged-in users on mobile
-            if (_userProfile != null) ...[
-              _buildModernActionButton(
-                icon: Icons.bookmark_rounded,
-                isActive: _showSavePointSelector,
-                onTap: () async {
-                  final result = await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => SavePointScreen(
-                        userProfile: _userProfile,
-                        currentPosition: _currentPosition,
-                        onNavigateToPoint: (point) {
-                          _mapController.move(point, 16.0);
-                          setState(() {
-                            _destination = point;
-                          });
-                        },
-                        onShowOnMap: _showOnMap,
-                        onGetSafeRoute: _getSafeRoute,
-                        onUpdate: () => _loadSavePoints(),
-                      ),
-                    ),
-                  );
-
-                  if (result == true) {
-                    _loadSavePoints();
-                  }
-
-                  if (_showMapTypeSelector) {
-                    setState(() {
-                      _showMapTypeSelector = false;
-                    });
-                  }
                 },
-                tooltip: 'My Save Points',
-                size: 40,
+                onShowOnMap: _showOnMap,
+                onGetSafeRoute: _getSafeRoute,
+                onUpdate: () => _loadSavePoints(),
               ),
-              const SizedBox(height: 4),
-            ],
-          ],
-        ),
-      ),
+            ),
+          );
 
-      const SizedBox(height: 12),
-      
-      // My Location button
-      Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.12),
-              blurRadius: 24,
-              offset: const Offset(0, 6),
-              spreadRadius: 0,
-            ),
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: _buildModernLocationButton(),
+          if (result == true) {
+            _loadSavePoints();
+          }
+
+          if (_showMapTypeSelector) {
+            setState(() {
+              _showMapTypeSelector = false;
+            });
+          }
+        },
+        tooltip: 'My Save Points',
+        size: 40,
       ),
+      spacer,
     ],
-  );
+
+    // 5. Safety Chatbot (Logged-in only) - HIDDEN ON DESKTOP (in sidebar instead)
+    if (_userProfile != null && !isDesktop)
+      _buildModernActionButton(
+        icon: Icons.support_agent_rounded,
+        isActive: false,
+        onTap: () async {
+          await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => SafetyChatbotScreen(
+                currentPosition: _currentPosition,
+                hotspots: _hotspots,
+                safeSpots: _safeSpots,
+              ),
+            ),
+          );
+
+          if (_showMapTypeSelector) {
+            setState(() {
+              _showMapTypeSelector = false;
+            });
+          }
+        },
+        tooltip: 'Safety Assistant',
+        size: 40,
+      ),
+  ];
 }
 
 // Helper method for creating modern action buttons with size parameter
@@ -11626,9 +10635,9 @@ Widget _buildModernActionButton({
         decoration: BoxDecoration(
           color: isActive ? Colors.blue.shade50 : Colors.transparent,
           borderRadius: BorderRadius.circular(size * 0.3),
-          border: isActive 
-            ? Border.all(color: Colors.blue.shade200, width: 1.5)
-            : null,
+          border: isActive
+              ? Border.all(color: Colors.blue.shade200, width: 1.5)
+              : null,
         ),
         child: Icon(
           icon,
@@ -11651,9 +10660,9 @@ Widget _buildModernLocationButton() {
             _showMapTypeSelector = false;
           }
         });
-        
+
         _moveToCurrentLocation();
-        
+
         if (_currentPosition == null) {
           await _getCurrentLocation();
           _moveToCurrentLocation();
@@ -11665,9 +10674,9 @@ Widget _buildModernLocationButton() {
         decoration: BoxDecoration(
           color: _locationButtonPressed ? Colors.blue.shade600 : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: _locationButtonPressed 
-            ? null 
-            : Border.all(color: Colors.grey.shade200, width: 1.5),
+          border: _locationButtonPressed
+              ? null
+              : Border.all(color: Colors.grey.shade200, width: 1.5),
         ),
         child: Icon(
           _locationButtonPressed ? Icons.my_location_rounded : Icons.location_searching_rounded,
@@ -11679,8 +10688,7 @@ Widget _buildModernLocationButton() {
   );
 }
 
-//COMPASS COMPASS - More Compass-Like Design
-
+// COMPASS - More Compass-Like Design
 Widget _buildCompass() {
   return Container(
     width: 40,
@@ -11688,20 +10696,19 @@ Widget _buildCompass() {
     decoration: BoxDecoration(
       color: Colors.transparent,
       shape: BoxShape.circle,
-      border: _isRotationLocked 
-        ? Border.all(color: Colors.orange.shade400, width: 2)
-        : Border.all(color: Colors.grey.shade300, width: 1),
+      border: _isRotationLocked
+          ? Border.all(color: Colors.orange.shade400, width: 2)
+          : Border.all(color: Colors.grey.shade300, width: 1),
     ),
     child: Stack(
       alignment: Alignment.center,
       children: [
-        // Rotating compass elements (only when not locked)
         Transform.rotate(
           angle: _isRotationLocked ? 0 : -_currentMapRotation * (3.14159 / 180),
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // Compass outer ring
+              // Outer ring
               Container(
                 width: 34,
                 height: 34,
@@ -11711,8 +10718,7 @@ Widget _buildCompass() {
                   border: Border.all(color: Colors.grey.shade300, width: 1),
                 ),
               ),
-              
-              // Compass inner circle
+              // Inner circle
               Container(
                 width: 28,
                 height: 28,
@@ -11722,8 +10728,7 @@ Widget _buildCompass() {
                   border: Border.all(color: Colors.grey.shade200, width: 0.5),
                 ),
               ),
-              
-              // North needle (red)
+              // North (red)
               Positioned(
                 top: 7,
                 child: Container(
@@ -11735,8 +10740,7 @@ Widget _buildCompass() {
                   ),
                 ),
               ),
-              
-              // South needle (white with border)
+              // South (white)
               Positioned(
                 bottom: 7,
                 child: Container(
@@ -11752,7 +10756,6 @@ Widget _buildCompass() {
                   ),
                 ),
               ),
-              
               // Center dot
               Container(
                 width: 4,
@@ -11762,40 +10765,14 @@ Widget _buildCompass() {
                   color: _isRotationLocked ? Colors.orange.shade600 : Colors.grey.shade600,
                 ),
               ),
-              
-              // Cardinal direction markers (small lines)
-              // North
-              Positioned(
-                top: 3,
-                child: Container(
-                  width: 1,
-                  height: 3,
-                  color: Colors.grey.shade400,
-                ),
-              ),
-              // East
-              Positioned(
-                right: 3,
-                child: Container(
-                  width: 3,
-                  height: 1,
-                  color: Colors.grey.shade400,
-                ),
-              ),
-              // West
-              Positioned(
-                left: 3,
-                child: Container(
-                  width: 3,
-                  height: 1,
-                  color: Colors.grey.shade400,
-                ),
-              ),
+              // Cardinal markers
+              Positioned(top: 3, child: Container(width: 1, height: 3, color: Colors.grey.shade400)),
+              Positioned(right: 3, child: Container(width: 3, height: 1, color: Colors.grey.shade400)),
+              Positioned(left: 3, child: Container(width: 3, height: 1, color: Colors.grey.shade400)),
             ],
           ),
         ),
-        
-        // Modern lock indicator when rotation is locked
+        // Lock icon when locked
         if (_isRotationLocked)
           Positioned(
             bottom: -2,
@@ -11812,11 +10789,7 @@ Widget _buildCompass() {
                   ),
                 ],
               ),
-              child: const Icon(
-                Icons.lock_rounded,
-                color: Colors.white,
-                size: 6,
-              ),
+              child: const Icon(Icons.lock_rounded, color: Colors.white, size: 6),
             ),
           ),
       ],
@@ -11824,7 +10797,21 @@ Widget _buildCompass() {
   );
 }
 
-
+// Helper method to get readable names for map types
+String _getMapTypeName(MapType type) {
+  switch (type) {
+    case MapType.standard:
+      return 'Standard';
+    case MapType.satellite:
+      return 'Satellite';
+    case MapType.terrain:
+      return 'Terrain';
+    case MapType.topographic:
+      return 'Topographic';
+    case MapType.dark:
+      return 'Dark Mode';
+  }
+}
 
 
 
@@ -12644,48 +11631,37 @@ void _switchMapType(MapType newType) {
 }
   
 
-// 4. Update the name getter
-  String _getMapTypeName(MapType type) {
-    switch (type) {
-      case MapType.defaultMap:
-        return 'Default';
-      case MapType.standard:
-        return 'Street';
-      case MapType.satellite:
-        return 'Satellite';
-      case MapType.cycleMap:
-        return 'Terrain';
-    }
+// Helper method to get max zoom for each map type
+int _getMaxZoomForMapType(MapType type) {
+  switch (type) {
+    case MapType.standard:
+      return 19;
+    case MapType.terrain:
+      return 17; // OpenTopoMap has limited zoom
+    case MapType.satellite:
+      return 18; // Esri imagery
+    case MapType.topographic:
+      return 17; // Esri topo
+    case MapType.dark:
+      return 18; // CartoDB
   }
+}
 
-  // 5. Update max zoom helper
-  int _getMaxZoomForMapType(MapType type) {
-    switch (type) {
-      case MapType.defaultMap:
-        return 19;
-      case MapType.standard:
-        return 19;
-      case MapType.satellite:
-        return 18;
-      case MapType.cycleMap:
-        return 19;
-    }
+// Helper method to get icon for each map type
+IconData _getMapTypeIcon(MapType type) {
+  switch (type) {
+    case MapType.standard:
+      return Icons.map;
+    case MapType.satellite:
+      return Icons.satellite_alt;
+    case MapType.terrain:
+      return Icons.terrain;
+    case MapType.topographic:
+      return Icons.landscape;
+    case MapType.dark:
+      return Icons.dark_mode;
   }
-
-  // 6. Update icon helper with new icon for default
-  IconData _getMapTypeIcon(MapType type) {
-    switch (type) {
-      case MapType.defaultMap:
-        return Icons.layers_outlined; // or Icons.public_outlined, Icons.explore_outlined
-      case MapType.standard:
-        return Icons.map_outlined;
-      case MapType.satellite:
-        return Icons.satellite_alt_outlined;
-      case MapType.cycleMap:
-        return Icons.terrain_outlined;
-    }
-  }
-
+}
 
 
 
@@ -12851,18 +11827,17 @@ onMapEvent: (MapEvent mapEvent) {
               ),
             ),
             children: [
-            TileLayer(
-              urlTemplate: currentConfig['urlTemplate'],
-              userAgentPackageName: 'com.example.zecure',
-              maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
-              fallbackUrl: currentConfig['fallbackUrl'],
-              subdomains: (_currentMapType == MapType.cycleMap || _currentMapType == MapType.defaultMap) 
-                  ? ['a', 'b', 'c'] 
-                  : const [],
-              errorTileCallback: (tile, error, stackTrace) {
-                print('Tile loading error: $error');
-              },
-            ),
+              // Enhanced Tile Layer with dynamic source
+              TileLayer(
+                urlTemplate: currentConfig['urlTemplate'],
+                userAgentPackageName: 'com.example.zecure',
+                maxZoom: _getMaxZoomForMapType(_currentMapType).toDouble(),
+                fallbackUrl: currentConfig['fallbackUrl'],
+                subdomains: _currentMapType == MapType.dark ? ['a', 'b', 'c', 'd'] : const [],
+                errorTileCallback: (tile, error, stackTrace) {
+                  print('Tile loading error: $error');
+                },
+              ),
 
               // UPDATED: Only show route polylines, not tracking polylines
               if (_routePoints.isNotEmpty && _hasActiveRoute) ...[
@@ -17414,7 +16389,7 @@ Widget _buildCurrentScreen(bool isDesktop) {
                 child: Container(
                   width: isDesktop ? 600 : null,
                   child: (_userProfile != null && !isDesktop)
-                      ? _buildSearchBar(isWeb: isDesktop)
+                      ? _buildSearchBar(isWeb: isDesktop) // Mobile logged-in: full width search bar
                       : Row(
                           children: [
                             Expanded(child: _buildSearchBar(isWeb: isDesktop)),
@@ -17471,13 +16446,10 @@ Widget _buildCurrentScreen(bool isDesktop) {
             ),
           ),
           _buildFloatingDurationWidget(),
+          // Add the Mini Legend here
           if (isDesktop) const MiniLegend(),
         ],
       );
-    
-    case MainTab.chat:
-      return ChatChannelsScreen(userProfile: _userProfile!);
-    
     case MainTab.quickAccess:
       return isDesktop
           ? Stack(
@@ -17534,31 +16506,32 @@ Widget _buildCurrentScreen(bool isDesktop) {
                     ),
                   ),
                 ),
+                // Add the Mini Legend here
                 const MiniLegend(),
               ],
             )
-          : QuickAccessScreen(
-              safeSpots: _safeSpots,
-              hotspots: _hotspots,
-              currentPosition: _currentPosition,
-              userProfile: _userProfile,
-              isAdmin: _hasAdminPermissions,
-              onGetDirections: _getDirections,
-              onGetSafeRoute: _getSafeRoute,
-              onShareLocation: _shareLocation,
-              onShowOnMap: _showOnMap,
-              onNavigateToSafeSpot: _navigateToSafeSpot,
-              onNavigateToHotspot: _navigateToHotspot,
-              onRefresh: _loadSafeSpots,
-              onNavigate: (destination) {
-                _mapController.move(destination, 16.0);
-                setState(() {
-                  _destination = destination;
-                  _currentTab = MainTab.map;
-                });
-              },
-            );
-    
+: QuickAccessScreen(
+    safeSpots: _safeSpots,
+    hotspots: _hotspots,
+    currentPosition: _currentPosition,
+    userProfile: _userProfile,
+    isAdmin: _hasAdminPermissions,
+    onGetDirections: _getDirections,
+    onGetSafeRoute: _getSafeRoute,
+    onShareLocation: _shareLocation,
+    onShowOnMap: _showOnMap,
+    onNavigateToSafeSpot: _navigateToSafeSpot,
+    onNavigateToHotspot: _navigateToHotspot,
+    onRefresh: _loadSafeSpots,
+    onNavigate: (destination) {
+      // Handle navigation - move map to destination
+      _mapController.move(destination, 16.0);
+      setState(() {
+        _destination = destination;
+        _currentTab = MainTab.map; // Switch back to map
+      });
+    },
+  );
     case MainTab.notifications:
       return isDesktop
           ? Stack(
@@ -17615,11 +16588,11 @@ Widget _buildCurrentScreen(bool isDesktop) {
                     ),
                   ),
                 ),
+                // Add the Mini Legend here
                 const MiniLegend(),
               ],
             )
           : _buildNotificationsScreen();
-    
     case MainTab.profile:
       return _buildProfileScreen();
 
@@ -17642,78 +16615,6 @@ Widget _buildCurrentScreen(bool isDesktop) {
                           children: [
                             Expanded(child: _buildSearchBar(isWeb: isDesktop)),
                             const SizedBox(width: 12),
-                            
-                            if (_userProfile != null) ...[
-                              Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  Container(
-                                    width: 45,
-                                    height: 45,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.08),
-                                          blurRadius: 12,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                    ),
-                                    child: IconButton(
-                                      iconSize: 22,
-                                      padding: EdgeInsets.zero,
-                                      icon: Icon(
-                                        Icons.chat_bubble_rounded,
-                                        color: Colors.grey.shade700,
-                                      ),
-                                      onPressed: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) => ChatDesktopScreen(
-                                              userProfile: _userProfile!,
-                                            ),
-                                          ),
-                                        ).then((_) {
-                                          _loadUnreadChatCount();
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                  if (_unreadChatCount > 0)
-                                    Positioned(
-                                      right: -2,
-                                      top: -2,
-                                      child: Container(
-                                        padding: const EdgeInsets.all(4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.red,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(color: Colors.white, width: 2),
-                                        ),
-                                        constraints: const BoxConstraints(
-                                          minWidth: 18,
-                                          minHeight: 18,
-                                        ),
-                                        child: Center(
-                                          child: Text(
-                                            _unreadChatCount > 99 ? '99+' : '$_unreadChatCount',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(width: 12),
-                            ],
-                            
                             Container(
                               width: 45,
                               height: 45,
@@ -17751,6 +16652,8 @@ Widget _buildCurrentScreen(bool isDesktop) {
                     ),
                   ),
                 ),
+                // SavePointDesktopScreen is rendered in _buildResponsiveDesktopLayout
+                // Add the Mini Legend here
                 const MiniLegend(),
               ],
             )
@@ -17761,7 +16664,7 @@ Widget _buildCurrentScreen(bool isDesktop) {
                 _mapController.move(point, 16.0);
                 setState(() {
                   _destination = point;
-                  _currentTab = MainTab.map;
+                  _currentTab = MainTab.map; // Switch back to map
                 });
               },
               onShowOnMap: _showOnMap,
@@ -18095,127 +16998,28 @@ Future<void> _loadHeatmapData() async {
     print('Error loading heatmap data: $e');
   }
 }
-
-
 // ============================================
-// LOAD PERSISTENT CLUSTERS FROM DATABASE
-// ============================================
-Future<void> _loadPersistentClusters() async {
-  try {
-    // Fetch all active clusters with their associated crimes
-    final clustersResponse = await Supabase.instance.client
-        .from('heatmap_clusters')
-        .select('''
-          *,
-          heatmap_cluster_crimes!inner(
-            hotspot_id,
-            is_still_active,
-            was_renewal_trigger,
-            added_at
-          )
-        ''')
-        .eq('status', 'active');
-    
-    final clusters = clustersResponse as List;
-    
-    // For each cluster, fetch full crime details
-    final processedClusters = <Map<String, dynamic>>[];
-    
-    for (final clusterData in clusters) {
-      final crimeLinks = clusterData['heatmap_cluster_crimes'] as List;
-      final hotspotIds = crimeLinks.map((link) => link['hotspot_id']).toList();
-      
-      if (hotspotIds.isEmpty) continue;
-      
-      // Fetch complete crime data
-      final crimesResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('''
-            id,
-            type_id,
-            location,
-            time,
-            status,
-            active_status,
-            created_by,
-            reported_by,
-            created_at,
-            crime_type: type_id (id, name, level, category, description)
-          ''')
-          .inFilter('id', hotspotIds);
-      
-      final crimes = (crimesResponse as List)
-          .map((crime) => _formatCrimeForHeatmap(crime))
-          .toList();
-      
-      // Merge is_still_active status from junction table
-      for (final crime in crimes) {
-        final link = crimeLinks.firstWhere(
-          (l) => l['hotspot_id'] == crime['id'],
-          orElse: () => {},
-        );
-        crime['is_still_active_in_cluster'] = link['is_still_active'] ?? true;
-        crime['was_renewal_trigger'] = link['was_renewal_trigger'] ?? false;
-      }
-      
-      processedClusters.add({
-        ...clusterData,
-        'crimes': crimes,
-      });
-    }
-    
-    setState(() {
-      _persistentClusters = processedClusters;
-    });
-    
-    print('✅ Loaded ${_persistentClusters.length} persistent clusters from database');
-    
-  } catch (e) {
-    print('Error loading persistent clusters: $e');
-  }
-}
-// ============================================
-// MODIFIED: Cleanup with persistent cluster awareness
+// NEW: Periodic cleanup of expired crimes
 // ============================================
 
-void _cleanupExpiredHeatmapCrimes() async {
+void _cleanupExpiredHeatmapCrimes() {
   final beforeCount = _heatmapCrimes.length;
   
-  // Don't remove crimes that are in persistent clusters
-  final crimesInClusters = <int>{};
-  
-  try {
-    final clusterCrimes = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('hotspot_id');
-    
-    for (final link in clusterCrimes as List) {
-      crimesInClusters.add(link['hotspot_id']);
-    }
-  } catch (e) {
-    print('Error fetching cluster crimes: $e');
-  }
-  
   setState(() {
-    _heatmapCrimes.removeWhere((crime) {
-      // Keep if in a cluster OR still within time window
-      return !crimesInClusters.contains(crime['id']) && 
-             !_isWithinHeatmapTimeWindow(crime);
-    });
+    _heatmapCrimes.removeWhere((crime) => !_isWithinHeatmapTimeWindow(crime));
   });
   
   final removedCount = beforeCount - _heatmapCrimes.length;
   
   if (removedCount > 0) {
-    print('🧹 Cleaned up $removedCount expired crimes (preserved cluster crimes)');
+    print('🧹 Cleaned up $removedCount expired crimes from heatmap');
     _scheduleHeatmapUpdate();
   }
 }
 
 // ============================================
-// MODIFIED: Calculation with persistent cluster logic
+// MODIFIED: Calculation with re-validation
 // ============================================
-
 
 Future<void> _calculateHeatmap() async {
   if (_isCalculatingHeatmap) return;
@@ -18223,29 +17027,62 @@ Future<void> _calculateHeatmap() async {
   setState(() => _isCalculatingHeatmap = true);
   
   try {
-    // Process only NEW crimes
+    // First, filter all valid crimes
     final validCrimes = _heatmapCrimes.where((crime) {
-      return crime['status'] == 'approved';
+      return crime['status'] == 'approved' && _isWithinHeatmapTimeWindow(crime);
     }).toList();
     
-    if (validCrimes.isNotEmpty) {
-      await _processCrimesAgainstPersistentClusters(validCrimes);
-      
-      // Reload clusters after processing
-      await _loadPersistentClusters();
+    print('Valid crimes: ${validCrimes.length}');
+    
+    // Build clusters from valid crimes
+    if (validCrimes.isEmpty) {
+      setState(() {
+        _heatmapClusters = [];
+        _isCalculatingHeatmap = false;
+      });
+      return;
     }
     
-    // Convert to display clusters
-    final displayClusters = _persistentClusters
-        .where((pc) => pc['status'] == 'active')
-        .map((pc) => _convertPersistentToDisplayCluster(pc))
-        .toList();
+    final clusters = _buildCrimeClusters(validCrimes);
+    
+    // ⭐ KEY: Keep cluster if it has:
+    // - At least MIN_CRIMES_FOR_HOTSPOT valid crimes, OR
+    // - At least 1 valid critical crime + 1 other valid crime (minimum 2), OR
+    // - At least 2 valid high crimes
+    final validClusters = clusters.where((cluster) {
+      final criticalCount = cluster.crimes
+          .where((c) => c['crime_type']['level'] == 'critical' && _isWithinHeatmapTimeWindow(c))
+          .length;
+      final highCount = cluster.crimes
+          .where((c) => c['crime_type']['level'] == 'high' && _isWithinHeatmapTimeWindow(c))
+          .length;
+      final validCount = cluster.crimes
+          .where((c) => _isWithinHeatmapTimeWindow(c))
+          .length;
+      
+      // Standard case: enough valid crimes
+      if (validCount >= MIN_CRIMES_FOR_HOTSPOT) return true;
+      
+      // Special case: Recent critical crime with at least 1 other valid crime
+      if (criticalCount >= 1 && validCount >= 2) {
+        print('⚠️ Keeping hotspot alive: $criticalCount critical + ${validCount - criticalCount} other valid crimes');
+        return true;
+      }
+      
+      // Special case: Multiple recent high-severity crimes
+      if (highCount >= 2) {
+        print('⚠️ Keeping hotspot alive: $highCount high-severity crimes');
+        return true;
+      }
+      
+      return false;
+    }).toList();
     
     setState(() {
-      _heatmapClusters = displayClusters;
+      _heatmapClusters = validClusters;
     });
     
-    print('✅ Heatmap updated: ${displayClusters.length} active clusters');
+    print('✅ Heatmap calculated: ${validClusters.length} hotspots (priority mode)');
     
   } catch (e) {
     print('Heatmap calculation error: $e');
@@ -18254,407 +17091,57 @@ Future<void> _calculateHeatmap() async {
   }
 }
 
-// ============================================
-// PROCESS CRIMES AGAINST PERSISTENT CLUSTERS
-// ============================================
 
-Future<void> _processCrimesAgainstPersistentClusters(List<Map<String, dynamic>> crimes) async {
-  if (crimes.isEmpty) return;
+// Build clusters from crimes using spatial proximity
+List<HeatmapCluster> _buildCrimeClusters(List<Map<String, dynamic>> crimes) {
+  if (crimes.isEmpty) return [];
   
-  // Get existing crime IDs that are already in clusters
-  final existingCrimeIds = <int>{};
-  try {
-    final links = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('hotspot_id');
+  // Convert crimes to points with metadata
+  final crimePoints = crimes.map((crime) {
+    final coords = crime['location']['coordinates'];
+    return {
+      'point': LatLng(coords[1].toDouble(), coords[0].toDouble()),
+      'crime': crime,
+    };
+  }).toList();
+  
+  // Simple clustering: group crimes within CLUSTER_MERGE_DISTANCE
+  final clusters = <List<Map<String, dynamic>>>[];
+  final processed = Set<int>();
+  
+  for (int i = 0; i < crimePoints.length; i++) {
+    if (processed.contains(i)) continue;
     
-    for (final link in links as List) {
-      existingCrimeIds.add(link['hotspot_id']);
-    }
-  } catch (e) {
-    print('Error fetching existing cluster crimes: $e');
-  }
-  
-  // Only process NEW crimes that aren't in any cluster yet
-  final newCrimes = crimes.where((c) => !existingCrimeIds.contains(c['id'])).toList();
-  
-  if (newCrimes.isEmpty) {
-    print('✅ No new crimes to process, skipping cluster assignment');
-    return;
-  }
-  
-  print('🔄 Processing ${newCrimes.length} new crimes against ${_persistentClusters.length} clusters');
-  
-  for (final crime in newCrimes) {
-    final crimePoint = LatLng(
-      crime['location']['coordinates'][1].toDouble(),
-      crime['location']['coordinates'][0].toDouble(),
-    );
+    final cluster = <Map<String, dynamic>>[crimePoints[i]];
+    processed.add(i);
     
-    bool foundCluster = false;
-    
-    // Check against ACTIVE clusters only
-    for (final cluster in _persistentClusters) {
-      if (cluster['status'] != 'active') continue;
+    // Find all nearby crimes
+    for (int j = i + 1; j < crimePoints.length; j++) {
+      if (processed.contains(j)) continue;
       
-      final clusterCenter = LatLng(cluster['center_lat'], cluster['center_lng']);
-      final distance = _calculateDistance(clusterCenter, crimePoint);
+      final distance = _calculateDistance(
+        crimePoints[i]['point'] as LatLng,
+        crimePoints[j]['point'] as LatLng,
+      );
       
       if (distance <= CLUSTER_MERGE_DISTANCE) {
-        await _addCrimeToExistingCluster(cluster['id'], crime);
-        foundCluster = true;
-        break;
+        cluster.add(crimePoints[j]);
+        processed.add(j);
       }
     }
     
-    // Create new cluster only if NOT found
-    if (!foundCluster) {
-      await _checkAndCreateNewCluster(crime, crimes);
-    }
+    clusters.add(cluster);
   }
   
-  // Update only affected clusters (not all)
-  await _updateAffectedClusters(newCrimes);
+  // Convert clusters to HeatmapCluster objects
+  return clusters.map((clusterPoints) {
+    final clusterCrimes = clusterPoints.map((p) => p['crime'] as Map<String, dynamic>).toList();
+    return _createClusterFromCrimes(clusterCrimes);
+  }).toList();
 }
 
-// ============================================
-// NEW: Update only clusters that were affected
-// ============================================
-
-Future<void> _updateAffectedClusters(List<Map<String, dynamic>> affectedCrimes) async {
-  if (affectedCrimes.isEmpty) return;
-  
-  try {
-    // Get cluster IDs that contain these crimes
-    final crimeIds = affectedCrimes.map((c) => c['id']).toList();
-    
-    final links = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('cluster_id')
-        .inFilter('hotspot_id', crimeIds);
-    
-    final affectedClusterIds = (links as List)
-        .map((link) => link['cluster_id'])
-        .toSet()
-        .toList();
-    
-    if (affectedClusterIds.isEmpty) return;
-    
-    print('🔧 Updating ${affectedClusterIds.length} affected clusters');
-    
-    // Update only these clusters
-    for (final clusterId in affectedClusterIds) {
-      final cluster = _persistentClusters.firstWhere(
-        (c) => c['id'] == clusterId,
-        orElse: () => {},
-      );
-      
-      if (cluster.isEmpty) continue;
-      
-      await _updateSingleCluster(clusterId, cluster);
-    }
-    
-  } catch (e) {
-    print('Error updating affected clusters: $e');
-  }
-}
-
-// ============================================
-// NEW: Update a single cluster
-// ============================================
-
-Future<void> _updateSingleCluster(String clusterId, Map<String, dynamic> cluster) async {
-  try {
-    final crimes = cluster['crimes'] as List<Map<String, dynamic>>;
-    
-    if (crimes.isEmpty) {
-      await Supabase.instance.client
-          .from('heatmap_clusters')
-          .update({
-            'status': 'inactive',
-            'deactivated_at': DateTime.now().toIso8601String(),
-            'active_crime_count': 0,
-          })
-          .eq('id', clusterId);
-      return;
-    }
-    
-    // Count active crimes
-    int activeCrimeCount = 0;
-    for (final crime in crimes) {
-      final isActive = _isWithinHeatmapTimeWindow(crime);
-      if (isActive) activeCrimeCount++;
-    }
-    
-    if (activeCrimeCount == 0) {
-      await Supabase.instance.client
-          .from('heatmap_clusters')
-          .update({
-            'status': 'inactive',
-            'deactivated_at': DateTime.now().toIso8601String(),
-            'active_crime_count': 0,
-          })
-          .eq('id', clusterId);
-      return;
-    }
-    
-    // Recalculate properties
-    final activeCrimes = crimes.where((c) => _isWithinHeatmapTimeWindow(c)).toList();
-    final clusterData = _calculateClusterProperties(activeCrimes);
-    
-    final reductionFactor = activeCrimeCount / crimes.length;
-    final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-      SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-      cluster['current_radius'].toDouble(),
-    );
-    
-    await Supabase.instance.client
-        .from('heatmap_clusters')
-        .update({
-          'current_radius': adjustedRadius,
-          'dominant_severity': clusterData['dominantSeverity'],
-          'intensity': clusterData['intensity'],
-          'active_crime_count': activeCrimeCount,
-          'last_recalculated_at': DateTime.now().toIso8601String(),
-        })
-        .eq('id', clusterId);
-    
-  } catch (e) {
-    print('Error updating single cluster: $e');
-  }
-}
-
-// ============================================
-// MODIFIED: Add crime and recalculate cluster properties
-// ============================================
-
-Future<void> _addCrimeToExistingCluster(String clusterId, Map<String, dynamic> crime) async {
-  try {
-    // Check if crime already exists in cluster
-    final existingLink = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select()
-        .eq('cluster_id', clusterId)
-        .eq('hotspot_id', crime['id'])
-        .maybeSingle();
-    
-    if (existingLink != null) {
-      // Crime already in cluster, just update its active status
-      final isActive = _isWithinHeatmapTimeWindow(crime);
-      
-      await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .update({
-            'is_still_active': isActive,
-          })
-          .eq('cluster_id', clusterId)
-          .eq('hotspot_id', crime['id']);
-      
-      print('Updated existing crime ${crime['id']} in cluster $clusterId');
-      return;
-    }
-    
-    // Add new crime to cluster
-    final isActive = _isWithinHeatmapTimeWindow(crime);
-    final isRenewal = !isActive; // If crime is outside window, it's renewal
-    
-    await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .insert({
-          'cluster_id': clusterId,
-          'hotspot_id': crime['id'],
-          'is_still_active': isActive,
-          'was_renewal_trigger': isRenewal,
-        });
-    
-    // ⭐ NEW: Fetch ALL crimes in this cluster to recalculate properties
-    final clusterCrimesResponse = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('hotspot_id')
-        .eq('cluster_id', clusterId);
-    
-    final allHotspotIds = (clusterCrimesResponse as List)
-        .map((link) => link['hotspot_id'])
-        .toList();
-    
-    final allCrimesResponse = await Supabase.instance.client
-        .from('hotspot')
-        .select('''
-          id,
-          type_id,
-          location,
-          time,
-          status,
-          active_status,
-          created_by,
-          reported_by,
-          created_at,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-        .inFilter('id', allHotspotIds);
-    
-    final allCrimes = (allCrimesResponse as List)
-        .map((c) => _formatCrimeForHeatmap(c))
-        .toList();
-    
-    // Get only active crimes for property calculation
-    final activeCrimes = allCrimes.where((c) => _isWithinHeatmapTimeWindow(c)).toList();
-    
-    if (activeCrimes.isEmpty) {
-      print('⚠️ No active crimes in cluster after addition, this should not happen');
-      return;
-    }
-    
-    // Recalculate cluster properties with ALL active crimes
-    final clusterData = _calculateClusterProperties(activeCrimes);
-    
-final reductionFactor = activeCrimes.length / allCrimes.length;
-
-// Get current cluster radius from database
-final currentClusterData = await Supabase.instance.client
-    .from('heatmap_clusters')
-    .select('current_radius')
-    .eq('id', clusterId)
-    .single();
-
-final currentRadius = currentClusterData['current_radius'].toDouble();
-
-// Allow radius to expand beyond current radius if new crimes justify it
-final calculatedRadius = clusterData['radius'] * reductionFactor;
-final newRadius = calculatedRadius.clamp(
-  SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-  SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['max']!,
-);
-
-// Take the LARGER of current radius or newly calculated radius
-final finalRadius = newRadius > currentRadius ? newRadius : currentRadius;
-    
-await Supabase.instance.client
-    .from('heatmap_clusters')
-    .update({
-      'center_lat': clusterData['center'].latitude,
-      'center_lng': clusterData['center'].longitude,
-      'current_radius': finalRadius, // Changed from newRadius
-      'dominant_severity': clusterData['dominantSeverity'],
-      'intensity': clusterData['intensity'],
-      'active_crime_count': activeCrimes.length,
-      'total_crime_count': allCrimes.length,
-      'last_crime_at': crime['time'],
-      'last_recalculated_at': DateTime.now().toIso8601String(),
-    })
-    .eq('id', clusterId);
-
-print('✅ Added crime ${crime['id']} to cluster $clusterId');
-print('   Updated: ${activeCrimes.length} active/${allCrimes.length} total, radius: ${finalRadius.toStringAsFixed(0)}m');
-    
-  } catch (e) {
-    print('Error adding crime to cluster: $e');
-  }
-}
-
-// ============================================
-// CHECK AND CREATE NEW CLUSTER
-// ============================================
-
-Future<void> _checkAndCreateNewCluster(Map<String, dynamic> primaryCrime, List<Map<String, dynamic>> allCrimes) async {
-  try {
-    final primaryPoint = LatLng(
-      primaryCrime['location']['coordinates'][1].toDouble(),
-      primaryCrime['location']['coordinates'][0].toDouble(),
-    );
-    
-    // Find nearby crimes within merge distance
-    final nearbyCrimes = allCrimes.where((crime) {
-      if (crime['id'] == primaryCrime['id']) return true;
-      
-      final crimePoint = LatLng(
-        crime['location']['coordinates'][1].toDouble(),
-        crime['location']['coordinates'][0].toDouble(),
-      );
-      
-      final distance = _calculateDistance(primaryPoint, crimePoint);
-      return distance <= CLUSTER_MERGE_DISTANCE;
-    }).toList();
-    
-    // Count active crimes (within time window)
-    final activeCrimes = nearbyCrimes.where((c) => _isWithinHeatmapTimeWindow(c)).toList();
-    final criticalCount = activeCrimes.where((c) => c['crime_type']['level'] == 'critical').length;
-    final highCount = activeCrimes.where((c) => c['crime_type']['level'] == 'high').length;
-    
-    // Check if meets minimum requirements to form cluster
-    bool canFormCluster = false;
-    
-    if (activeCrimes.length >= MIN_CRIMES_FOR_HOTSPOT) {
-      canFormCluster = true;
-    } else if (criticalCount >= 1 && activeCrimes.length >= 2) {
-      canFormCluster = true;
-    } else if (highCount >= 2) {
-      canFormCluster = true;
-    }
-    
-    if (!canFormCluster) {
-      return; // Not enough crimes to form cluster
-    }
-    
-    // Check if these crimes already belong to another cluster
-    final crimeIds = nearbyCrimes.map((c) => c['id']).toList();
-    final existingLinks = await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .select('cluster_id')
-        .inFilter('hotspot_id', crimeIds);
-    
-    if ((existingLinks as List).isNotEmpty) {
-      print('⚠️ Crimes already belong to existing clusters, skipping new cluster creation');
-      return;
-    }
-    
-    // Calculate cluster properties
-    final clusterData = _calculateClusterProperties(nearbyCrimes);
-    
-    // Create new persistent cluster in database
-    final clusterResponse = await Supabase.instance.client
-        .from('heatmap_clusters')
-        .insert({
-          'center_lat': clusterData['center'].latitude,
-          'center_lng': clusterData['center'].longitude,
-          'current_radius': clusterData['radius'],
-          'dominant_severity': clusterData['dominantSeverity'],
-          'intensity': clusterData['intensity'],
-          'active_crime_count': activeCrimes.length,
-          'total_crime_count': nearbyCrimes.length,
-          'status': 'active',
-          'first_crime_at': nearbyCrimes.map((c) => DateTime.parse(c['time'])).reduce((a, b) => a.isBefore(b) ? a : b).toIso8601String(),
-          'last_crime_at': nearbyCrimes.map((c) => DateTime.parse(c['time'])).reduce((a, b) => a.isAfter(b) ? a : b).toIso8601String(),
-        })
-        .select()
-        .single();
-    
-    final clusterId = clusterResponse['id'];
-    
-    // Link all crimes to the cluster
-    final crimeLinks = nearbyCrimes.map((crime) => {
-      'cluster_id': clusterId,
-      'hotspot_id': crime['id'],
-      'is_still_active': _isWithinHeatmapTimeWindow(crime),
-      'was_renewal_trigger': false,
-    }).toList();
-    
-    await Supabase.instance.client
-        .from('heatmap_cluster_crimes')
-        .insert(crimeLinks);
-    
-    print('✅ Created new persistent cluster $clusterId with ${nearbyCrimes.length} crimes');
-    
-  } catch (e) {
-    print('Error creating new cluster: $e');
-  }
-}
-
-// ============================================
-// CALCULATE CLUSTER PROPERTIES
-// ============================================
-
-Map<String, dynamic> _calculateClusterProperties(List<Map<String, dynamic>> crimes) {
+// Create a single cluster from a group of crimes
+HeatmapCluster _createClusterFromCrimes(List<Map<String, dynamic>> crimes) {
   double totalLat = 0;
   double totalLng = 0;
   double totalWeight = 0;
@@ -18664,11 +17151,14 @@ Map<String, dynamic> _calculateClusterProperties(List<Map<String, dynamic>> crim
     'medium': 0,
     'low': 0,
   };
+  final crimeTypeCount = <String, int>{};
   double intensity = 0.0;
   
+  // Determine dominant severity level
   String dominantSeverity = 'low';
   int maxSeverityCount = 0;
   
+  // Calculate weighted center and statistics
   for (final crime in crimes) {
     final coords = crime['location']['coordinates'];
     final point = LatLng(coords[1].toDouble(), coords[0].toDouble());
@@ -18682,22 +17172,28 @@ Map<String, dynamic> _calculateClusterProperties(List<Map<String, dynamic>> crim
     
     breakdown[level] = (breakdown[level] ?? 0) + 1;
     
+    // Track dominant severity
     if (breakdown[level]! > maxSeverityCount) {
       maxSeverityCount = breakdown[level]!;
       dominantSeverity = level;
     }
     
+    // If ANY critical crime exists, upgrade to critical
     if (level == 'critical') {
       dominantSeverity = 'critical';
     }
+    
+    final crimeType = crime['crime_type']['name'] ?? 'Unknown';
+    crimeTypeCount[crimeType] = (crimeTypeCount[crimeType] ?? 0) + 1;
   }
   
+  // Weighted center
   final center = LatLng(
     totalLat / totalWeight,
     totalLng / totalWeight,
   );
   
-  // Calculate radius
+  // Calculate radius that covers all crimes
   double maxDistance = 0;
   for (final crime in crimes) {
     final coords = crime['location']['coordinates'];
@@ -18706,7 +17202,9 @@ Map<String, dynamic> _calculateClusterProperties(List<Map<String, dynamic>> crim
     if (distance > maxDistance) maxDistance = distance;
   }
   
+  // ⭐ NEW: Use severity-based radius configuration
   final config = SEVERITY_RADIUS_CONFIG[dominantSeverity]!;
+  
   final baseRadius = config['base']!;
   final countMultiplier = crimes.length * config['countMultiplier']!;
   final intensityMultiplier = intensity * config['intensityMultiplier']!;
@@ -18714,62 +17212,24 @@ Map<String, dynamic> _calculateClusterProperties(List<Map<String, dynamic>> crim
   final calculatedRadius = maxDistance + baseRadius + countMultiplier + intensityMultiplier;
   final radius = calculatedRadius.clamp(config['min']!, config['max']!);
   
-  return {
-    'center': center,
-    'radius': radius,
-    'intensity': intensity,
-    'dominantSeverity': dominantSeverity,
-    'breakdown': breakdown,
-  };
-}
-
-
-// ============================================
-// CONVERT PERSISTENT CLUSTER TO DISPLAY CLUSTER
-// ============================================
-
-HeatmapCluster _convertPersistentToDisplayCluster(Map<String, dynamic> persistentCluster) {
-  final crimes = persistentCluster['crimes'] as List<Map<String, dynamic>>;
+  print('🎯 Cluster: ${crimes.length} crimes, $dominantSeverity severity, radius: ${radius.toStringAsFixed(0)}m');
   
-  // Separate active and inactive crimes
-  crimes.where((c) => c['is_still_active_in_cluster'] == true).toList();
-  
-  // Build breakdown from ALL crimes (for historical reference)
-  final breakdown = <String, int>{
-    'critical': 0,
-    'high': 0,
-    'medium': 0,
-    'low': 0,
-  };
-  
-  for (final crime in crimes) {
-    final level = crime['crime_type']['level'] ?? 'low';
-    breakdown[level] = (breakdown[level] ?? 0) + 1;
-  }
-  
-  // Get top crime types from ALL crimes
-  final crimeTypeCount = <String, int>{};
-  for (final crime in crimes) {
-    final crimeType = crime['crime_type']['name'] ?? 'Unknown';
-    crimeTypeCount[crimeType] = (crimeTypeCount[crimeType] ?? 0) + 1;
-  }
-  
+  // Get top 3 crime types
   final sortedTypes = crimeTypeCount.entries.toList()
     ..sort((a, b) => b.value.compareTo(a.value));
   final topTypes = sortedTypes.take(3).map((e) => e.key).toList();
   
   return HeatmapCluster(
-    center: LatLng(persistentCluster['center_lat'], persistentCluster['center_lng']),
-    radius: persistentCluster['current_radius'].toDouble(),
-    intensity: persistentCluster['intensity'].toDouble(),
-    crimeCount: crimes.length, // Total crimes (historical + active)
+    center: center,
+    radius: radius,
+    intensity: intensity,
+    crimeCount: crimes.length,
     crimeBreakdown: breakdown,
     topCrimeTypes: topTypes,
-    crimes: crimes, // ALL crimes (for historical reference)
-    dominantSeverity: persistentCluster['dominant_severity'],
+    crimes: crimes,
+    dominantSeverity: dominantSeverity, // Add this field to your class
   );
 }
-
 
 // ============================================
 // SEVERITY-BASED RADIUS RANGES
@@ -18970,33 +17430,15 @@ Widget _buildHeatmapMarkers() {
 // FIXED: Heatmap details with proper parsing
 // ============================================
 
-// ============================================
-// MODIFIED: Heatmap details with historical crimes
-// ============================================
-
 void _showHeatmapDetails(HeatmapCluster cluster) {
-  // Find the corresponding persistent cluster
-  Map<String, dynamic>? persistentCluster;
+  // Get the most common severity level for time window display
+  final severityCounts = cluster.crimeBreakdown.entries
+      .where((e) => e.value > 0)
+      .toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
   
-  for (final pc in _persistentClusters) {
-    final pcCenter = LatLng(pc['center_lat'], pc['center_lng']);
-    if (_calculateDistance(cluster.center, pcCenter) < 10.0) { // Within 10m
-      persistentCluster = pc;
-      break;
-    }
-  }
-  
-  final activeCrimeCount = persistentCluster?['active_crime_count'] ?? cluster.crimeCount;
-  final totalCrimeCount = persistentCluster?['total_crime_count'] ?? cluster.crimeCount;
-  
-  // Separate active and historical crimes
-  final activeCrimes = cluster.crimes.where((c) => 
-    c['is_still_active_in_cluster'] == true || _isWithinHeatmapTimeWindow(c)
-  ).toList();
-  
-  final historicalCrimes = cluster.crimes.where((c) => 
-    c['is_still_active_in_cluster'] == false && !_isWithinHeatmapTimeWindow(c)
-  ).toList();
+  final primarySeverity = severityCounts.isNotEmpty ? severityCounts.first.key : 'low';
+  final timeWindow = SEVERITY_TIME_WINDOWS[primarySeverity] ?? 30;
   
   showDialog(
     context: context,
@@ -19005,7 +17447,7 @@ void _showHeatmapDetails(HeatmapCluster cluster) {
       child: Container(
         width: 340,
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.8,
+          maxHeight: MediaQuery.of(context).size.height * 0.8, // Max 80% of screen height
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -19047,23 +17489,15 @@ void _showHeatmapDetails(HeatmapCluster cluster) {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Active vs Total crimes
                     Text(
-                      '$activeCrimeCount active crime${activeCrimeCount != 1 ? 's' : ''}',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      '${cluster.crimeCount} crimes in the last $timeWindow days',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    if (historicalCrimes.isNotEmpty)
-                      Text(
-                        '$totalCrimeCount total (${historicalCrimes.length} historical)',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                      ),
                     Text(
                       'Within ${cluster.radius.round()}m radius',
                       style: TextStyle(color: Colors.grey[600], fontSize: 12),
                     ),
                     const SizedBox(height: 16),
-                    
-                    // Crime Severity Breakdown
                     const Text('Crime Severity Breakdown:', style: TextStyle(fontWeight: FontWeight.w600)),
                     const SizedBox(height: 8),
                     ...cluster.crimeBreakdown.entries.where((e) => e.value > 0).map((entry) {
@@ -19081,27 +17515,82 @@ void _showHeatmapDetails(HeatmapCluster cluster) {
                         ),
                       );
                     }),
-                    
-                    // Active Crimes Section
-                    if (activeCrimes.isNotEmpty) ...[
+                    if (cluster.topCrimeTypes.isNotEmpty) ...[
                       const SizedBox(height: 16),
-                      const Text('Recent Crimes:', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.red)),
+                      const Text('Most Common Crimes:', style: TextStyle(fontWeight: FontWeight.w600)),
                       const SizedBox(height: 8),
-                      ..._buildCrimeList(activeCrimes, isActive: true),
-                    ],
-                    
-                    // Historical Crimes Section
-                    if (historicalCrimes.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          const Text('Past Incidents:', style: TextStyle(fontWeight: FontWeight.w600)),
-                          const SizedBox(width: 4),
-                          Icon(Icons.history, size: 16, color: Colors.grey[600]),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ..._buildCrimeList(historicalCrimes, isActive: false),
+                      ...cluster.topCrimeTypes.asMap().entries.map((entry) {
+                        final crimeType = entry.value;
+                        
+                        // Find all crimes of this type
+                        final crimesOfType = cluster.crimes.where(
+                          (c) => (c['crime_type']['name'] ?? 'Unknown') == crimeType
+                        ).toList();
+                        
+                        if (crimesOfType.isEmpty) return const SizedBox.shrink();
+                        
+                        // Sort by time (most recent first)
+                        crimesOfType.sort((a, b) {
+                          final timeA = parseStoredDateTime(a['time']);
+                          final timeB = parseStoredDateTime(b['time']);
+                          return timeB.compareTo(timeA);
+                        });
+                        
+                        final mostRecentTime = parseStoredDateTime(crimesOfType.first['time']);
+                        final timeAgo = _getTimeAgo(mostRecentTime, compact: true);
+                        
+                        // Get the crime level from the most recent crime
+                        final crimeLevel = crimesOfType.first['crime_type']['level'] ?? 'unknown';
+                        final levelCapitalized = crimeLevel[0].toUpperCase() + crimeLevel.substring(1);
+                        
+                        // Count of crimes of this type
+                        final count = crimesOfType.length;
+                        
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '• $crimeType${count > 1 ? ' ($count)' : ''}',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '($levelCapitalized)',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey[600],
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Text(
+                                timeAgo,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                     ],
                   ],
                 ),
@@ -19112,103 +17601,6 @@ void _showHeatmapDetails(HeatmapCluster cluster) {
       ),
     ),
   );
-}
-
-// ============================================
-// HELPER: Build crime list for dialog
-// ============================================
-
-List<Widget> _buildCrimeList(List<Map<String, dynamic>> crimes, {required bool isActive}) {
-  // Group by crime type
-  final groupedCrimes = <String, List<Map<String, dynamic>>>{};
-  
-  for (final crime in crimes) {
-    final crimeType = crime['crime_type']['name'] ?? 'Unknown';
-    if (!groupedCrimes.containsKey(crimeType)) {
-      groupedCrimes[crimeType] = [];
-    }
-    groupedCrimes[crimeType]!.add(crime);
-  }
-  
-  // Sort groups by count (descending)
-  final sortedTypes = groupedCrimes.entries.toList()
-    ..sort((a, b) => b.value.length.compareTo(a.value.length));
-  
-  return sortedTypes.map((entry) {
-    final crimeType = entry.key;
-    final crimesOfType = entry.value;
-    
-    // Sort by time (most recent first)
-    crimesOfType.sort((a, b) {
-      final timeA = parseStoredDateTime(a['time']);
-      final timeB = parseStoredDateTime(b['time']);
-      return timeB.compareTo(timeA);
-    });
-    
-    final mostRecentTime = parseStoredDateTime(crimesOfType.first['time']);
-    final timeAgo = _getTimeAgo(mostRecentTime, compact: true);
-    
-    final crimeLevel = crimesOfType.first['crime_type']['level'] ?? 'unknown';
-    final levelCapitalized = crimeLevel[0].toUpperCase() + crimeLevel.substring(1);
-    
-    final count = crimesOfType.length;
-    final wasRenewalTrigger = crimesOfType.any((c) => c['was_renewal_trigger'] == true);
-    
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: isActive ? Colors.red.shade50 : Colors.grey[100],
-        borderRadius: BorderRadius.circular(8),
-        border: wasRenewalTrigger ? Border.all(color: Colors.orange, width: 2) : null,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      '• $crimeType${count > 1 ? ' ($count)' : ''}',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isActive ? Colors.red.shade900 : Colors.grey[700],
-                      ),
-                    ),
-                    if (wasRenewalTrigger) ...[
-                      const SizedBox(width: 4),
-                      Icon(Icons.refresh, size: 14, color: Colors.orange),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '($levelCapitalized)',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isActive ? Colors.red.shade700 : Colors.grey[600],
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            timeAgo,
-            style: TextStyle(
-              fontSize: 12,
-              color: isActive ? Colors.red.shade700 : Colors.grey[700],
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }).toList();
 }
 
 
@@ -19499,62 +17891,7 @@ void _showSafeSpotDetails(Map<String, dynamic> safeSpot) {
 }
 
   _shouldNonAdminOfficerSeeHotspot(PostgrestMap response) {}
-  
-Future<void> _loadUnreadChatCount() async {
-  if (_userProfile == null) {
-    print('⚠️ Cannot load unread count - no user profile');
-    return;
-  }
-  
-  try {
-    print('📊 Loading unread chat count...');
-    final chatService = ChatService();
-    final userId = _userProfile!['id'] as String;
-    
-    // Get all joined channels
-    final channels = await chatService.getJoinedChannels(userId);
-    print('   Found ${channels.length} joined channels');
-    
-    int totalUnread = 0;
-    for (final channel in channels) {
-      final unread = await chatService.getUnreadCount(channel.id, userId);
-      print('   Channel "${channel.name}": $unread unread');
-      totalUnread += unread;
-    }
-    
-    print('✅ Total unread messages: $totalUnread');
-    
-    if (mounted) {
-      setState(() {
-        _unreadChatCount = totalUnread;
-      });
-    }
-  } catch (e) {
-    print('❌ Error loading unread chat count: $e');
-    print('Stack trace: ${StackTrace.current}');
-  }
 }
-
-void _setupChatRealtimeSubscription() {
-  if (_userProfile == null) {
-    print('⚠️ Cannot setup chat subscription - no user profile');
-    return;
-  }
-  
-  print('🔔 Setting up chat realtime subscription');
-  final chatService = ChatService();
-  
-  // Subscribe to all chat messages to update unread count
-  _chatUpdatesSubscription = chatService.subscribeToAllMessages(() {
-    print('🆕 New message detected! Reloading unread count...');
-    _loadUnreadChatCount();
-  });
-  
-  print('✅ Chat subscription setup complete');
-}
-}
-
-
 
 class CoordinateParseResult {
   final double lat;
@@ -19595,50 +17932,6 @@ class HeatmapCluster {
 
 
 extension on MapController {
-}
-
-class PersistentCluster {
-  final String id;
-  final LatLng center;
-  final double currentRadius;
-  final String dominantSeverity;
-  final double intensity;
-  final int activeCrimeCount;
-  final int totalCrimeCount;
-  final String status;
-  final DateTime firstCrimeAt;
-  final DateTime lastCrimeAt;
-  final List<Map<String, dynamic>> allCrimes; // Historical + active
-  
-  PersistentCluster({
-    required this.id,
-    required this.center,
-    required this.currentRadius,
-    required this.dominantSeverity,
-    required this.intensity,
-    required this.activeCrimeCount,
-    required this.totalCrimeCount,
-    required this.status,
-    required this.firstCrimeAt,
-    required this.lastCrimeAt,
-    required this.allCrimes,
-  });
-  
-  factory PersistentCluster.fromDatabase(Map<String, dynamic> data, List<Map<String, dynamic>> crimes) {
-    return PersistentCluster(
-      id: data['id'],
-      center: LatLng(data['center_lat'], data['center_lng']),
-      currentRadius: data['current_radius'].toDouble(),
-      dominantSeverity: data['dominant_severity'],
-      intensity: data['intensity'].toDouble(),
-      activeCrimeCount: data['active_crime_count'],
-      totalCrimeCount: data['total_crime_count'],
-      status: data['status'],
-      firstCrimeAt: DateTime.parse(data['first_crime_at']),
-      lastCrimeAt: DateTime.parse(data['last_crime_at']),
-      allCrimes: crimes,
-    );
-  }
 }
 
 class LocationSuggestion {

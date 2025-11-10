@@ -420,58 +420,60 @@ const SizedBox(height: 16),
                       ),
                       const SizedBox(height: 16),
 
-                      // Status filters (only for logged-in users)
-                      if (userProfile != null) ...[
-                        const Padding(
-                          padding: EdgeInsets.only(left: 8.0),
-                          child: Text(
-                            'Status',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        buildFilterToggle(
-                          context,
-                          'Pending',
-                          Icons.hourglass_empty,
-                          Colors.deepPurple,
-                          filterService.showPending,
-                          (value) => filterService.togglePending(),
-                        ),
-                        buildFilterToggle(
-                          context,
-                          'Rejected',
-                          Icons.cancel_outlined,
-                          Colors.red,
-                          filterService.showRejected,
-                          (value) => filterService.toggleRejected(),
-                        ),
+                 // Status filters (only for logged-in users)
+if (userProfile != null) ...[
+  const Padding(
+    padding: EdgeInsets.only(left: 8.0),
+    child: Text(
+      'Status',
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: Colors.grey,
+      ),
+    ),
+  ),
+  const SizedBox(height: 8),
+  
+  // Pending/Rejected only for users who can see them (admin/officer or own reports)
+  if (userProfile?['role'] == 'admin' || userProfile?['role'] == 'officer') ...[
+    buildFilterToggle(
+      context,
+      'Pending',
+      Icons.hourglass_empty,
+      Colors.deepPurple,
+      filterService.showPending,
+      (value) => filterService.togglePending(),
+    ),
+    buildFilterToggle(
+      context,
+      'Rejected',
+      Icons.cancel_outlined,
+      Colors.red,
+      filterService.showRejected,
+      (value) => filterService.toggleRejected(),
+    ),
+  ],
 
-                        // Active/Inactive filters (only for admin and regular users)
-                        if (userProfile?['role'] == 'admin' || userProfile?['role'] == 'officer' || userProfile?['role'] == 'user') ...[
-                          buildFilterToggle(
-                            context,
-                            'Active',
-                            Icons.check_circle_outline,
-                            Colors.green,
-                            filterService.showActive,
-                            (value) => filterService.toggleActive(),
-                          ),
-                          buildFilterToggle(
-                            context,
-                            'Inactive',
-                            Icons.pause_circle_outline,
-                            Colors.grey,
-                            filterService.showInactive,
-                            (value) => filterService.toggleInactive(),
-                          ),
-                        ],
-                        const SizedBox(height: 16),
-                      ],
+  // Active/Inactive filters for admins, officers, AND regular users
+  buildFilterToggle(
+    context,
+    'Active',
+    Icons.check_circle_outline,
+    Colors.green,
+    filterService.showActive,
+    (value) => filterService.toggleActive(),
+  ),
+  buildFilterToggle(
+    context,
+    'Inactive (last 60 days)',
+    Icons.pause_circle_outline,
+    Colors.grey,
+    filterService.showInactive,
+    (value) => filterService.toggleInactive(),
+  ),
+  const SizedBox(height: 16),
+],
                     ] else ...[
                       // SAFE SPOTS FILTERS
                       // Safe Spot Types

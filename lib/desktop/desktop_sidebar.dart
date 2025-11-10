@@ -81,144 +81,151 @@ class DesktopSidebar extends StatelessWidget {
     );
   }
 
-  Widget _buildSidebarContent() {
-    return Column(
-      children: [
-        // Logo section with gradient header
-        _buildGradientHeader(),
-        
-        // Navigation items - Scrollable middle section
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
-            child: Column(
-              children: [
-                const SizedBox(height: 8),
-                
-                // Navigation Items
-                _buildModernNavItem(
-                  index: 0,
-                  icon: Icons.map_rounded,
-                  title: 'Map',
-                  subtitle: 'View locations',
-                  isActive: currentIndex == 0,
-                  onTap: () => onTap(0),
-                ),
-                const SizedBox(height: 4),
-                _buildModernNavItem(
-                  index: 1,
-                  icon: Icons.directions,
-                  title: 'Quick Access',
-                  subtitle: 'Safety features',
-                  isActive: currentIndex == 1,
-                  onTap: () => onTap(1),
-                ),
-
-                const SizedBox(height: 4),
-              // Add Save Points navigation item
+Widget _buildSidebarContent() {
+  return Column(
+    children: [
+      // Logo section with gradient header
+      _buildGradientHeader(),
+      
+      // Navigation items - Scrollable middle section
+      Expanded(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              
+              // Navigation Items
               _buildModernNavItem(
-                index: 4,
+                index: 0,
+                icon: Icons.map_rounded,
+                title: 'Map',
+                subtitle: 'View locations',
+                isActive: currentIndex == 0,
+                onTap: () => onTap(0),
+              ),
+              const SizedBox(height: 4),
+              _buildModernNavItem(
+                index: 1,
+                icon: Icons.directions,
+                title: 'Quick Access',
+                subtitle: 'Safety features',
+                isActive: currentIndex == 1,
+                onTap: () => onTap(1),
+              ),
+
+              const SizedBox(height: 4),
+              // Save Points - FIXED
+              _buildModernNavItem(
+                index: 2,
                 icon: Icons.bookmark_rounded,
                 title: 'Save Points',
                 subtitle: 'Saved locations',
-                isActive: currentIndex == 4,
-                onTap: () => onTap(4),
+                isActive: currentIndex == 2,  // ← Changed from 4 to 2
+                onTap: () => onTap(2),        // ← Changed from 4 to 2
               ),
-                const SizedBox(height: 4),
-                _buildModernNavItem(
-                  index: 2,
-                  icon: Icons.notifications_rounded,
-                  title: 'Notifications',
-                  subtitle: 'Alerts & updates',
-                  isActive: currentIndex == 2,
-                  onTap: () => onTap(2),
-                  badge: unreadNotificationCount > 0 ? unreadNotificationCount : null,
-                ),
-                const SizedBox(height: 4),
-                _buildModernNavItem(
-                  index: 3,
-                  icon: Icons.person_rounded,
-                  title: 'Profile',
-                  subtitle: 'Account settings',
-                  isActive: currentIndex == 3,
-                  onTap: () => onTap(3),
-                ),
-                
-                // Extra space for scrolling
-                const SizedBox(height: 100),
-              ],
-            ),
+              const SizedBox(height: 4),
+              // Notifications - FIXED
+              _buildModernNavItem(
+                index: 3,
+                icon: Icons.notifications_rounded,
+                title: 'Notifications',
+                subtitle: 'Alerts & updates',
+                isActive: currentIndex == 3,  // ← Changed from 2 to 3
+                onTap: () => onTap(3),        // ← Changed from 2 to 3
+                badge: unreadNotificationCount > 0 ? unreadNotificationCount : null,
+              ),
+              const SizedBox(height: 4),
+              // Profile - FIXED
+              _buildModernNavItem(
+                index: 4,
+                icon: Icons.person_rounded,
+                title: 'Profile',
+                subtitle: 'Account settings',
+                isActive: currentIndex == 4,  // ← Changed from 3 to 4
+                onTap: () => onTap(4),        // ← Changed from 3 to 4
+              ),
+
+              // Extra space for scrolling
+              const SizedBox(height: 100),
+            ],
           ),
         ),
-        
-        // Fixed bottom section
-        _buildBottomSection(),
-      ],
-    );
-  }
-
-
-  Widget _buildMiniSidebarContent(BuildContext context) {
-    return Column(
-      children: [
-        // Top padding
-        SizedBox(height: MediaQuery.of(context).padding.top + 20),
-        
-        // Mini logo at top
-        _buildMiniLogo(),
-        
-        const SizedBox(height: 24),
-        
-        // Mini navigation items
-        _buildMiniNavItem(
-          index: 0,
-          icon: Icons.map_rounded,
-          title: 'Map',
-          isActive: currentIndex == 0,
-          onTap: () => onTap(0),
-        ),
-        const SizedBox(height: 8),
-        _buildMiniNavItem(
-          index: 1,
-          icon: Icons.directions,
-          title: 'Navigation',
-          isActive: currentIndex == 1,
-          onTap: () => onTap(1),
-        ),
-
-      const SizedBox(height: 8),
-      // Add Save Points mini navigation item
-      _buildMiniNavItem(
-        index: 4,
-        icon: Icons.bookmark_rounded,
-        title: 'Save Points',
-        isActive: currentIndex == 4,
-        onTap: () => onTap(4),
       ),
       
-        const SizedBox(height: 8),
-        _buildMiniNavItem(
-          index: 2,
-          icon: Icons.notifications_rounded,
-          title: 'Notifications',
-          isActive: currentIndex == 2,
-          onTap: () => onTap(2),
-          badge: unreadNotificationCount > 0 ? unreadNotificationCount : null,
-        ),
-        const SizedBox(height: 8),
-        _buildMiniNavItem(
-          index: 3,
-          icon: Icons.person_rounded,
-          title: 'Profile',
-          isActive: currentIndex == 3,
-          onTap: () => onTap(3),
-        ),
-        // Spacer to fill remaining space
-        const Spacer(),
-        const SizedBox(height: 20),
-      ],
-    );
-  }
+      // Fixed bottom section
+      _buildBottomSection(),
+    ],
+  );
+}
+
+
+Widget _buildMiniSidebarContent(BuildContext context) {
+  return Column(
+    children: [
+      // Top padding
+      SizedBox(height: MediaQuery.of(context).padding.top + 20),
+      
+      // Mini logo at top
+      _buildMiniLogo(),
+      
+      const SizedBox(height: 24),
+      
+      // Mini navigation items
+      _buildMiniNavItem(
+        index: 0,
+        icon: Icons.map_rounded,
+        title: 'Map',
+        isActive: currentIndex == 0,
+        onTap: () => onTap(0),
+      ),
+      const SizedBox(height: 8),
+      _buildMiniNavItem(
+        index: 1,
+        icon: Icons.directions,
+        title: 'Navigation',
+        isActive: currentIndex == 1,
+        onTap: () => onTap(1),
+      ),
+
+      const SizedBox(height: 8),
+      // Save Points - FIXED
+      _buildMiniNavItem(
+        index: 2,
+        icon: Icons.bookmark_rounded,
+        title: 'Save Points',
+        isActive: currentIndex == 2,  // ← Changed from 4 to 2
+        onTap: () => onTap(2),        // ← Changed from 4 to 2
+      ),
+      
+      const SizedBox(height: 8),
+      // Notifications - FIXED
+      _buildMiniNavItem(
+        index: 3,
+        icon: Icons.notifications_rounded,
+        title: 'Notifications',
+        isActive: currentIndex == 3,  // ← Changed from 2 to 3
+        onTap: () => onTap(3),        // ← Changed from 2 to 3
+        badge: unreadNotificationCount > 0 ? unreadNotificationCount : null,
+      ),
+      const SizedBox(height: 8),
+      // Profile - FIXED
+      _buildMiniNavItem(
+        index: 4,
+        icon: Icons.person_rounded,
+        title: 'Profile',
+        isActive: currentIndex == 4,  // ← Changed from 3 to 4
+        onTap: () => onTap(4),        // ← Changed from 3 to 4
+      ),
+
+      const SizedBox(height: 8),
+
+      // Spacer to fill remaining space
+      const Spacer(),
+      const SizedBox(height: 20),
+    ],
+  );
+}
 
   Widget _buildMiniLogo() {
     return Container(
