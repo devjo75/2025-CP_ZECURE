@@ -17,14 +17,17 @@ class SavePointDetails {
   }) async {
     final lat = savePoint['location']['coordinates'][1];
     final lng = savePoint['location']['coordinates'][0];
-    final coordinates = "(${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)})";
+    final coordinates =
+        "(${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)})";
 
     String address = "Loading address...";
     String fullLocation = coordinates;
 
     try {
       final response = await http.get(
-        Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1'),
+        Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1',
+        ),
       );
 
       if (response.statusCode == 200) {
@@ -37,8 +40,12 @@ class SavePointDetails {
       fullLocation = "$address\n$coordinates";
     }
 
-    final DateTime createdTime = DateTime.parse(savePoint['created_at']).toLocal();
-    final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(createdTime);
+    final DateTime createdTime = DateTime.parse(
+      savePoint['created_at'],
+    ).toLocal();
+    final formattedTime = DateFormat(
+      'MMM dd, yyyy - hh:mm a',
+    ).format(createdTime);
 
     final isDesktop = MediaQuery.of(context).size.width >= 800;
 
@@ -91,12 +98,18 @@ class SavePointDetails {
   }
 
   // Show delete confirmation dialog
-  static void _showDeleteDialog(BuildContext context, String savePointId, VoidCallback onUpdate) {
+  static void _showDeleteDialog(
+    BuildContext context,
+    String savePointId,
+    VoidCallback onUpdate,
+  ) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Save Point'),
-        content: const Text('Are you sure you want to delete this save point? This action cannot be undone.'),
+        content: const Text(
+          'Are you sure you want to delete this save point? This action cannot be undone.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -138,7 +151,7 @@ class SavePointDetailsContent extends StatelessWidget {
   final Function(LatLng) onGetSafeRoute;
 
   const SavePointDetailsContent({
-    Key? key,
+    super.key,
     required this.savePoint,
     required this.userProfile,
     required this.onUpdate,
@@ -147,8 +160,8 @@ class SavePointDetailsContent extends StatelessWidget {
     required this.formattedTime,
     required this.isDesktop,
     required this.onGetSafeRoute,
-  }) : super(key: key);
-  
+  });
+
   get coordinates => null;
 
   @override
@@ -232,7 +245,8 @@ class SavePointDetailsContent extends StatelessWidget {
                     const Divider(height: 24),
 
                     // Description
-                    if (savePoint['description'] != null && savePoint['description'].toString().trim().isNotEmpty)
+                    if (savePoint['description'] != null &&
+                        savePoint['description'].toString().trim().isNotEmpty)
                       _buildInfoTile(
                         'Description',
                         savePoint['description'],
@@ -249,7 +263,9 @@ class SavePointDetailsContent extends StatelessWidget {
                         onPressed: () {
                           Clipboard.setData(ClipboardData(text: fullLocation));
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Location copied to clipboard')),
+                            const SnackBar(
+                              content: Text('Location copied to clipboard'),
+                            ),
                           );
                         },
                       ),
@@ -264,7 +280,10 @@ class SavePointDetailsContent extends StatelessWidget {
                         child: TextButton.icon(
                           onPressed: () {
                             final coords = savePoint['location']['coordinates'];
-                            final savePointLocation = LatLng(coords[1], coords[0]);
+                            final savePointLocation = LatLng(
+                              coords[1],
+                              coords[0],
+                            );
                             Navigator.pop(context);
                             onGetSafeRoute(savePointLocation);
                           },
@@ -282,45 +301,44 @@ class SavePointDetailsContent extends StatelessWidget {
                     ),
 
                     // Created time
-                    _buildInfoTile(
-                      'Created',
-                      formattedTime,
-                      Icons.access_time,
-                    ),
+                    _buildInfoTile('Created', formattedTime, Icons.access_time),
 
                     // Actions
                     const SizedBox(height: 12),
                     Row(
                       children: [
                         Expanded(
-  child: ElevatedButton.icon(
-    onPressed: () {
-      Navigator.pop(context); // Close details
-      AddSavePointScreen.showAddSavePointForm(
-        context: context,
-        userProfile: userProfile,
-        editSavePoint: savePoint,
-        onUpdate: () {
-          onUpdate(); // Call the provided onUpdate callback
-        },
-      );
-    },
-    icon: const Icon(Icons.edit, size: 18),
-    label: const Text('Edit'),
-    style: ElevatedButton.styleFrom(
-      backgroundColor: Colors.blue.shade600,
-      foregroundColor: Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-      ),
-    ),
-  ),
-),
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(context); // Close details
+                              AddSavePointScreen.showAddSavePointForm(
+                                context: context,
+                                userProfile: userProfile,
+                                editSavePoint: savePoint,
+                                onUpdate: () {
+                                  onUpdate(); // Call the provided onUpdate callback
+                                },
+                              );
+                            },
+                            icon: const Icon(Icons.edit, size: 18),
+                            label: const Text('Edit'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue.shade600,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                          ),
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: ElevatedButton(
                             onPressed: () => SavePointDetails._showDeleteDialog(
-                                context, savePoint['id'], onUpdate),
+                              context,
+                              savePoint['id'],
+                              onUpdate,
+                            ),
                             style: ElevatedButton.styleFrom(
                               foregroundColor: Colors.red,
                               shape: RoundedRectangleBorder(
@@ -388,10 +406,7 @@ class SavePointDetailsContent extends StatelessWidget {
                   const SizedBox(height: 1),
                   Text(
                     subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                   ),
                 ],
               ],

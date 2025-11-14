@@ -7,10 +7,10 @@ class ChannelMembersScreen extends StatefulWidget {
   final String currentUserId;
 
   const ChannelMembersScreen({
-    Key? key,
+    super.key,
     required this.channel,
     required this.currentUserId,
-  }) : super(key: key);
+  });
 
   @override
   State<ChannelMembersScreen> createState() => _ChannelMembersScreenState();
@@ -51,16 +51,23 @@ class _ChannelMembersScreenState extends State<ChannelMembersScreen> {
     }
   }
 
-Color _getRoleColor(String role) {
-  switch (role) {
-    case 'admin':
-      return Colors.amber.shade700;  // This works because Colors.amber is MaterialColor
-    case 'moderator':
-      return Colors.blue.shade700;   // This works because Colors.blue is MaterialColor
-    default:
-      return Colors.grey.shade700;   // This works because Colors.grey is MaterialColor
+  Color _getRoleColor(String role) {
+    switch (role) {
+      case 'admin':
+        return Colors
+            .amber
+            .shade700; // This works because Colors.amber is MaterialColor
+      case 'moderator':
+        return Colors
+            .blue
+            .shade700; // This works because Colors.blue is MaterialColor
+      default:
+        return Colors
+            .grey
+            .shade700; // This works because Colors.grey is MaterialColor
+    }
   }
-}
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -70,17 +77,11 @@ Color _getRoleColor(String role) {
           children: [
             const Text(
               'Members',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-              ),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             Text(
               '${_members.length} members',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
           ],
         ),
@@ -90,19 +91,19 @@ Color _getRoleColor(String role) {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _members.isEmpty
-              ? _buildEmptyState()
-              : RefreshIndicator(
-                  onRefresh: _loadMembers,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: _members.length,
-                    itemBuilder: (context, index) {
-                      final member = _members[index];
-                      final isCurrentUser = member.userId == widget.currentUserId;
-                      return _buildMemberItem(member, isCurrentUser);
-                    },
-                  ),
-                ),
+          ? _buildEmptyState()
+          : RefreshIndicator(
+              onRefresh: _loadMembers,
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: _members.length,
+                itemBuilder: (context, index) {
+                  final member = _members[index];
+                  final isCurrentUser = member.userId == widget.currentUserId;
+                  return _buildMemberItem(member, isCurrentUser);
+                },
+              ),
+            ),
     );
   }
 
@@ -171,10 +172,7 @@ Color _getRoleColor(String role) {
           if (member.username != null)
             Text(
               '@${member.username}',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
             ),
           if (member.role != 'member') ...[
             const SizedBox(width: 8),
@@ -222,7 +220,7 @@ Color _getRoleColor(String role) {
 
   String _getInitials(String name) {
     if (name.isEmpty) return '?';
-    
+
     final parts = name.split(' ');
     if (parts.length >= 2) {
       return '${parts[0][0]}${parts[1][0]}'.toUpperCase();

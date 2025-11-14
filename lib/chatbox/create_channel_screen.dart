@@ -4,10 +4,7 @@ import 'chat_service.dart';
 class CreateChannelScreen extends StatefulWidget {
   final Map<String, dynamic> userProfile;
 
-  const CreateChannelScreen({
-    Key? key,
-    required this.userProfile,
-  }) : super(key: key);
+  const CreateChannelScreen({super.key, required this.userProfile});
 
   @override
   State<CreateChannelScreen> createState() => _CreateChannelScreenState();
@@ -16,11 +13,11 @@ class CreateChannelScreen extends StatefulWidget {
 class _CreateChannelScreenState extends State<CreateChannelScreen> {
   final _formKey = GlobalKey<FormState>();
   final _chatService = ChatService();
-  
+
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _barangayController = TextEditingController();
-  
+
   String _selectedType = 'barangay';
   bool _isPrivate = false;
   bool _isCreating = false;
@@ -33,58 +30,60 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
     super.dispose();
   }
 
-Future<void> _createChannel() async {
-  if (!_formKey.currentState!.validate()) return;
+  Future<void> _createChannel() async {
+    if (!_formKey.currentState!.validate()) return;
 
-  setState(() => _isCreating = true);
+    setState(() => _isCreating = true);
 
-  final userId = widget.userProfile['id'] as String;
-  
-  // DEBUG: Print user info
-  print('🔑 User ID: $userId');
-  print('👤 User Profile: ${widget.userProfile}');
-  print('📝 Channel Name: ${_nameController.text.trim()}');
-  print('🏷️ Channel Type: $_selectedType');
-  print('🏘️ Barangay: ${_selectedType == 'barangay' ? _barangayController.text.trim() : 'N/A'}');
+    final userId = widget.userProfile['id'] as String;
 
-  final channel = await _chatService.createChannel(
-    name: _nameController.text.trim(),
-    description: _descriptionController.text.trim().isEmpty 
-        ? null 
-        : _descriptionController.text.trim(),
-    channelType: _selectedType,
-    barangay: _selectedType == 'barangay' 
-        ? _barangayController.text.trim().toUpperCase()
-        : null,
-    createdBy: userId,
-    isPrivate: _isPrivate,
-  );
-
-  setState(() => _isCreating = false);
-
-  print('📦 Channel result: ${channel?.toJson()}');
-
-  if (channel != null && mounted) {
-    print('✅ Channel created successfully: ${channel.name}');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Channel "${channel.name}" created!'),
-        backgroundColor: Colors.green,
-        behavior: SnackBarBehavior.floating,
-      ),
+    // DEBUG: Print user info
+    print('🔑 User ID: $userId');
+    print('👤 User Profile: ${widget.userProfile}');
+    print('📝 Channel Name: ${_nameController.text.trim()}');
+    print('🏷️ Channel Type: $_selectedType');
+    print(
+      '🏘️ Barangay: ${_selectedType == 'barangay' ? _barangayController.text.trim() : 'N/A'}',
     );
-    Navigator.pop(context, true);
-  } else if (mounted) {
-    print('❌ Channel creation failed - returned null');
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Failed to create channel. Please try again.'),
-        backgroundColor: Colors.red,
-        behavior: SnackBarBehavior.floating,
-      ),
+
+    final channel = await _chatService.createChannel(
+      name: _nameController.text.trim(),
+      description: _descriptionController.text.trim().isEmpty
+          ? null
+          : _descriptionController.text.trim(),
+      channelType: _selectedType,
+      barangay: _selectedType == 'barangay'
+          ? _barangayController.text.trim().toUpperCase()
+          : null,
+      createdBy: userId,
+      isPrivate: _isPrivate,
     );
+
+    setState(() => _isCreating = false);
+
+    print('📦 Channel result: ${channel?.toJson()}');
+
+    if (channel != null && mounted) {
+      print('✅ Channel created successfully: ${channel.name}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Channel "${channel.name}" created!'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      Navigator.pop(context, true);
+    } else if (mounted) {
+      print('❌ Channel creation failed - returned null');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to create channel. Please try again.'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
-}
 
   @override
   Widget build(BuildContext context) {
@@ -109,22 +108,19 @@ Future<void> _createChannel() async {
                 // Channel Type Selection
                 const Text(
                   'Channel Type',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 12),
                 _buildChannelTypeSelector(),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Channel Name
                 _buildTextField(
                   controller: _nameController,
                   label: 'Channel Name',
-                  hint: _selectedType == 'barangay' 
-                      ? 'e.g., Barangay Guiwan Safety' 
+                  hint: _selectedType == 'barangay'
+                      ? 'e.g., Barangay Guiwan Safety'
                       : 'e.g., Emergency Response Team',
                   icon: Icons.tag,
                   validator: (value) {
@@ -140,9 +136,9 @@ Future<void> _createChannel() async {
                     return null;
                   },
                 ),
-                
+
                 const SizedBox(height: 20),
-                
+
                 // Barangay Name (only for barangay type)
                 if (_selectedType == 'barangay') ...[
                   _buildTextField(
@@ -161,7 +157,7 @@ Future<void> _createChannel() async {
                   ),
                   const SizedBox(height: 20),
                 ],
-                
+
                 // Description
                 _buildTextField(
                   controller: _descriptionController,
@@ -171,14 +167,14 @@ Future<void> _createChannel() async {
                   maxLines: 3,
                   maxLength: 500,
                 ),
-                
+
                 const SizedBox(height: 20),
-                
+
                 // Privacy Setting
                 _buildPrivacySwitch(),
-                
+
                 const SizedBox(height: 32),
-                
+
                 // Create Button
                 SizedBox(
                   width: double.infinity,
@@ -267,7 +263,7 @@ Future<void> _createChannel() async {
     required String icon,
   }) {
     final isSelected = _selectedType == value;
-    
+
     return InkWell(
       onTap: () {
         setState(() {
@@ -291,16 +287,11 @@ Future<void> _createChannel() async {
               width: 48,
               height: 48,
               decoration: BoxDecoration(
-                color: isSelected 
-                    ? Colors.blue.shade100 
-                    : Colors.grey.shade100,
+                color: isSelected ? Colors.blue.shade100 : Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Center(
-                child: Text(
-                  icon,
-                  style: const TextStyle(fontSize: 24),
-                ),
+                child: Text(icon, style: const TextStyle(fontSize: 24)),
               ),
             ),
             const SizedBox(width: 16),
@@ -321,18 +312,16 @@ Future<void> _createChannel() async {
                     subtitle,
                     style: TextStyle(
                       fontSize: 13,
-                      color: isSelected ? Colors.blue.shade700 : Colors.grey[600],
+                      color: isSelected
+                          ? Colors.blue.shade700
+                          : Colors.grey[600],
                     ),
                   ),
                 ],
               ),
             ),
             if (isSelected)
-              Icon(
-                Icons.check_circle,
-                color: Colors.blue.shade600,
-                size: 24,
-              ),
+              Icon(Icons.check_circle, color: Colors.blue.shade600, size: 24),
           ],
         ),
       ),
@@ -353,10 +342,7 @@ Future<void> _createChannel() async {
       children: [
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-          ),
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
         TextFormField(
@@ -417,20 +403,14 @@ Future<void> _createChannel() async {
               children: [
                 const Text(
                   'Private Channel',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _isPrivate 
-                      ? 'Users need approval to join' 
+                  _isPrivate
+                      ? 'Users need approval to join'
                       : 'Anyone can join this channel',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey[600],
-                  ),
+                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                 ),
               ],
             ),

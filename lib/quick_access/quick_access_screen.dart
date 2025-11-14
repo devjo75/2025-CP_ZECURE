@@ -21,7 +21,7 @@ class QuickAccessScreen extends StatefulWidget {
   final VoidCallback onRefresh;
 
   const QuickAccessScreen({
-    Key? key,
+    super.key,
     required this.safeSpots,
     required this.hotspots,
     required this.currentPosition,
@@ -34,8 +34,9 @@ class QuickAccessScreen extends StatefulWidget {
     required this.onShowOnMap,
     required this.onNavigateToSafeSpot,
     required this.onNavigateToHotspot,
-    required this.onRefresh, required Null Function(dynamic destination) onNavigate,
-  }) : super(key: key);
+    required this.onRefresh,
+    required Null Function(dynamic destination) onNavigate,
+  });
 
   @override
   State<QuickAccessScreen> createState() => _QuickAccessScreenState();
@@ -77,9 +78,14 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                         });
                       },
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 10,
+                        ),
                         decoration: BoxDecoration(
-                          color: _showingSafeSpots ? Colors.blue : Colors.transparent,
+                          color: _showingSafeSpots
+                              ? Colors.blue
+                              : Colors.transparent,
                           borderRadius: const BorderRadius.only(
                             topLeft: Radius.circular(8),
                             bottomLeft: Radius.circular(8),
@@ -90,13 +96,17 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                             Icon(
                               Icons.security,
                               size: 18,
-                              color: _showingSafeSpots ? Colors.white : Colors.grey[700],
+                              color: _showingSafeSpots
+                                  ? Colors.white
+                                  : Colors.grey[700],
                             ),
                             const SizedBox(width: 6),
                             Text(
                               'Safe Spot',
                               style: TextStyle(
-                                color: _showingSafeSpots ? Colors.white : Colors.grey[700],
+                                color: _showingSafeSpots
+                                    ? Colors.white
+                                    : Colors.grey[700],
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                               ),
@@ -112,9 +122,14 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                         });
                       },
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 10,
+                        ),
                         decoration: BoxDecoration(
-                          color: !_showingSafeSpots ? Colors.red : Colors.transparent,
+                          color: !_showingSafeSpots
+                              ? Colors.red
+                              : Colors.transparent,
                           borderRadius: const BorderRadius.only(
                             topRight: Radius.circular(8),
                             bottomRight: Radius.circular(8),
@@ -125,13 +140,17 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                             Icon(
                               Icons.warning,
                               size: 18,
-                              color: !_showingSafeSpots ? Colors.white : Colors.grey[700],
+                              color: !_showingSafeSpots
+                                  ? Colors.white
+                                  : Colors.grey[700],
                             ),
                             const SizedBox(width: 6),
                             Text(
                               'Hotspot',
                               style: TextStyle(
-                                color: !_showingSafeSpots ? Colors.white : Colors.grey[700],
+                                color: !_showingSafeSpots
+                                    ? Colors.white
+                                    : Colors.grey[700],
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                               ),
@@ -237,7 +256,9 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                 onRefresh: () async {
                   widget.onRefresh();
                 },
-                child: _showingSafeSpots ? _buildSafeSpotsList() : _buildHotspotsList(),
+                child: _showingSafeSpots
+                    ? _buildSafeSpotsList()
+                    : _buildHotspotsList(),
               ),
       ),
     );
@@ -394,26 +415,19 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
 
   Widget _buildSafeSpotsList() {
     final filteredAndSortedSafeSpots = _getFilteredAndSortedSafeSpots();
-    
+
     if (filteredAndSortedSafeSpots.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.location_off,
-              size: 64,
-              color: Colors.grey[400],
-            ),
+            Icon(Icons.location_off, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
               (_quickAccessFilter != 'all' || _selectedSafeSpotType != null)
-                ? 'No safe spots match your filters' 
-                : 'No safe spots found nearby',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
-              ),
+                  ? 'No safe spots match your filters'
+                  : 'No safe spots found nearby',
+              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
             if (_quickAccessFilter != 'all' || _selectedSafeSpotType != null)
@@ -441,22 +455,25 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildStatItem(
-                'Total', 
+                'Total',
                 filteredAndSortedSafeSpots.length.toString(),
                 Icons.location_pin,
                 Colors.blue,
               ),
               _buildStatItem(
-                'Nearest', 
-                filteredAndSortedSafeSpots.isNotEmpty 
-                  ? '${_calculateDistance(widget.currentPosition!, LatLng(filteredAndSortedSafeSpots.first['location']['coordinates'][1], filteredAndSortedSafeSpots.first['location']['coordinates'][0])).toStringAsFixed(1)}km'
-                  : 'N/A',
+                'Nearest',
+                filteredAndSortedSafeSpots.isNotEmpty
+                    ? '${_calculateDistance(widget.currentPosition!, LatLng(filteredAndSortedSafeSpots.first['location']['coordinates'][1], filteredAndSortedSafeSpots.first['location']['coordinates'][0])).toStringAsFixed(1)}km'
+                    : 'N/A',
                 Icons.near_me,
                 Colors.green,
               ),
               _buildStatItem(
-                'Verified', 
-                filteredAndSortedSafeSpots.where((s) => s['verified'] == true).length.toString(),
+                'Verified',
+                filteredAndSortedSafeSpots
+                    .where((s) => s['verified'] == true)
+                    .length
+                    .toString(),
                 Icons.verified,
                 Colors.orange,
               ),
@@ -477,7 +494,12 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
     );
   }
 
-  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
+  Widget _buildStatItem(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Column(
       children: [
         Icon(icon, color: color, size: 24),
@@ -490,13 +512,7 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
             color: color,
           ),
         ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
       ],
     );
   }
@@ -504,7 +520,10 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
   Widget _buildSafeSpotCard(Map<String, dynamic> safeSpot) {
     final coords = safeSpot['location']['coordinates'];
     final safeSpotLocation = LatLng(coords[1], coords[0]);
-    final distance = _calculateDistance(widget.currentPosition!, safeSpotLocation);
+    final distance = _calculateDistance(
+      widget.currentPosition!,
+      safeSpotLocation,
+    );
     final status = safeSpot['status'] ?? 'pending';
     final verified = safeSpot['verified'] ?? false;
     final safeSpotType = safeSpot['safe_spot_types'];
@@ -513,7 +532,8 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
     final currentUserId = widget.userProfile?['id'];
     final createdBy = safeSpot['created_by'];
     final isOwnSpot = currentUserId != null && currentUserId == createdBy;
-    final fullLocation = '${safeSpotLocation.latitude}, ${safeSpotLocation.longitude}';
+    final fullLocation =
+        '${safeSpotLocation.latitude}, ${safeSpotLocation.longitude}';
 
     Color statusColor;
     IconData statusIcon;
@@ -579,16 +599,16 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                       ),
                       Text(
                         safeSpotType['name'],
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                       ),
                     ],
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: statusColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
@@ -616,10 +636,7 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
               const SizedBox(height: 8),
               Text(
                 description,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[700],
-                ),
+                style: TextStyle(fontSize: 14, color: Colors.grey[700]),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -640,7 +657,10 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                 if (isOwnSpot) ...[
                   const SizedBox(width: 12),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.blue.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
@@ -660,25 +680,25 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
             const SizedBox(height: 12),
             Row(
               children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    // Use the close callback if available, otherwise use regular callback
-                    if (widget.onGetSafeRouteAndClose != null) {
-                      widget.onGetSafeRouteAndClose!(safeSpotLocation);
-                    } else {
-                      widget.onGetSafeRoute(safeSpotLocation);
-                    }
-                  },
-                  icon: const Icon(Icons.safety_check, size: 18),
-                  label: const Text('Safe Route'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      // Use the close callback if available, otherwise use regular callback
+                      if (widget.onGetSafeRouteAndClose != null) {
+                        widget.onGetSafeRouteAndClose!(safeSpotLocation);
+                      } else {
+                        widget.onGetSafeRoute(safeSpotLocation);
+                      }
+                    },
+                    icon: const Icon(Icons.safety_check, size: 18),
+                    label: const Text('Safe Route'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
                   ),
                 ),
-              ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
@@ -695,7 +715,9 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: fullLocation));
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Location copied to clipboard')),
+                      const SnackBar(
+                        content: Text('Location copied to clipboard'),
+                      ),
                     );
                   },
                   icon: const Icon(Icons.copy, size: 18),
@@ -724,7 +746,7 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
 
   void _showSafeSpotsFilterDialog() {
     final availableTypes = _getAvailableSafeSpotTypes();
-    
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -737,48 +759,51 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
               children: [
                 const Text(
                   'Status',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 RadioListTile<String>(
                   title: const Text('All Safe Spots'),
                   value: 'all',
                   groupValue: _quickAccessFilter,
-                  onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                  onChanged: (value) =>
+                      setDialogState(() => _quickAccessFilter = value!),
                 ),
                 RadioListTile<String>(
                   title: const Text('Pending'),
                   value: 'pending',
                   groupValue: _quickAccessFilter,
-                  onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                  onChanged: (value) =>
+                      setDialogState(() => _quickAccessFilter = value!),
                 ),
                 RadioListTile<String>(
                   title: const Text('Approved Only'),
                   value: 'approved',
                   groupValue: _quickAccessFilter,
-                  onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                  onChanged: (value) =>
+                      setDialogState(() => _quickAccessFilter = value!),
                 ),
                 RadioListTile<String>(
                   title: const Text('Verified Only'),
                   value: 'verified',
                   groupValue: _quickAccessFilter,
-                  onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                  onChanged: (value) =>
+                      setDialogState(() => _quickAccessFilter = value!),
                 ),
                 RadioListTile<String>(
                   title: const Text('Within 5km'),
                   value: 'nearby',
                   groupValue: _quickAccessFilter,
-                  onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                  onChanged: (value) =>
+                      setDialogState(() => _quickAccessFilter = value!),
                 ),
                 if (widget.userProfile != null)
                   RadioListTile<String>(
                     title: const Text('My Safe Spots'),
                     value: 'mine',
                     groupValue: _quickAccessFilter,
-                    onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                    onChanged: (value) =>
+                        setDialogState(() => _quickAccessFilter = value!),
                   ),
                 if (availableTypes.isNotEmpty) ...[
                   const SizedBox(height: 16),
@@ -786,24 +811,25 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
                   const SizedBox(height: 8),
                   const Text(
                     'Safe Spot Type',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   RadioListTile<String?>(
                     title: const Text('All Types'),
                     value: null,
                     groupValue: _selectedSafeSpotType,
-                    onChanged: (value) => setDialogState(() => _selectedSafeSpotType = value),
+                    onChanged: (value) =>
+                        setDialogState(() => _selectedSafeSpotType = value),
                   ),
-                  ...availableTypes.map((type) => RadioListTile<String>(
-                    title: Text(type),
-                    value: type,
-                    groupValue: _selectedSafeSpotType,
-                    onChanged: (value) => setDialogState(() => _selectedSafeSpotType = value),
-                  )).toList(),
+                  ...availableTypes.map(
+                    (type) => RadioListTile<String>(
+                      title: Text(type),
+                      value: type,
+                      groupValue: _selectedSafeSpotType,
+                      onChanged: (value) =>
+                          setDialogState(() => _selectedSafeSpotType = value),
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -834,7 +860,7 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
       final createdBy = safeSpot['created_by'];
       final isOwnSpot = currentUserId != null && currentUserId == createdBy;
       final safeSpotTypeName = safeSpot['safe_spot_types']?['name'];
-      
+
       if (widget.isAdmin) {
       } else {
         if (status == 'approved') {
@@ -844,7 +870,7 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
           return false;
         }
       }
-      
+
       switch (_quickAccessFilter) {
         case 'pending':
           if (status != 'pending') return false;
@@ -859,8 +885,8 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
           if (widget.currentPosition == null) return false;
           final coords = safeSpot['location']['coordinates'];
           final distance = _calculateDistance(
-            widget.currentPosition!, 
-            LatLng(coords[1], coords[0])
+            widget.currentPosition!,
+            LatLng(coords[1], coords[0]),
           );
           if (distance > 5.0) return false;
           break;
@@ -871,69 +897,81 @@ class _QuickAccessScreenState extends State<QuickAccessScreen> {
         default:
           break;
       }
-      
-      if (_selectedSafeSpotType != null && safeSpotTypeName != _selectedSafeSpotType) {
+
+      if (_selectedSafeSpotType != null &&
+          safeSpotTypeName != _selectedSafeSpotType) {
         return false;
       }
-      
+
       return true;
     }).toList();
-    
+
     filtered.sort((a, b) {
       switch (_quickAccessSortBy) {
         case 'distance':
           if (widget.currentPosition == null) return 0;
           final distanceA = _calculateDistance(
-            widget.currentPosition!, 
-            LatLng(a['location']['coordinates'][1], a['location']['coordinates'][0])
+            widget.currentPosition!,
+            LatLng(
+              a['location']['coordinates'][1],
+              a['location']['coordinates'][0],
+            ),
           );
           final distanceB = _calculateDistance(
-            widget.currentPosition!, 
-            LatLng(b['location']['coordinates'][1], b['location']['coordinates'][0])
+            widget.currentPosition!,
+            LatLng(
+              b['location']['coordinates'][1],
+              b['location']['coordinates'][0],
+            ),
           );
           return distanceA.compareTo(distanceB);
-        
+
         case 'name':
           return (a['name'] ?? '').compareTo(b['name'] ?? '');
-        
+
         case 'type':
-          return (a['safe_spot_types']['name'] ?? '').compareTo(b['safe_spot_types']['name'] ?? '');
-        
+          return (a['safe_spot_types']['name'] ?? '').compareTo(
+            b['safe_spot_types']['name'] ?? '',
+          );
+
         case 'status':
           final statusOrder = {'approved': 0, 'pending': 1, 'rejected': 2};
           final statusA = statusOrder[a['status']] ?? 3;
           final statusB = statusOrder[b['status']] ?? 3;
           final statusCompare = statusA.compareTo(statusB);
           if (statusCompare != 0) return statusCompare;
-          
+
           if (a['status'] == 'approved' && b['status'] == 'approved') {
             final verifiedA = a['verified'] ?? false;
             final verifiedB = b['verified'] ?? false;
             return verifiedB ? 1 : (verifiedA ? -1 : 0);
           }
           return 0;
-        
+
         default:
           return 0;
       }
     });
-    
+
     return filtered;
   }
 
   double _calculateDistance(LatLng point1, LatLng point2) {
     const double earthRadius = 6371;
-    
+
     double lat1Rad = point1.latitude * (pi / 180);
     double lat2Rad = point2.latitude * (pi / 180);
     double deltaLatRad = (point2.latitude - point1.latitude) * (pi / 180);
     double deltaLngRad = (point2.longitude - point1.longitude) * (pi / 180);
-    
-    double a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
-        cos(lat1Rad) * cos(lat2Rad) * 
-        sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
+
+    double a =
+        sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
+        cos(lat1Rad) *
+            cos(lat2Rad) *
+            sin(deltaLngRad / 2) *
+            sin(deltaLngRad / 2);
     double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    
+
     return earthRadius * c;
   }
 

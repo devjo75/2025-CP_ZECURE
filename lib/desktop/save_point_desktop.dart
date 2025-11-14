@@ -15,7 +15,7 @@ class SavePointDesktopScreen extends StatefulWidget {
   final VoidCallback onClose;
 
   const SavePointDesktopScreen({
-    Key? key,
+    super.key,
     required this.userProfile,
     required this.currentPosition,
     required this.onNavigateToPoint,
@@ -24,7 +24,7 @@ class SavePointDesktopScreen extends StatefulWidget {
     required this.onUpdate,
     required this.isSidebarVisible,
     required this.onClose,
-  }) : super(key: key);
+  });
 
   @override
   State<SavePointDesktopScreen> createState() => _SavePointDesktopScreenState();
@@ -64,7 +64,7 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
       final savePoints = await _savePointService.getUserSavePoints(
         widget.userProfile!['id'],
       );
-      
+
       if (mounted) {
         setState(() {
           _savePoints = savePoints;
@@ -123,9 +123,7 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
           topLeft: Radius.circular(16),
           topRight: Radius.circular(16),
         ),
-        border: Border(
-          bottom: BorderSide(color: Colors.grey[200]!),
-        ),
+        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
       ),
       child: Row(
         children: [
@@ -156,10 +154,7 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
                 ),
                 Text(
                   'Manage your saved locations',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.black54,
-                  ),
+                  style: TextStyle(fontSize: 14, color: Colors.black54),
                 ),
               ],
             ),
@@ -305,7 +300,7 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
 
   Widget _buildStatsHeader() {
     final filteredAndSorted = _getFilteredAndSortedSavePoints();
-    
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -346,41 +341,31 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
               ),
             )
           : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.error_outline,
-                        size: 64,
-                        color: Colors.grey[400],
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Error loading save points',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _error!,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[500],
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _loadSavePoints,
-                        child: const Text('Retry'),
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error_outline, size: 64, color: Colors.grey[400]),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Error loading save points',
+                    style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                   ),
-                )
-              : _buildSavePointsList(),
+                  const SizedBox(height: 8),
+                  Text(
+                    _error!,
+                    style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _loadSavePoints,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            )
+          : _buildSavePointsList(),
     );
   }
 
@@ -416,10 +401,7 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
                   ? 'Try a different search term'
                   : 'Create your first save point\nby long-pressing on the map',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[500],
-              ),
+              style: TextStyle(fontSize: 14, color: Colors.grey[500]),
             ),
           ],
         ),
@@ -438,7 +420,12 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
     );
   }
 
-  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
+  Widget _buildStatItem(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Column(
       children: [
         Icon(icon, color: color, size: 24),
@@ -451,13 +438,7 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
             color: color,
           ),
         ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
       ],
     );
   }
@@ -543,10 +524,7 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
                   const SizedBox(height: 8),
                   Text(
                     description,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[700],
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey[700]),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -560,8 +538,8 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
                     Text(
                       widget.currentPosition != null
                           ? distance < 1
-                              ? '${(distance * 1000).toStringAsFixed(0)} m away'
-                              : '${distance.toStringAsFixed(1)} km away'
+                                ? '${(distance * 1000).toStringAsFixed(0)} m away'
+                                : '${distance.toStringAsFixed(1)} km away'
                           : 'Distance unavailable',
                       style: TextStyle(
                         fontSize: 14,
@@ -607,7 +585,9 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: fullLocation));
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Location copied to clipboard')),
+                          const SnackBar(
+                            content: Text('Location copied to clipboard'),
+                          ),
                         );
                       },
                       icon: const Icon(Icons.copy, size: 18),
@@ -628,11 +608,12 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
   List<Map<String, dynamic>> _getFilteredAndSortedSavePoints() {
     var filtered = _savePoints.where((savePoint) {
       if (_searchQuery.isEmpty) return true;
-      
+
       final name = savePoint['name']?.toString().toLowerCase() ?? '';
-      final description = savePoint['description']?.toString().toLowerCase() ?? '';
+      final description =
+          savePoint['description']?.toString().toLowerCase() ?? '';
       final query = _searchQuery.toLowerCase();
-      
+
       return name.contains(query) || description.contains(query);
     }).toList();
 
@@ -650,11 +631,14 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
           );
           return distanceA.compareTo(distanceB);
         case 'name':
-          return (a['name'] ?? '').toString()
-              .compareTo((b['name'] ?? '').toString());
+          return (a['name'] ?? '').toString().compareTo(
+            (b['name'] ?? '').toString(),
+          );
         case 'created_at':
-          final dateA = DateTime.tryParse(a['created_at'] ?? '') ?? DateTime(1970);
-          final dateB = DateTime.tryParse(b['created_at'] ?? '') ?? DateTime(1970);
+          final dateA =
+              DateTime.tryParse(a['created_at'] ?? '') ?? DateTime(1970);
+          final dateB =
+              DateTime.tryParse(b['created_at'] ?? '') ?? DateTime(1970);
           return dateB.compareTo(dateA); // Most recent first
         default:
           return 0;
@@ -675,11 +659,15 @@ class _SavePointDesktopScreenState extends State<SavePointDesktopScreen> {
     double lat1Rad = point1.latitude * (math.pi / 180);
     double lat2Rad = point2.latitude * (math.pi / 180);
     double deltaLatRad = (point2.latitude - point1.latitude) * (math.pi / 180);
-    double deltaLngRad = (point2.longitude - point1.longitude) * (math.pi / 180);
+    double deltaLngRad =
+        (point2.longitude - point1.longitude) * (math.pi / 180);
 
-    double a = math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
-        math.cos(lat1Rad) * math.cos(lat2Rad) * 
-        math.sin(deltaLngRad / 2) * math.sin(deltaLngRad / 2);
+    double a =
+        math.sin(deltaLatRad / 2) * math.sin(deltaLatRad / 2) +
+        math.cos(lat1Rad) *
+            math.cos(lat2Rad) *
+            math.sin(deltaLngRad / 2) *
+            math.sin(deltaLngRad / 2);
     double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
 
     return earthRadius * c;

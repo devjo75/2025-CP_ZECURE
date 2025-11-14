@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 
 class HotspotFilterService with ChangeNotifier {
+  bool get hasCustomDateRange =>
+      _crimeStartDate != null || _crimeEndDate != null;
   // Severity filters
   bool _showCritical = true;
   bool _showHigh = true;
   bool _showMedium = true;
   bool _showLow = true;
-  
+
   // Status filters
   bool _showPending = true;
   bool _showRejected = true;
   bool _showActive = true;
   bool _showInactive = true;
-  
+
   // Category filters
   bool _showProperty = true;
   bool _showViolent = true;
@@ -24,7 +26,7 @@ class HotspotFilterService with ChangeNotifier {
 
   // Mode toggle
   bool _isShowingCrimes = true;
-  
+
   // Safe Spot Type filters
   bool _showPoliceStations = true;
   bool _showGovernmentBuildings = true;
@@ -36,12 +38,12 @@ class HotspotFilterService with ChangeNotifier {
   bool _showFireStations = true;
   bool _showReligiousBuildings = true;
   bool _showCommunityCenters = true;
-  
+
   // Safe Spot Status filters
   bool _showSafeSpotsPending = true;
   bool _showSafeSpotsApproved = true;
   bool _showSafeSpotsRejected = true;
-  
+
   // Safe Spot Verification filters
   bool _showVerifiedSafeSpots = true;
   bool _showUnverifiedSafeSpots = true;
@@ -71,7 +73,7 @@ class HotspotFilterService with ChangeNotifier {
   bool get showFinancial => _showFinancial;
   bool get showTraffic => _showTraffic;
   bool get showAlerts => _showAlerts;
-  
+
   // New getters for safe spots
   bool get isShowingCrimes => _isShowingCrimes;
   bool get showPoliceStations => _showPoliceStations;
@@ -84,11 +86,11 @@ class HotspotFilterService with ChangeNotifier {
   bool get showFireStations => _showFireStations;
   bool get showReligiousBuildings => _showReligiousBuildings;
   bool get showCommunityCenters => _showCommunityCenters;
-  
+
   bool get showSafeSpotsPending => _showSafeSpotsPending;
   bool get showSafeSpotsApproved => _showSafeSpotsApproved;
   bool get showSafeSpotsRejected => _showSafeSpotsRejected;
-  
+
   bool get showVerifiedSafeSpots => _showVerifiedSafeSpots;
   bool get showUnverifiedSafeSpots => _showUnverifiedSafeSpots;
 
@@ -99,14 +101,15 @@ class HotspotFilterService with ChangeNotifier {
   DateTime? get safeSpotEndDate => _safeSpotEndDate;
 
   // Backward compatibility getters (deprecated but kept for existing code)
-  DateTime? get startDate => _isShowingCrimes ? _crimeStartDate : _safeSpotStartDate;
+  DateTime? get startDate =>
+      _isShowingCrimes ? _crimeStartDate : _safeSpotStartDate;
   DateTime? get endDate => _isShowingCrimes ? _crimeEndDate : _safeSpotEndDate;
 
   // Method to reset filters when user changes or logs out
   void resetFiltersForUser(String? newUserId) {
     if (_currentUserId != newUserId) {
       _currentUserId = newUserId;
-      
+
       // Reset all crime filters to default (true)
       _showCritical = true;
       _showHigh = true;
@@ -123,7 +126,7 @@ class HotspotFilterService with ChangeNotifier {
       _showFinancial = true;
       _showTraffic = true;
       _showAlerts = true;
-      
+
       // Reset all safe spot filters to default
       _isShowingCrimes = true;
       _showPoliceStations = true;
@@ -136,11 +139,11 @@ class HotspotFilterService with ChangeNotifier {
       _showFireStations = true;
       _showReligiousBuildings = true;
       _showCommunityCenters = true;
-      
+
       _showSafeSpotsPending = true;
       _showSafeSpotsApproved = true;
       _showSafeSpotsRejected = true;
-      
+
       _showVerifiedSafeSpots = true;
       _showUnverifiedSafeSpots = true;
 
@@ -149,7 +152,7 @@ class HotspotFilterService with ChangeNotifier {
       _crimeEndDate = null;
       _safeSpotStartDate = null;
       _safeSpotEndDate = null;
-      
+
       notifyListeners();
     }
   }
@@ -282,74 +285,74 @@ class HotspotFilterService with ChangeNotifier {
     _showPoliceStations = !_showPoliceStations;
     notifyListeners();
   }
-  
+
   void toggleGovernmentBuildings() {
     _showGovernmentBuildings = !_showGovernmentBuildings;
     notifyListeners();
   }
-  
+
   void toggleHospitals() {
     _showHospitals = !_showHospitals;
     notifyListeners();
   }
-  
+
   void toggleSchools() {
     _showSchools = !_showSchools;
     notifyListeners();
   }
-  
+
   void toggleShoppingMalls() {
     _showShoppingMalls = !_showShoppingMalls;
     notifyListeners();
   }
-  
+
   void toggleWellLitAreas() {
     _showWellLitAreas = !_showWellLitAreas;
     notifyListeners();
   }
-  
+
   void toggleSecurityCameras() {
     _showSecurityCameras = !_showSecurityCameras;
     notifyListeners();
   }
-  
+
   void toggleFireStations() {
     _showFireStations = !_showFireStations;
     notifyListeners();
   }
-  
+
   void toggleReligiousBuildings() {
     _showReligiousBuildings = !_showReligiousBuildings;
     notifyListeners();
   }
-  
+
   void toggleCommunityCenters() {
     _showCommunityCenters = !_showCommunityCenters;
     notifyListeners();
   }
-  
+
   // Safe Spot Status toggle methods
   void toggleSafeSpotsPending() {
     _showSafeSpotsPending = !_showSafeSpotsPending;
     notifyListeners();
   }
-  
+
   void toggleSafeSpotsApproved() {
     _showSafeSpotsApproved = !_showSafeSpotsApproved;
     notifyListeners();
   }
-  
+
   void toggleSafeSpotsRejected() {
     _showSafeSpotsRejected = !_showSafeSpotsRejected;
     notifyListeners();
   }
-  
+
   // Safe Spot Verification toggle methods
   void toggleVerifiedSafeSpots() {
     _showVerifiedSafeSpots = !_showVerifiedSafeSpots;
     notifyListeners();
   }
-  
+
   void toggleUnverifiedSafeSpots() {
     _showUnverifiedSafeSpots = !_showUnverifiedSafeSpots;
     notifyListeners();
@@ -359,11 +362,13 @@ class HotspotFilterService with ChangeNotifier {
   bool shouldShowHotspot(Map<String, dynamic> hotspot) {
     // Time frame filtering - use crime dates
     if (_crimeStartDate != null || _crimeEndDate != null) {
-      final hotspotDateStr = hotspot['time'] ?? hotspot['created_at'] ?? hotspot['date'];
+      final hotspotDateStr =
+          hotspot['time'] ?? hotspot['created_at'] ?? hotspot['date'];
       if (hotspotDateStr != null) {
         final hotspotDate = DateTime.tryParse(hotspotDateStr);
         if (hotspotDate != null) {
-          if (_crimeStartDate != null && hotspotDate.isBefore(_crimeStartDate!)) {
+          if (_crimeStartDate != null &&
+              hotspotDate.isBefore(_crimeStartDate!)) {
             return false;
           }
           if (_crimeEndDate != null && hotspotDate.isAfter(_crimeEndDate!)) {
@@ -389,11 +394,11 @@ class HotspotFilterService with ChangeNotifier {
     if (status == 'approved' || status == null) {
       final activeStatus = hotspot['active_status'] ?? 'active';
       final isActive = activeStatus == 'active';
-      
+
       if (isActive && !_showActive) return false;
       if (!isActive && !_showInactive) return false;
     }
-    
+
     // Check category filters for approved hotspots
     switch (category) {
       case 'Property':
@@ -442,10 +447,12 @@ class HotspotFilterService with ChangeNotifier {
       if (safeSpotDateStr != null) {
         final safeSpotDate = DateTime.tryParse(safeSpotDateStr);
         if (safeSpotDate != null) {
-          if (_safeSpotStartDate != null && safeSpotDate.isBefore(_safeSpotStartDate!)) {
+          if (_safeSpotStartDate != null &&
+              safeSpotDate.isBefore(_safeSpotStartDate!)) {
             return false;
           }
-          if (_safeSpotEndDate != null && safeSpotDate.isAfter(_safeSpotEndDate!)) {
+          if (_safeSpotEndDate != null &&
+              safeSpotDate.isAfter(_safeSpotEndDate!)) {
             return false;
           }
         }
@@ -457,32 +464,36 @@ class HotspotFilterService with ChangeNotifier {
     if (status == 'pending' && !_showSafeSpotsPending) return false;
     if (status == 'approved' && !_showSafeSpotsApproved) return false;
     if (status == 'rejected' && !_showSafeSpotsRejected) return false;
-    
+
     // Verification filtering
     final verified = safeSpot['verified'] ?? false;
     if (verified && !_showVerifiedSafeSpots) return false;
     if (!verified && !_showUnverifiedSafeSpots) return false;
-    
+
     // Type filtering
     final safeSpotType = safeSpot['safe_spot_types'];
     if (safeSpotType != null) {
       final typeName = safeSpotType['name']?.toString().toLowerCase() ?? '';
-      
+
       if (typeName.contains('police') && !_showPoliceStations) return false;
-      if (typeName.contains('government') && !_showGovernmentBuildings) return false;
+      if (typeName.contains('government') && !_showGovernmentBuildings)
+        return false;
       if (typeName.contains('hospital') && !_showHospitals) return false;
       if (typeName.contains('school') && !_showSchools) return false;
       if (typeName.contains('mall') && !_showShoppingMalls) return false;
       if (typeName.contains('lit') && !_showWellLitAreas) return false;
       if (typeName.contains('security') && !_showSecurityCameras) return false;
       if (typeName.contains('fire') && !_showFireStations) return false;
-      if ((typeName.contains('church') || typeName.contains('religious')) && !_showReligiousBuildings) return false;
-      if (typeName.contains('community') && !_showCommunityCenters) return false;
+      if ((typeName.contains('church') || typeName.contains('religious')) &&
+          !_showReligiousBuildings)
+        return false;
+      if (typeName.contains('community') && !_showCommunityCenters)
+        return false;
     }
-    
+
     return true;
   }
-  
+
   // Reset all safe spot filters
   void resetSafeSpotFilters() {
     _showPoliceStations = true;
@@ -495,18 +506,18 @@ class HotspotFilterService with ChangeNotifier {
     _showFireStations = true;
     _showReligiousBuildings = true;
     _showCommunityCenters = true;
-    
+
     _showSafeSpotsPending = true;
     _showSafeSpotsApproved = true;
     _showSafeSpotsRejected = true;
-    
+
     _showVerifiedSafeSpots = true;
     _showUnverifiedSafeSpots = true;
 
     // Reset safe spot time frame filters
     _safeSpotStartDate = null;
     _safeSpotEndDate = null;
-    
+
     notifyListeners();
   }
 }

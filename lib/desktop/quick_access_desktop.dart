@@ -22,7 +22,7 @@ class QuickAccessDesktopScreen extends StatefulWidget {
   final VoidCallback onClose;
 
   const QuickAccessDesktopScreen({
-    Key? key,
+    super.key,
     required this.safeSpots,
     required this.hotspots,
     required this.currentPosition,
@@ -37,10 +37,11 @@ class QuickAccessDesktopScreen extends StatefulWidget {
     required this.onRefresh,
     required this.isSidebarVisible,
     required this.onClose,
-  }) : super(key: key);
+  });
 
   @override
-  State<QuickAccessDesktopScreen> createState() => _QuickAccessDesktopScreenState();
+  State<QuickAccessDesktopScreen> createState() =>
+      _QuickAccessDesktopScreenState();
 }
 
 class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
@@ -93,7 +94,10 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                         decoration: BoxDecoration(
                           color: Colors.grey[200],
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey[400]!, width: 1),
+                          border: Border.all(
+                            color: Colors.grey[400]!,
+                            width: 1,
+                          ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -106,9 +110,14 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                                 });
                               },
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 10,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: _showingSafeSpots ? Colors.blue : Colors.transparent,
+                                  color: _showingSafeSpots
+                                      ? Colors.blue
+                                      : Colors.transparent,
                                   borderRadius: const BorderRadius.only(
                                     topLeft: Radius.circular(8),
                                     bottomLeft: Radius.circular(8),
@@ -119,13 +128,17 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                                     Icon(
                                       Icons.security,
                                       size: 18,
-                                      color: _showingSafeSpots ? Colors.white : Colors.grey[700],
+                                      color: _showingSafeSpots
+                                          ? Colors.white
+                                          : Colors.grey[700],
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
                                       'Safe Spot',
                                       style: TextStyle(
-                                        color: _showingSafeSpots ? Colors.white : Colors.grey[700],
+                                        color: _showingSafeSpots
+                                            ? Colors.white
+                                            : Colors.grey[700],
                                         fontWeight: FontWeight.w600,
                                         fontSize: 13,
                                       ),
@@ -142,9 +155,14 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                                 });
                               },
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 10,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: !_showingSafeSpots ? Colors.red : Colors.transparent,
+                                  color: !_showingSafeSpots
+                                      ? Colors.red
+                                      : Colors.transparent,
                                   borderRadius: const BorderRadius.only(
                                     topRight: Radius.circular(8),
                                     bottomRight: Radius.circular(8),
@@ -155,13 +173,17 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                                     Icon(
                                       Icons.warning,
                                       size: 18,
-                                      color: !_showingSafeSpots ? Colors.white : Colors.grey[700],
+                                      color: !_showingSafeSpots
+                                          ? Colors.white
+                                          : Colors.grey[700],
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
                                       'Hotspot',
                                       style: TextStyle(
-                                        color: !_showingSafeSpots ? Colors.white : Colors.grey[700],
+                                        color: !_showingSafeSpots
+                                            ? Colors.white
+                                            : Colors.grey[700],
                                         fontWeight: FontWeight.w600,
                                         fontSize: 13,
                                       ),
@@ -217,7 +239,9 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
-                            value: _showingSafeSpots ? _quickAccessSortBy : _hotspotSortBy,
+                            value: _showingSafeSpots
+                                ? _quickAccessSortBy
+                                : _hotspotSortBy,
                             items: _showingSafeSpots
                                 ? _getSafeSpotsMenuItems()
                                 : _getHotspotsMenuItems(),
@@ -258,27 +282,28 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                           onRefresh: () async {
                             widget.onRefresh();
                           },
-child: _showingSafeSpots
-    ? _buildSafeSpotsList()
-    : HotspotQuickAccessDesktopWidgets.buildHotspotsList(
-        context: context,
-        hotspots: widget.hotspots,
-        filter: _hotspotFilter,
-        sortBy: _hotspotSortBy,
-        selectedCrimeType: _selectedCrimeType,
-        currentPosition: widget.currentPosition,
-        userProfile: widget.userProfile,
-        isAdmin: widget.isAdmin,
-        onNavigateToHotspot: widget.onNavigateToHotspot,
-        onShowOnMap: widget.onShowOnMap,
-        onClearFilters: () {
-          setState(() {
-            _hotspotFilter = 'all';
-            _selectedCrimeType = null;
-          });
-        },
-        isSidebarVisible: widget.isSidebarVisible,
-      ),
+                          child: _showingSafeSpots
+                              ? _buildSafeSpotsList()
+                              : HotspotQuickAccessDesktopWidgets.buildHotspotsList(
+                                  context: context,
+                                  hotspots: widget.hotspots,
+                                  filter: _hotspotFilter,
+                                  sortBy: _hotspotSortBy,
+                                  selectedCrimeType: _selectedCrimeType,
+                                  currentPosition: widget.currentPosition,
+                                  userProfile: widget.userProfile,
+                                  isAdmin: widget.isAdmin,
+                                  onNavigateToHotspot:
+                                      widget.onNavigateToHotspot,
+                                  onShowOnMap: widget.onShowOnMap,
+                                  onClearFilters: () {
+                                    setState(() {
+                                      _hotspotFilter = 'all';
+                                      _selectedCrimeType = null;
+                                    });
+                                  },
+                                  isSidebarVisible: widget.isSidebarVisible,
+                                ),
                         ),
                 ),
               ],
@@ -426,20 +451,13 @@ child: _showingSafeSpots
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.location_off,
-              size: 64,
-              color: Colors.grey[400],
-            ),
+            Icon(Icons.location_off, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
               (_quickAccessFilter != 'all' || _selectedSafeSpotType != null)
                   ? 'No safe spots match your filters'
                   : 'No safe spots found nearby',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
             if (_quickAccessFilter != 'all' || _selectedSafeSpotType != null)
@@ -483,7 +501,10 @@ child: _showingSafeSpots
               ),
               _buildStatItem(
                 'Verified',
-                filteredAndSortedSafeSpots.where((s) => s['verified'] == true).length.toString(),
+                filteredAndSortedSafeSpots
+                    .where((s) => s['verified'] == true)
+                    .length
+                    .toString(),
                 Icons.verified,
                 Colors.orange,
               ),
@@ -505,7 +526,12 @@ child: _showingSafeSpots
     );
   }
 
-  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
+  Widget _buildStatItem(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Column(
       children: [
         Icon(icon, color: color, size: 24),
@@ -518,13 +544,7 @@ child: _showingSafeSpots
             color: color,
           ),
         ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
       ],
     );
   }
@@ -532,7 +552,10 @@ child: _showingSafeSpots
   Widget _buildSafeSpotCard(Map<String, dynamic> safeSpot) {
     final coords = safeSpot['location']['coordinates'];
     final safeSpotLocation = LatLng(coords[1], coords[0]);
-    final distance = _calculateDistance(widget.currentPosition!, safeSpotLocation);
+    final distance = _calculateDistance(
+      widget.currentPosition!,
+      safeSpotLocation,
+    );
     final status = safeSpot['status'] ?? 'pending';
     final verified = safeSpot['verified'] ?? false;
     final safeSpotType = safeSpot['safe_spot_types'];
@@ -543,7 +566,8 @@ child: _showingSafeSpots
     final isOwnSpot = currentUserId != null && currentUserId == createdBy;
 
     // Format location for copying
-    final fullLocation = '${safeSpotLocation.latitude}, ${safeSpotLocation.longitude}';
+    final fullLocation =
+        '${safeSpotLocation.latitude}, ${safeSpotLocation.longitude}';
 
     Color statusColor;
     IconData statusIcon;
@@ -638,7 +662,10 @@ child: _showingSafeSpots
                     ),
                     // Status badge
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: statusColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
@@ -667,10 +694,7 @@ child: _showingSafeSpots
                   const SizedBox(height: 8),
                   Text(
                     description,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[700],
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey[700]),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -692,7 +716,10 @@ child: _showingSafeSpots
                     if (isOwnSpot) ...[
                       const SizedBox(width: 12),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.blue.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(8),
@@ -743,7 +770,9 @@ child: _showingSafeSpots
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: fullLocation));
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Location copied to clipboard')),
+                          const SnackBar(
+                            content: Text('Location copied to clipboard'),
+                          ),
                         );
                       },
                       icon: const Icon(Icons.copy, size: 18),
@@ -796,38 +825,45 @@ child: _showingSafeSpots
                           title: const Text('All Safe Spots'),
                           value: 'all',
                           groupValue: _quickAccessFilter,
-                          onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                          onChanged: (value) =>
+                              setDialogState(() => _quickAccessFilter = value!),
                         ),
                         RadioListTile<String>(
                           title: const Text('Pending'),
                           value: 'pending',
                           groupValue: _quickAccessFilter,
-                          onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                          onChanged: (value) =>
+                              setDialogState(() => _quickAccessFilter = value!),
                         ),
                         RadioListTile<String>(
                           title: const Text('Approved Only'),
                           value: 'approved',
                           groupValue: _quickAccessFilter,
-                          onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                          onChanged: (value) =>
+                              setDialogState(() => _quickAccessFilter = value!),
                         ),
                         RadioListTile<String>(
                           title: const Text('Verified Only'),
                           value: 'verified',
                           groupValue: _quickAccessFilter,
-                          onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                          onChanged: (value) =>
+                              setDialogState(() => _quickAccessFilter = value!),
                         ),
                         RadioListTile<String>(
                           title: const Text('Within 5km'),
                           value: 'nearby',
                           groupValue: _quickAccessFilter,
-                          onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                          onChanged: (value) =>
+                              setDialogState(() => _quickAccessFilter = value!),
                         ),
                         if (widget.userProfile != null)
                           RadioListTile<String>(
                             title: const Text('My Safe Spots'),
                             value: 'mine',
                             groupValue: _quickAccessFilter,
-                            onChanged: (value) => setDialogState(() => _quickAccessFilter = value!),
+                            onChanged: (value) => setDialogState(
+                              () => _quickAccessFilter = value!,
+                            ),
                           ),
                         if (availableTypes.isNotEmpty) ...[
                           const SizedBox(height: 16),
@@ -845,14 +881,20 @@ child: _showingSafeSpots
                             title: const Text('All Types'),
                             value: null,
                             groupValue: _selectedSafeSpotType,
-                            onChanged: (value) => setDialogState(() => _selectedSafeSpotType = value),
+                            onChanged: (value) => setDialogState(
+                              () => _selectedSafeSpotType = value,
+                            ),
                           ),
-                          ...availableTypes.map((type) => RadioListTile<String>(
-                                title: Text(type),
-                                value: type,
-                                groupValue: _selectedSafeSpotType,
-                                onChanged: (value) => setDialogState(() => _selectedSafeSpotType = value),
-                              )).toList(),
+                          ...availableTypes.map(
+                            (type) => RadioListTile<String>(
+                              title: Text(type),
+                              value: type,
+                              groupValue: _selectedSafeSpotType,
+                              onChanged: (value) => setDialogState(
+                                () => _selectedSafeSpotType = value,
+                              ),
+                            ),
+                          ),
                         ],
                       ],
                     ),
@@ -940,7 +982,8 @@ child: _showingSafeSpots
           break;
       }
 
-      if (_selectedSafeSpotType != null && safeSpotTypeName != _selectedSafeSpotType) {
+      if (_selectedSafeSpotType != null &&
+          safeSpotTypeName != _selectedSafeSpotType) {
         return false;
       }
 
@@ -953,18 +996,25 @@ child: _showingSafeSpots
           if (widget.currentPosition == null) return 0;
           final distanceA = _calculateDistance(
             widget.currentPosition!,
-            LatLng(a['location']['coordinates'][1], a['location']['coordinates'][0]),
+            LatLng(
+              a['location']['coordinates'][1],
+              a['location']['coordinates'][0],
+            ),
           );
           final distanceB = _calculateDistance(
             widget.currentPosition!,
-            LatLng(b['location']['coordinates'][1], b['location']['coordinates'][0]),
+            LatLng(
+              b['location']['coordinates'][1],
+              b['location']['coordinates'][0],
+            ),
           );
           return distanceA.compareTo(distanceB);
         case 'name':
           return (a['name'] ?? '').compareTo(b['name'] ?? '');
         case 'type':
-          return (a['safe_spot_types']['name'] ?? '')
-              .compareTo(b['safe_spot_types']['name'] ?? '');
+          return (a['safe_spot_types']['name'] ?? '').compareTo(
+            b['safe_spot_types']['name'] ?? '',
+          );
         case 'status':
           final statusOrder = {'approved': 0, 'pending': 1, 'rejected': 2};
           final statusA = statusOrder[a['status']] ?? 3;
@@ -993,8 +1043,12 @@ child: _showingSafeSpots
     double deltaLatRad = (point2.latitude - point1.latitude) * (pi / 180);
     double deltaLngRad = (point2.longitude - point1.longitude) * (pi / 180);
 
-    double a = sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
-        cos(lat1Rad) * cos(lat2Rad) * sin(deltaLngRad / 2) * sin(deltaLngRad / 2);
+    double a =
+        sin(deltaLatRad / 2) * sin(deltaLatRad / 2) +
+        cos(lat1Rad) *
+            cos(lat2Rad) *
+            sin(deltaLngRad / 2) *
+            sin(deltaLngRad / 2);
     double c = 2 * atan2(sqrt(a), sqrt(1 - a));
 
     return earthRadius * c;

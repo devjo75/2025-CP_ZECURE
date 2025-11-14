@@ -6,23 +6,22 @@ import 'chat_service.dart';
 class CreateChannelDesktopDialog extends StatefulWidget {
   final Map<String, dynamic> userProfile;
 
-  const CreateChannelDesktopDialog({
-    Key? key,
-    required this.userProfile,
-  }) : super(key: key);
+  const CreateChannelDesktopDialog({super.key, required this.userProfile});
 
   @override
-  State<CreateChannelDesktopDialog> createState() => _CreateChannelDesktopDialogState();
+  State<CreateChannelDesktopDialog> createState() =>
+      _CreateChannelDesktopDialogState();
 }
 
-class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog> {
+class _CreateChannelDesktopDialogState
+    extends State<CreateChannelDesktopDialog> {
   final _formKey = GlobalKey<FormState>();
   final _chatService = ChatService();
-  
+
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _barangayController = TextEditingController();
-  
+
   String _selectedType = 'barangay';
   bool _isPrivate = false;
   bool _isCreating = false;
@@ -44,11 +43,11 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
 
     final channel = await _chatService.createChannel(
       name: _nameController.text.trim(),
-      description: _descriptionController.text.trim().isEmpty 
-          ? null 
+      description: _descriptionController.text.trim().isEmpty
+          ? null
           : _descriptionController.text.trim(),
       channelType: _selectedType,
-      barangay: _selectedType == 'barangay' 
+      barangay: _selectedType == 'barangay'
           ? _barangayController.text.trim().toUpperCase()
           : null,
       createdBy: userId,
@@ -81,9 +80,7 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: 600,
         constraints: const BoxConstraints(maxHeight: 700),
@@ -95,9 +92,7 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: Colors.white,
-                border: Border(
-                  bottom: BorderSide(color: Colors.grey[200]!),
-                ),
+                border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
@@ -132,10 +127,7 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
                         SizedBox(height: 4),
                         Text(
                           'Set up a new community discussion channel',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey,
-                          ),
+                          style: TextStyle(fontSize: 13, color: Colors.grey),
                         ),
                       ],
                     ),
@@ -197,9 +189,9 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
                           ),
                         ],
                       ),
-                      
+
                       const SizedBox(height: 24),
-                      
+
                       // Two-column layout for name and barangay
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -209,8 +201,8 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
                             child: _buildTextField(
                               controller: _nameController,
                               label: 'Channel Name',
-                              hint: _selectedType == 'barangay' 
-                                  ? 'e.g., Safety Updates' 
+                              hint: _selectedType == 'barangay'
+                                  ? 'e.g., Safety Updates'
                                   : 'e.g., Emergency Response',
                               icon: Icons.tag,
                               validator: (value) {
@@ -248,9 +240,9 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
                           ],
                         ],
                       ),
-                      
+
                       const SizedBox(height: 20),
-                      
+
                       // Description
                       _buildTextField(
                         controller: _descriptionController,
@@ -260,9 +252,9 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
                         maxLines: 3,
                         maxLength: 500,
                       ),
-                      
+
                       const SizedBox(height: 20),
-                      
+
                       // Privacy Setting - Compact
                       _buildCompactPrivacyToggle(),
                     ],
@@ -276,9 +268,7 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: Colors.grey[50],
-                border: Border(
-                  top: BorderSide(color: Colors.grey[200]!),
-                ),
+                border: Border(top: BorderSide(color: Colors.grey[200]!)),
                 borderRadius: const BorderRadius.only(
                   bottomLeft: Radius.circular(16),
                   bottomRight: Radius.circular(16),
@@ -288,9 +278,14 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
-                    onPressed: _isCreating ? null : () => Navigator.pop(context),
+                    onPressed: _isCreating
+                        ? null
+                        : () => Navigator.pop(context),
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
                     ),
                     child: const Text('Cancel'),
                   ),
@@ -300,7 +295,10 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.blue,
                       disabledBackgroundColor: Colors.grey[300],
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 32,
+                        vertical: 12,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -340,7 +338,7 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
     required String subtitle,
   }) {
     final isSelected = _selectedType == value;
-    
+
     return InkWell(
       onTap: () {
         setState(() {
@@ -363,10 +361,7 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
         ),
         child: Column(
           children: [
-            Text(
-              icon,
-              style: const TextStyle(fontSize: 32),
-            ),
+            Text(icon, style: const TextStyle(fontSize: 32)),
             const SizedBox(height: 8),
             Text(
               title,
@@ -406,10 +401,7 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
       children: [
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-          ),
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
         TextFormField(
@@ -473,20 +465,12 @@ class _CreateChannelDesktopDialogState extends State<CreateChannelDesktopDialog>
               children: [
                 const Text(
                   'Private Channel',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _isPrivate 
-                      ? 'Requires approval to join' 
-                      : 'Anyone can join',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
+                  _isPrivate ? 'Requires approval to join' : 'Anyone can join',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
               ],
             ),
@@ -514,8 +498,6 @@ Future<bool?> showCreateChannelDesktopDialog(
 ) {
   return showDialog<bool>(
     context: context,
-    builder: (context) => CreateChannelDesktopDialog(
-      userProfile: userProfile,
-    ),
+    builder: (context) => CreateChannelDesktopDialog(userProfile: userProfile),
   );
 }

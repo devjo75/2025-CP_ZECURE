@@ -7,7 +7,7 @@ import 'package:zecure/quick_access/quick_hotspot_services.dart';
 
 class HotspotQuickAccessWidgets {
   static String? get tempFilter => null;
-  
+
   static String? get tempCrimeType => null;
 
   // Build hotspots list
@@ -24,35 +24,29 @@ class HotspotQuickAccessWidgets {
     required Function(Map<String, dynamic>) onShowOnMap,
     required VoidCallback onClearFilters,
   }) {
-    final filteredAndSortedHotspots = HotspotQuickAccessUtils.getFilteredAndSortedHotspots(
-      hotspots: hotspots,
-      filter: filter,
-      sortBy: sortBy,
-      selectedCrimeType: selectedCrimeType,
-      currentPosition: currentPosition,
-      userProfile: userProfile,
-      isAdmin: isAdmin,
-    );
-    
+    final filteredAndSortedHotspots =
+        HotspotQuickAccessUtils.getFilteredAndSortedHotspots(
+          hotspots: hotspots,
+          filter: filter,
+          sortBy: sortBy,
+          selectedCrimeType: selectedCrimeType,
+          currentPosition: currentPosition,
+          userProfile: userProfile,
+          isAdmin: isAdmin,
+        );
+
     if (filteredAndSortedHotspots.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.warning_outlined,
-              size: 64,
-              color: Colors.grey[400],
-            ),
+            Icon(Icons.warning_outlined, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
               (filter != 'all' || selectedCrimeType != null)
-                ? 'No hotspots match your filters' 
-                : 'No hotspots found nearby',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
-              ),
+                  ? 'No hotspots match your filters'
+                  : 'No hotspots found nearby',
+              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
             if (filter != 'all' || selectedCrimeType != null)
@@ -76,29 +70,36 @@ class HotspotQuickAccessWidgets {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildStatItem(
-                'Total', 
+                'Total',
                 filteredAndSortedHotspots.length.toString(),
                 Icons.warning,
                 Colors.red,
               ),
               _buildStatItem(
-                'Nearest', 
+                'Nearest',
                 filteredAndSortedHotspots.isNotEmpty && currentPosition != null
-                  ? '${HotspotQuickAccessUtils.calculateDistance(currentPosition, LatLng(filteredAndSortedHotspots.first['location']['coordinates'][1], filteredAndSortedHotspots.first['location']['coordinates'][0])).toStringAsFixed(1)}km'
-                  : 'N/A',
+                    ? '${HotspotQuickAccessUtils.calculateDistance(currentPosition, LatLng(filteredAndSortedHotspots.first['location']['coordinates'][1], filteredAndSortedHotspots.first['location']['coordinates'][0])).toStringAsFixed(1)}km'
+                    : 'N/A',
                 Icons.near_me,
                 Colors.orange,
               ),
               _buildStatItem(
-                'Active', 
-                filteredAndSortedHotspots.where((h) => h['status'] == 'approved' && (h['active_status'] ?? 'active') == 'active').length.toString(),
+                'Active',
+                filteredAndSortedHotspots
+                    .where(
+                      (h) =>
+                          h['status'] == 'approved' &&
+                          (h['active_status'] ?? 'active') == 'active',
+                    )
+                    .length
+                    .toString(),
                 Icons.visibility,
                 Colors.green,
               ),
             ],
           ),
         ),
-        
+
         // List
         Expanded(
           child: ListView.builder(
@@ -122,7 +123,12 @@ class HotspotQuickAccessWidgets {
   }
 
   // Build stat item
-  static Widget _buildStatItem(String label, String value, IconData icon, Color color) {
+  static Widget _buildStatItem(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Column(
       children: [
         Icon(icon, color: color, size: 24),
@@ -135,13 +141,7 @@ class HotspotQuickAccessWidgets {
             color: color,
           ),
         ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
       ],
     );
   }
@@ -157,10 +157,13 @@ class HotspotQuickAccessWidgets {
   }) {
     final coords = hotspot['location']['coordinates'];
     final hotspotLocation = LatLng(coords[1], coords[0]);
-    final distance = currentPosition != null 
-      ? HotspotQuickAccessUtils.calculateDistance(currentPosition, hotspotLocation)
-      : 0.0;
-    
+    final distance = currentPosition != null
+        ? HotspotQuickAccessUtils.calculateDistance(
+            currentPosition,
+            hotspotLocation,
+          )
+        : 0.0;
+
     final statusInfo = HotspotQuickAccessUtils.getHotspotStatusInfo(hotspot);
     final crimeType = hotspot['crime_type'];
     final crimeTypeName = crimeType['name'] ?? 'Unknown Crime';
@@ -169,8 +172,9 @@ class HotspotQuickAccessWidgets {
     final currentUserId = userProfile?['id'];
     final createdBy = hotspot['created_by'];
     final reportedBy = hotspot['reported_by'];
-    final isOwnHotspot = currentUserId != null &&
-                     (currentUserId == createdBy || currentUserId == reportedBy);
+    final isOwnHotspot =
+        currentUserId != null &&
+        (currentUserId == createdBy || currentUserId == reportedBy);
 
     final statusColor = statusInfo['color'] as Color;
     final statusIcon = statusInfo['icon'] as IconData;
@@ -201,7 +205,7 @@ class HotspotQuickAccessWidgets {
                   ),
                 ),
                 const SizedBox(width: 12),
-                
+
                 // Crime type and category
                 Expanded(
                   child: Column(
@@ -218,18 +222,18 @@ class HotspotQuickAccessWidgets {
                       ),
                       Text(
                         '${crimeCategory.isNotEmpty ? crimeCategory : 'General'} ',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                       ),
                     ],
                   ),
                 ),
-                
+
                 // Status badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: statusColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
@@ -253,21 +257,18 @@ class HotspotQuickAccessWidgets {
                 ),
               ],
             ),
-            
+
             // Description
             if (description.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(
                 description,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[700],
-                ),
+                style: TextStyle(fontSize: 14, color: Colors.grey[700]),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ],
-            
+
             // Distance and own hotspot indicator
             const SizedBox(height: 8),
             Row(
@@ -275,9 +276,9 @@ class HotspotQuickAccessWidgets {
                 Icon(Icons.near_me, size: 16, color: Colors.grey[600]),
                 const SizedBox(width: 4),
                 Text(
-                  currentPosition != null 
-                    ? '${distance.toStringAsFixed(1)} km away'
-                    : 'Distance unknown',
+                  currentPosition != null
+                      ? '${distance.toStringAsFixed(1)} km away'
+                      : 'Distance unknown',
                   style: TextStyle(
                     fontSize: 14,
                     color: Colors.grey[600],
@@ -287,7 +288,10 @@ class HotspotQuickAccessWidgets {
                 if (isOwnHotspot) ...[
                   const SizedBox(width: 12),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.red.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
@@ -304,7 +308,7 @@ class HotspotQuickAccessWidgets {
                 ],
               ],
             ),
-            
+
             // Action buttons - UPDATED with warning dialog
             const SizedBox(height: 12),
             Row(
@@ -328,7 +332,7 @@ class HotspotQuickAccessWidgets {
                   ),
                 ),
                 const SizedBox(width: 8),
-                
+
                 // Show on map button
                 Expanded(
                   child: OutlinedButton.icon(
@@ -341,23 +345,24 @@ class HotspotQuickAccessWidgets {
                   ),
                 ),
                 const SizedBox(width: 8),
-                
-                // More options button
-               IconButton(
-            icon: const Icon(Icons.copy, size: 18),
-            onPressed: () {
-              final coords = hotspot['location']['coordinates'];
-              final fullLocation = '${coords[1]}, ${coords[0]}';
-              Clipboard.setData(ClipboardData(text: fullLocation));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Location copied to clipboard')),
-              );
-            },
-            style: IconButton.styleFrom(
-              backgroundColor: Colors.grey[100],
-            ),
-          ),
 
+                // More options button
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 18),
+                  onPressed: () {
+                    final coords = hotspot['location']['coordinates'];
+                    final fullLocation = '${coords[1]}, ${coords[0]}';
+                    Clipboard.setData(ClipboardData(text: fullLocation));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Location copied to clipboard'),
+                      ),
+                    );
+                  },
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.grey[100],
+                  ),
+                ),
               ],
             ),
           ],
@@ -369,10 +374,14 @@ class HotspotQuickAccessWidgets {
   // Show hotspot options
 
   // WARNING DIALOG METHOD - ADD THIS HERE
-  static void _showDirectionsConfirmation(BuildContext context, LatLng coordinates, VoidCallback onConfirm) {
+  static void _showDirectionsConfirmation(
+    BuildContext context,
+    LatLng coordinates,
+    VoidCallback onConfirm,
+  ) {
     final screenWidth = MediaQuery.of(context).size.width;
     final isDesktop = screenWidth > 800;
-    
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -381,9 +390,7 @@ class HotspotQuickAccessWidgets {
         insetPadding: const EdgeInsets.all(24),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: isDesktop 
-                ? 500
-                : MediaQuery.of(context).size.width * 0.9,
+            maxWidth: isDesktop ? 500 : MediaQuery.of(context).size.width * 0.9,
             maxHeight: MediaQuery.of(context).size.height * 0.8,
           ),
           child: IntrinsicHeight(
@@ -424,7 +431,7 @@ class HotspotQuickAccessWidgets {
                     ],
                   ),
                 ),
-                
+
                 // Content Section
                 Flexible(
                   child: SingleChildScrollView(
@@ -481,7 +488,7 @@ class HotspotQuickAccessWidgets {
                     ),
                   ),
                 ),
-                
+
                 // Actions Section
                 Padding(
                   padding: const EdgeInsets.all(20),
@@ -491,7 +498,10 @@ class HotspotQuickAccessWidgets {
                       TextButton(
                         onPressed: () => Navigator.pop(context),
                         style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
@@ -514,7 +524,10 @@ class HotspotQuickAccessWidgets {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red.shade600,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
@@ -550,7 +563,9 @@ class HotspotQuickAccessWidgets {
   }) {
     String tempFilter = currentFilter;
     String? tempCrimeType = selectedCrimeType;
-    final availableTypes = HotspotQuickAccessUtils.getAvailableCrimeTypes(hotspots);
+    final availableTypes = HotspotQuickAccessUtils.getAvailableCrimeTypes(
+      hotspots,
+    );
 
     showDialog(
       context: context,
@@ -566,10 +581,7 @@ class HotspotQuickAccessWidgets {
                   // Status filters
                   const Text(
                     'Status',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   RadioListTile<String>(
@@ -667,16 +679,18 @@ class HotspotQuickAccessWidgets {
                         });
                       },
                     ),
-                    ...availableTypes.map((type) => RadioListTile<String>(
-                          title: Text(type),
-                          value: type,
-                          groupValue: tempCrimeType,
-                          onChanged: (value) {
-                            setDialogState(() {
-                              tempCrimeType = value;
-                            });
-                          },
-                        )).toList(),
+                    ...availableTypes.map(
+                      (type) => RadioListTile<String>(
+                        title: Text(type),
+                        value: type,
+                        groupValue: tempCrimeType,
+                        onChanged: (value) {
+                          setDialogState(() {
+                            tempCrimeType = value;
+                          });
+                        },
+                      ),
+                    ),
                   ],
                 ],
               ),

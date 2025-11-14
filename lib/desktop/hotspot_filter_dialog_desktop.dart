@@ -5,7 +5,15 @@ import 'package:zecure/services/hotspot_filter_service.dart';
 
 class HotspotFilterDialogDesktop extends StatelessWidget {
   final Map<String, dynamic>? userProfile;
-  final Widget Function(BuildContext, String, IconData, Color, bool, void Function(bool)) buildFilterToggle;
+  final Widget Function(
+    BuildContext,
+    String,
+    IconData,
+    Color,
+    bool,
+    void Function(bool),
+  )
+  buildFilterToggle;
 
   const HotspotFilterDialogDesktop({
     super.key,
@@ -51,12 +59,19 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                             children: [
                               GestureDetector(
                                 onTap: () {
-                                  filterService.setFilterMode(true); // Show crimes
+                                  filterService.setFilterMode(
+                                    true,
+                                  ); // Show crimes
                                 },
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
                                   decoration: BoxDecoration(
-                                    color: isShowingCrimes ? Colors.red.shade600 : Colors.transparent,
+                                    color: isShowingCrimes
+                                        ? Colors.red.shade600
+                                        : Colors.transparent,
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   child: Row(
@@ -65,14 +80,20 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                                       Icon(
                                         Icons.warning_rounded,
                                         size: 16,
-                                        color: isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                        color: isShowingCrimes
+                                            ? Colors.white
+                                            : Colors.grey.shade600,
                                       ),
                                       const SizedBox(width: 4),
                                       Text(
                                         'Crimes',
                                         style: TextStyle(
-                                          color: isShowingCrimes ? Colors.white : Colors.grey.shade600,
-                                          fontWeight: isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
+                                          color: isShowingCrimes
+                                              ? Colors.white
+                                              : Colors.grey.shade600,
+                                          fontWeight: isShowingCrimes
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
                                           fontSize: 12,
                                         ),
                                       ),
@@ -82,12 +103,19 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                               ),
                               GestureDetector(
                                 onTap: () {
-                                  filterService.setFilterMode(false); // Show safe spots
+                                  filterService.setFilterMode(
+                                    false,
+                                  ); // Show safe spots
                                 },
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
                                   decoration: BoxDecoration(
-                                    color: !isShowingCrimes ? Colors.green.shade600 : Colors.transparent,
+                                    color: !isShowingCrimes
+                                        ? Colors.green.shade600
+                                        : Colors.transparent,
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   child: Row(
@@ -96,14 +124,20 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                                       Icon(
                                         Icons.shield_rounded,
                                         size: 16,
-                                        color: !isShowingCrimes ? Colors.white : Colors.grey.shade600,
+                                        color: !isShowingCrimes
+                                            ? Colors.white
+                                            : Colors.grey.shade600,
                                       ),
                                       const SizedBox(width: 4),
                                       Text(
                                         'Safe Spots',
                                         style: TextStyle(
-                                          color: !isShowingCrimes ? Colors.white : Colors.grey.shade600,
-                                          fontWeight: !isShowingCrimes ? FontWeight.w600 : FontWeight.normal,
+                                          color: !isShowingCrimes
+                                              ? Colors.white
+                                              : Colors.grey.shade600,
+                                          fontWeight: !isShowingCrimes
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
                                           fontSize: 12,
                                         ),
                                       ),
@@ -119,185 +153,216 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                     const SizedBox(height: 16),
 
                     // Time Frame section
-Column(
-  crossAxisAlignment: CrossAxisAlignment.start,
-  children: [
-    const Padding(
-      padding: EdgeInsets.only(left: 8.0),
-      child: Text(
-        'Time Frame',
-        style: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: Colors.grey,
-        ),
-      ),
-    ),
-    const SizedBox(height: 8),
-    
-    // Date Range Row
-    Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () async {
-                final date = await showDatePicker(
-                  context: context,
-                  initialDate: filterService.startDate ?? DateTime.now(),
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime.now(),
-                );
-                if (date != null) {
-                  filterService.setStartDate(date);
-                }
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: filterService.startDate != null 
-                        ? Colors.blue.shade300 
-                        : Colors.grey.shade300,
-                  ),
-                  borderRadius: BorderRadius.circular(8),
-                  color: filterService.startDate != null 
-                      ? Colors.blue.shade50 
-                      : Colors.white,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.calendar_today,
-                      size: 14,
-                      color: filterService.startDate != null 
-                          ? Colors.blue.shade600 
-                          : Colors.grey.shade600,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        filterService.startDate != null
-                            ? '${filterService.startDate!.day}/${filterService.startDate!.month}/${filterService.startDate!.year}'
-                            : 'Start Date',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: filterService.startDate != null 
-                              ? Colors.blue.shade700 
-                              : Colors.grey.shade600,
-                          fontWeight: filterService.startDate != null 
-                              ? FontWeight.w500 
-                              : FontWeight.normal,
-                          overflow: TextOverflow.ellipsis,
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(left: 8.0),
+                          child: Text(
+                            'Time Frame',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Container(
-              width: 20,
-              height: 1,
-              color: Colors.grey.shade400,
-            ),
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () async {
-                final date = await showDatePicker(
-                  context: context,
-                  initialDate: filterService.endDate ?? DateTime.now(),
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime.now(),
-                );
-                if (date != null) {
-                  filterService.setEndDate(date);
-                }
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: filterService.endDate != null 
-                        ? Colors.blue.shade300 
-                        : Colors.grey.shade300,
-                  ),
-                  borderRadius: BorderRadius.circular(8),
-                  color: filterService.endDate != null 
-                      ? Colors.blue.shade50 
-                      : Colors.white,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.calendar_today,
-                      size: 14,
-                      color: filterService.endDate != null 
-                          ? Colors.blue.shade600 
-                          : Colors.grey.shade600,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        filterService.endDate != null
-                            ? '${filterService.endDate!.day}/${filterService.endDate!.month}/${filterService.endDate!.year}'
-                            : 'End Date',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: filterService.endDate != null 
-                              ? Colors.blue.shade700 
-                              : Colors.grey.shade600,
-                          fontWeight: filterService.endDate != null 
-                              ? FontWeight.w500 
-                              : FontWeight.normal,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-    
-    // Clear dates option - bottom right
-    if (filterService.startDate != null || filterService.endDate != null) ...[
-      const SizedBox(height: 8),
-      Padding(
-        padding: const EdgeInsets.only(right: 8.0),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            GestureDetector(
-              onTap: () {
-                filterService.setStartDate(null);
-                filterService.setEndDate(null);
-              },
-              child: Text(
-                'Clear dates',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.blue.shade600,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ],
-  ],
-),
 
-const SizedBox(height: 16),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8.0, top: 4),
+                          child: Text(
+                            'Filter crimes and heatmap by date range',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+
+                        // Date Range Row
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () async {
+                                    final date = await showDatePicker(
+                                      context: context,
+                                      initialDate:
+                                          filterService.startDate ??
+                                          DateTime.now(),
+                                      firstDate: DateTime(2020),
+                                      lastDate: DateTime.now(),
+                                    );
+                                    if (date != null) {
+                                      filterService.setStartDate(date);
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: filterService.startDate != null
+                                            ? Colors.blue.shade300
+                                            : Colors.grey.shade300,
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                      color: filterService.startDate != null
+                                          ? Colors.blue.shade50
+                                          : Colors.white,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.calendar_today,
+                                          size: 14,
+                                          color: filterService.startDate != null
+                                              ? Colors.blue.shade600
+                                              : Colors.grey.shade600,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            filterService.startDate != null
+                                                ? '${filterService.startDate!.day}/${filterService.startDate!.month}/${filterService.startDate!.year}'
+                                                : 'Start Date',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color:
+                                                  filterService.startDate !=
+                                                      null
+                                                  ? Colors.blue.shade700
+                                                  : Colors.grey.shade600,
+                                              fontWeight:
+                                                  filterService.startDate !=
+                                                      null
+                                                  ? FontWeight.w500
+                                                  : FontWeight.normal,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                child: Container(
+                                  width: 20,
+                                  height: 1,
+                                  color: Colors.grey.shade400,
+                                ),
+                              ),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () async {
+                                    final date = await showDatePicker(
+                                      context: context,
+                                      initialDate:
+                                          filterService.endDate ??
+                                          DateTime.now(),
+                                      firstDate: DateTime(2020),
+                                      lastDate: DateTime.now(),
+                                    );
+                                    if (date != null) {
+                                      filterService.setEndDate(date);
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: filterService.endDate != null
+                                            ? Colors.blue.shade300
+                                            : Colors.grey.shade300,
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                      color: filterService.endDate != null
+                                          ? Colors.blue.shade50
+                                          : Colors.white,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.calendar_today,
+                                          size: 14,
+                                          color: filterService.endDate != null
+                                              ? Colors.blue.shade600
+                                              : Colors.grey.shade600,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            filterService.endDate != null
+                                                ? '${filterService.endDate!.day}/${filterService.endDate!.month}/${filterService.endDate!.year}'
+                                                : 'End Date',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color:
+                                                  filterService.endDate != null
+                                                  ? Colors.blue.shade700
+                                                  : Colors.grey.shade600,
+                                              fontWeight:
+                                                  filterService.endDate != null
+                                                  ? FontWeight.w500
+                                                  : FontWeight.normal,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Clear dates option - bottom right
+                        if (filterService.startDate != null ||
+                            filterService.endDate != null) ...[
+                          const SizedBox(height: 8),
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                GestureDetector(
+                                  onTap: () {
+                                    filterService.setStartDate(null);
+                                    filterService.setEndDate(null);
+                                  },
+                                  child: Text(
+                                    'Clear dates',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.blue.shade600,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+
+                    const SizedBox(height: 16),
 
                     // Dynamic content based on toggle
                     if (isShowingCrimes) ...[
@@ -420,60 +485,61 @@ const SizedBox(height: 16),
                       ),
                       const SizedBox(height: 16),
 
-                 // Status filters (only for logged-in users)
-if (userProfile != null) ...[
-  const Padding(
-    padding: EdgeInsets.only(left: 8.0),
-    child: Text(
-      'Status',
-      style: TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.w600,
-        color: Colors.grey,
-      ),
-    ),
-  ),
-  const SizedBox(height: 8),
-  
-  // Pending/Rejected only for users who can see them (admin/officer or own reports)
-  if (userProfile?['role'] == 'admin' || userProfile?['role'] == 'officer') ...[
-    buildFilterToggle(
-      context,
-      'Pending',
-      Icons.hourglass_empty,
-      Colors.deepPurple,
-      filterService.showPending,
-      (value) => filterService.togglePending(),
-    ),
-    buildFilterToggle(
-      context,
-      'Rejected',
-      Icons.cancel_outlined,
-      Colors.red,
-      filterService.showRejected,
-      (value) => filterService.toggleRejected(),
-    ),
-  ],
+                      // Status filters (only for logged-in users)
+                      if (userProfile != null) ...[
+                        const Padding(
+                          padding: EdgeInsets.only(left: 8.0),
+                          child: Text(
+                            'Status',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
 
-  // Active/Inactive filters for admins, officers, AND regular users
-  buildFilterToggle(
-    context,
-    'Active',
-    Icons.check_circle_outline,
-    Colors.green,
-    filterService.showActive,
-    (value) => filterService.toggleActive(),
-  ),
-  buildFilterToggle(
-    context,
-    'Inactive (last 60 days)',
-    Icons.pause_circle_outline,
-    Colors.grey,
-    filterService.showInactive,
-    (value) => filterService.toggleInactive(),
-  ),
-  const SizedBox(height: 16),
-],
+                        // Pending/Rejected only for users who can see them (admin/officer or own reports)
+                        if (userProfile?['role'] == 'admin' ||
+                            userProfile?['role'] == 'officer') ...[
+                          buildFilterToggle(
+                            context,
+                            'Pending',
+                            Icons.hourglass_empty,
+                            Colors.deepPurple,
+                            filterService.showPending,
+                            (value) => filterService.togglePending(),
+                          ),
+                          buildFilterToggle(
+                            context,
+                            'Rejected',
+                            Icons.cancel_outlined,
+                            Colors.red,
+                            filterService.showRejected,
+                            (value) => filterService.toggleRejected(),
+                          ),
+                        ],
+
+                        // Active/Inactive filters for admins, officers, AND regular users
+                        buildFilterToggle(
+                          context,
+                          'Active',
+                          Icons.check_circle_outline,
+                          Colors.green,
+                          filterService.showActive,
+                          (value) => filterService.toggleActive(),
+                        ),
+                        buildFilterToggle(
+                          context,
+                          'Inactive (last 60 days)',
+                          Icons.pause_circle_outline,
+                          Colors.grey,
+                          filterService.showInactive,
+                          (value) => filterService.toggleInactive(),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                     ] else ...[
                       // SAFE SPOTS FILTERS
                       // Safe Spot Types

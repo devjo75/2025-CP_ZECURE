@@ -10,10 +10,10 @@ class ChatRoomScreen extends StatefulWidget {
   final Map<String, dynamic> userProfile;
 
   const ChatRoomScreen({
-    Key? key,
+    super.key,
     required this.channel,
     required this.userProfile,
-  }) : super(key: key);
+  });
 
   @override
   State<ChatRoomScreen> createState() => _ChatRoomScreenState();
@@ -23,15 +23,15 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   final ChatService _chatService = ChatService();
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  
+
   List<ChatMessage> _messages = [];
   bool _isLoading = true;
   bool _isSending = false;
   RealtimeChannel? _messageSubscription;
-  
+
   String? _replyToMessageId;
   ChatMessage? _replyToMessage;
-  Map<String, ChatMessage> _repliedMessages = {};
+  final Map<String, ChatMessage> _repliedMessages = {};
 
   @override
   void initState() {
@@ -43,18 +43,18 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   }
 
   @override
-void dispose() {
-  print('👋 ChatRoomScreen dispose - Marking as read and cleaning up...');
-  
-  // ✅ IMPORTANT: Mark as read when leaving the chat room
-  // This ensures the unread count is cleared only when user actually viewed the messages
-  _markAsRead();
-  
-  _messageController.dispose();
-  _scrollController.dispose();
-  _messageSubscription?.unsubscribe();
-  super.dispose();
-}
+  void dispose() {
+    print('👋 ChatRoomScreen dispose - Marking as read and cleaning up...');
+
+    // ✅ IMPORTANT: Mark as read when leaving the chat room
+    // This ensures the unread count is cleared only when user actually viewed the messages
+    _markAsRead();
+
+    _messageController.dispose();
+    _scrollController.dispose();
+    _messageSubscription?.unsubscribe();
+    super.dispose();
+  }
 
   Future<void> _fetchRepliedMessage(String messageId) async {
     // Check if already cached
@@ -86,7 +86,7 @@ void dispose() {
 
     // Fetch from database if not found locally
     final message = await _chatService.getMessageById(messageId);
-    
+
     if (message != null && mounted) {
       setState(() {
         _repliedMessages[messageId] = message;
@@ -99,24 +99,28 @@ void dispose() {
     setState(() => _isLoading = true);
 
     try {
-      final messages = await _chatService.getMessages(widget.channel.id, limit: 100);
+      final messages = await _chatService.getMessages(
+        widget.channel.id,
+        limit: 100,
+      );
       print('✅ Loaded ${messages.length} messages');
 
       if (mounted) {
         setState(() {
-          _messages = messages.reversed.toList(); // Reverse to show oldest first
+          _messages = messages.reversed
+              .toList(); // Reverse to show oldest first
           _isLoading = false;
         });
-        
+
         final replyIds = messages
             .where((msg) => msg.replyToMessageId != null)
             .map((msg) => msg.replyToMessageId!)
             .toSet();
-        
+
         for (final replyId in replyIds) {
           _fetchRepliedMessage(replyId);
         }
-        
+
         // Scroll to bottom after loading
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _scrollToBottom();
@@ -132,12 +136,15 @@ void dispose() {
     }
   }
 
-void _setupRealtimeSubscription() {
-  print('🔔 Setting up realtime subscription...');
-  _messageSubscription = _chatService.subscribeToMessages(
-    widget.channel.id,
-    (message, event) {
-      print('📨 Message change received: ${event.toString().split('.').last} - ${message.message}');
+  void _setupRealtimeSubscription() {
+    print('🔔 Setting up realtime subscription...');
+    _messageSubscription = _chatService.subscribeToMessages(widget.channel.id, (
+      message,
+      event,
+    ) {
+      print(
+        '📨 Message change received: ${event.toString().split('.').last} - ${message.message}',
+      );
       if (mounted) {
         setState(() {
           if (event == PostgresChangeEvent.insert) {
@@ -150,34 +157,35 @@ void _setupRealtimeSubscription() {
             }
           }
         });
-        
+
         // Fetch replied message if this is a reply
         if (message.replyToMessageId != null) {
           _fetchRepliedMessage(message.replyToMessageId!);
         }
-        
+
         _scrollToBottom();
       }
-    },
-  );
-}
+    });
+  }
 
   Future<void> _markAsRead() async {
     final userId = widget.userProfile['id'] as String;
-    print('📖 Marking channel as read: ${widget.channel.name} for user: $userId');
+    print(
+      '📖 Marking channel as read: ${widget.channel.name} for user: $userId',
+    );
     await _chatService.updateLastRead(widget.channel.id, userId);
     print('✅ Marked as read');
   }
 
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
-    
+
     print('');
     print('🎯 _sendMessage called');
     print('   Text: "$text"');
     print('   Text empty? ${text.isEmpty}');
     print('   Is sending? $_isSending');
-    
+
     if (text.isEmpty || _isSending) {
       print('   ⏭️ Skipping (empty or already sending)');
       return;
@@ -186,7 +194,7 @@ void _setupRealtimeSubscription() {
     setState(() => _isSending = true);
 
     final userId = widget.userProfile['id'] as String;
-    
+
     print('');
     print('📤 Calling chatService.sendMessage...');
     print('   Channel: ${widget.channel.name} (${widget.channel.id})');
@@ -245,7 +253,7 @@ void _setupRealtimeSubscription() {
       );
       return;
     }
-    
+
     setState(() {
       _replyToMessageId = message.id;
       _replyToMessage = message;
@@ -295,7 +303,10 @@ void _setupRealtimeSubscription() {
               ),
               ListTile(
                 leading: const Icon(Icons.delete, color: Colors.red),
-                title: const Text('Delete', style: TextStyle(color: Colors.red)),
+                title: const Text(
+                  'Delete',
+                  style: TextStyle(color: Colors.red),
+                ),
                 onTap: () {
                   Navigator.pop(context);
                   _deleteMessage(message);
@@ -374,8 +385,10 @@ void _setupRealtimeSubscription() {
 
   @override
   Widget build(BuildContext context) {
-    print('🎨 Building ChatRoomScreen - isLoading: $_isLoading, messages: ${_messages.length}');
-    
+    print(
+      '🎨 Building ChatRoomScreen - isLoading: $_isLoading, messages: ${_messages.length}',
+    );
+
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
@@ -384,17 +397,11 @@ void _setupRealtimeSubscription() {
           children: [
             Text(
               widget.channel.name,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             Text(
               '${widget.channel.memberCount} members',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
           ],
         ),
@@ -416,20 +423,21 @@ void _setupRealtimeSubscription() {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _messages.isEmpty
-                    ? _buildEmptyState()
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          final message = _messages[index];
-                          final isOwn = message.userId == widget.userProfile['id'];
-                          final showAvatar = index == 0 || 
-                              _messages[index - 1].userId != message.userId;
-                          
-                          return _buildMessageBubble(message, isOwn, showAvatar);
-                        },
-                      ),
+                ? _buildEmptyState()
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final message = _messages[index];
+                      final isOwn = message.userId == widget.userProfile['id'];
+                      final showAvatar =
+                          index == 0 ||
+                          _messages[index - 1].userId != message.userId;
+
+                      return _buildMessageBubble(message, isOwn, showAvatar);
+                    },
+                  ),
           ),
 
           // Reply preview
@@ -474,12 +482,11 @@ void _setupRealtimeSubscription() {
     return GestureDetector(
       onLongPress: () => _showMessageOptions(message),
       child: Padding(
-        padding: EdgeInsets.only(
-          bottom: 8,
-          top: showAvatar ? 8 : 2,
-        ),
+        padding: EdgeInsets.only(bottom: 8, top: showAvatar ? 8 : 2),
         child: Column(
-          crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isOwn
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             // Show reply indicator ABOVE the bubble
             if (message.replyToMessageId != null)
@@ -491,21 +498,26 @@ void _setupRealtimeSubscription() {
                 ),
                 child: _buildReplyIndicatorEnhanced(message, isOwn),
               ),
-            
+
             // Original message bubble row
             Row(
-              mainAxisAlignment: isOwn ? MainAxisAlignment.end : MainAxisAlignment.start,
+              mainAxisAlignment: isOwn
+                  ? MainAxisAlignment.end
+                  : MainAxisAlignment.start,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 if (!isOwn && showAvatar) _buildAvatar(message),
                 if (!isOwn && !showAvatar) const SizedBox(width: 40),
-                
+
                 Flexible(
                   child: Container(
                     constraints: BoxConstraints(
                       maxWidth: MediaQuery.of(context).size.width * 0.75,
                     ),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: isOwn ? Colors.blue : Colors.white,
                       borderRadius: BorderRadius.only(
@@ -537,7 +549,7 @@ void _setupRealtimeSubscription() {
                               ),
                             ),
                           ),
-                        
+
                         // Message content (deleted or normal)
                         message.isDeleted
                             ? Row(
@@ -546,7 +558,9 @@ void _setupRealtimeSubscription() {
                                   Icon(
                                     Icons.block,
                                     size: 14,
-                                    color: isOwn ? Colors.white70 : Colors.grey[500],
+                                    color: isOwn
+                                        ? Colors.white70
+                                        : Colors.grey[500],
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
@@ -554,7 +568,9 @@ void _setupRealtimeSubscription() {
                                     style: TextStyle(
                                       fontSize: 15,
                                       fontStyle: FontStyle.italic,
-                                      color: isOwn ? Colors.white70 : Colors.grey[500],
+                                      color: isOwn
+                                          ? Colors.white70
+                                          : Colors.grey[500],
                                     ),
                                   ),
                                 ],
@@ -566,9 +582,9 @@ void _setupRealtimeSubscription() {
                                   color: isOwn ? Colors.white : Colors.black87,
                                 ),
                               ),
-                        
+
                         const SizedBox(height: 4),
-                        
+
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -576,7 +592,9 @@ void _setupRealtimeSubscription() {
                               _formatTime(message.createdAt),
                               style: TextStyle(
                                 fontSize: 11,
-                                color: isOwn ? Colors.white70 : Colors.grey[600],
+                                color: isOwn
+                                    ? Colors.white70
+                                    : Colors.grey[600],
                               ),
                             ),
                             if (message.isEdited) ...[
@@ -586,7 +604,9 @@ void _setupRealtimeSubscription() {
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontStyle: FontStyle.italic,
-                                  color: isOwn ? Colors.white70 : Colors.grey[600],
+                                  color: isOwn
+                                      ? Colors.white70
+                                      : Colors.grey[600],
                                 ),
                               ),
                             ],
@@ -596,7 +616,7 @@ void _setupRealtimeSubscription() {
                     ),
                   ),
                 ),
-                
+
                 if (isOwn && showAvatar) _buildAvatar(message),
                 if (isOwn && !showAvatar) const SizedBox(width: 40),
               ],
@@ -610,37 +630,35 @@ void _setupRealtimeSubscription() {
   Widget _buildReplyIndicatorEnhanced(ChatMessage message, bool isOwn) {
     // Get the original message from cache or local messages
     ChatMessage? originalMessage;
-    
+
     if (message.replyToMessageId != null) {
       // First check cache
       originalMessage = _repliedMessages[message.replyToMessageId];
-      
+
       // If not in cache, check current messages
-      if (originalMessage == null) {
-        originalMessage = _messages.firstWhere(
-          (msg) => msg.id == message.replyToMessageId,
-          orElse: () => ChatMessage(
-            id: '',
-            channelId: '',
-            userId: '',
-            message: 'Loading...',
-            createdAt: DateTime.now(),
-            updatedAt: DateTime.now(),
-            isEdited: false,
-            isDeleted: false,
-          ),
-        );
-      }
+      originalMessage ??= _messages.firstWhere(
+        (msg) => msg.id == message.replyToMessageId,
+        orElse: () => ChatMessage(
+          id: '',
+          channelId: '',
+          userId: '',
+          message: 'Loading...',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          isEdited: false,
+          isDeleted: false,
+        ),
+      );
     }
 
     // Fallback if message not found
     if (originalMessage == null || originalMessage.id.isEmpty) {
       // Trigger fetch if not loading already
-      if (message.replyToMessageId != null && 
+      if (message.replyToMessageId != null &&
           !_repliedMessages.containsKey(message.replyToMessageId)) {
         _fetchRepliedMessage(message.replyToMessageId!);
       }
-      
+
       originalMessage = ChatMessage(
         id: '',
         channelId: '',
@@ -673,16 +691,12 @@ void _setupRealtimeSubscription() {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.reply,
-                size: 12,
-                color: Colors.grey[600],
-              ),
+              Icon(Icons.reply, size: 12, color: Colors.grey[600]),
               const SizedBox(width: 4),
               Flexible(
                 child: Text(
-                  originalMessage.id.isEmpty 
-                      ? 'Unknown User' 
+                  originalMessage.id.isEmpty
+                      ? 'Unknown User'
                       : originalMessage.displayName,
                   style: TextStyle(
                     fontSize: 11,
@@ -697,16 +711,16 @@ void _setupRealtimeSubscription() {
           ),
           const SizedBox(height: 4),
           Text(
-            originalMessage.isDeleted 
-                ? 'Message deleted' 
+            originalMessage.isDeleted
+                ? 'Message deleted'
                 : originalMessage.message,
             style: TextStyle(
               fontSize: 11,
-              color: originalMessage.id.isEmpty 
-                  ? Colors.grey[500] 
+              color: originalMessage.id.isEmpty
+                  ? Colors.grey[500]
                   : Colors.grey[700],
-              fontStyle: originalMessage.isDeleted || originalMessage.id.isEmpty 
-                  ? FontStyle.italic 
+              fontStyle: originalMessage.isDeleted || originalMessage.id.isEmpty
+                  ? FontStyle.italic
                   : FontStyle.normal,
             ),
             maxLines: 2,
@@ -745,9 +759,7 @@ void _setupRealtimeSubscription() {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.blue[50],
-        border: Border(
-          top: BorderSide(color: Colors.grey[300]!),
-        ),
+        border: Border(top: BorderSide(color: Colors.grey[300]!)),
       ),
       child: Row(
         children: [
@@ -767,10 +779,7 @@ void _setupRealtimeSubscription() {
                 ),
                 Text(
                   _replyToMessage!.message,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[700],
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),

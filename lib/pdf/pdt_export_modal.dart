@@ -74,7 +74,7 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     {'value': 'reporter', 'label': 'Reporter'},
   ];
 
-  Map<String, String> _crimeTypeToLevel = {};
+  final Map<String, String> _crimeTypeToLevel = {};
 
   @override
   void initState() {
@@ -86,10 +86,10 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     // Get unique levels
     Set<String> levels = {};
     for (var report in widget.reports) {
-      String level = SearchAndFilterService.getNestedString(
-        report, 
-        ['crime_type', 'level']
-      );
+      String level = SearchAndFilterService.getNestedString(report, [
+        'crime_type',
+        'level',
+      ]);
       if (level.isNotEmpty) {
         levels.add(_capitalizeFirst(level));
       }
@@ -99,14 +99,14 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     // Get unique crime types
     Set<String> crimeTypes = {};
     for (var report in widget.reports) {
-      String crimeType = SearchAndFilterService.getNestedString(
-        report, 
-        ['crime_type', 'name']
-      );
-      String level = SearchAndFilterService.getNestedString(
-        report, 
-        ['crime_type', 'level']
-      );
+      String crimeType = SearchAndFilterService.getNestedString(report, [
+        'crime_type',
+        'name',
+      ]);
+      String level = SearchAndFilterService.getNestedString(report, [
+        'crime_type',
+        'level',
+      ]);
       if (crimeType.isNotEmpty) {
         crimeTypes.add(crimeType);
         if (level.isNotEmpty) {
@@ -149,10 +149,10 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     // Filter by crime level
     if (_selectedLevels.isNotEmpty) {
       filtered = filtered.where((report) {
-        String level = SearchAndFilterService.getNestedString(
-          report, 
-          ['crime_type', 'level']
-        );
+        String level = SearchAndFilterService.getNestedString(report, [
+          'crime_type',
+          'level',
+        ]);
         return _selectedLevels.contains(_capitalizeFirst(level));
       }).toList();
     }
@@ -160,10 +160,10 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     // Filter by crime type
     if (_selectedCrimeTypes.isNotEmpty) {
       filtered = filtered.where((report) {
-        String crimeType = SearchAndFilterService.getNestedString(
-          report, 
-          ['crime_type', 'name']
-        );
+        String crimeType = SearchAndFilterService.getNestedString(report, [
+          'crime_type',
+          'name',
+        ]);
         return _selectedCrimeTypes.contains(crimeType);
       }).toList();
     }
@@ -194,14 +194,20 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
 
       if (excludeFilter != 'levels' && _selectedLevels.isNotEmpty) {
         filtered = filtered.where((report) {
-          String level = SearchAndFilterService.getNestedString(report, ['crime_type', 'level']);
+          String level = SearchAndFilterService.getNestedString(report, [
+            'crime_type',
+            'level',
+          ]);
           return _selectedLevels.contains(_capitalizeFirst(level));
         }).toList();
       }
 
       if (excludeFilter != 'crimeTypes' && _selectedCrimeTypes.isNotEmpty) {
         filtered = filtered.where((report) {
-          String crimeType = SearchAndFilterService.getNestedString(report, ['crime_type', 'name']);
+          String crimeType = SearchAndFilterService.getNestedString(report, [
+            'crime_type',
+            'name',
+          ]);
           return _selectedCrimeTypes.contains(crimeType);
         }).toList();
       }
@@ -230,7 +236,10 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     Set<String> crimeTypes = {};
     var filteredForCrimeTypes = getFilteredExcluding('crimeTypes');
     for (var report in filteredForCrimeTypes) {
-      String crimeType = SearchAndFilterService.getNestedString(report, ['crime_type', 'name']);
+      String crimeType = SearchAndFilterService.getNestedString(report, [
+        'crime_type',
+        'name',
+      ]);
       if (crimeType.isNotEmpty) crimeTypes.add(crimeType);
     }
 
@@ -239,7 +248,9 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     var filteredForBarangays = getFilteredExcluding('barangays');
     for (var report in filteredForBarangays) {
       String barangay = report['cached_barangay']?.toString() ?? '';
-      if (barangay.isNotEmpty && barangay != 'Unknown Location') barangays.add(barangay);
+      if (barangay.isNotEmpty && barangay != 'Unknown Location') {
+        barangays.add(barangay);
+      }
     }
 
     // Available statuses: exclude own
@@ -256,9 +267,15 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
       _availableStatuses = statuses.toList()..sort();
 
       // Auto-remove selected if no longer available (for all except levels, since fixed)
-      _selectedCrimeTypes.removeWhere((item) => !_availableCrimeTypes.contains(item));
-      _selectedBarangays.removeWhere((item) => !_availableBarangays.contains(item));
-      _selectedStatuses.removeWhere((item) => !_availableStatuses.contains(item));
+      _selectedCrimeTypes.removeWhere(
+        (item) => !_availableCrimeTypes.contains(item),
+      );
+      _selectedBarangays.removeWhere(
+        (item) => !_availableBarangays.contains(item),
+      );
+      _selectedStatuses.removeWhere(
+        (item) => !_availableStatuses.contains(item),
+      );
     });
   }
 
@@ -267,9 +284,7 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
     final filteredReports = _getFilteredReports();
 
     return Dialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
         width: 600,
         constraints: const BoxConstraints(maxHeight: 700),
@@ -352,7 +367,8 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                         _updateAvailableOptions();
                       },
                       emptyMessage: 'All levels included',
-                      note: 'Default: All crime levels are included in the export.',
+                      note:
+                          'Default: All crime levels are included in the export.',
                     ),
                     const SizedBox(height: 20),
 
@@ -367,7 +383,8 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                         _updateAvailableOptions();
                       },
                       emptyMessage: 'All crime types included',
-                      note: 'Default: All crime types are included in the export.',
+                      note:
+                          'Default: All crime types are included in the export.',
                     ),
                     const SizedBox(height: 20),
 
@@ -382,7 +399,8 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                         _updateAvailableOptions();
                       },
                       emptyMessage: 'All barangays included',
-                      note: 'Default: All barangays are included. List is based on available cached location data.',
+                      note:
+                          'Default: All barangays are included. List is based on available cached location data.',
                     ),
                     const SizedBox(height: 20),
 
@@ -424,8 +442,12 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                           selectedColor: const Color(0xFF6366F1),
                           backgroundColor: const Color(0xFFF1F5F9),
                           labelStyle: TextStyle(
-                            color: isSelected ? Colors.white : const Color(0xFF475569),
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                            color: isSelected
+                                ? Colors.white
+                                : const Color(0xFF475569),
+                            fontWeight: isSelected
+                                ? FontWeight.w600
+                                : FontWeight.normal,
                           ),
                         );
                       }).toList(),
@@ -443,7 +465,10 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                     ),
                     const SizedBox(height: 12),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
@@ -479,14 +504,18 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                       child: Row(
                         children: [
                           Icon(
-                            _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                            _sortAscending
+                                ? Icons.arrow_upward
+                                : Icons.arrow_downward,
                             size: 20,
                             color: const Color(0xFF6366F1),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              _sortAscending ? 'Ascending Order' : 'Descending Order',
+                              _sortAscending
+                                  ? 'Ascending Order'
+                                  : 'Descending Order',
                               style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w500,
@@ -517,7 +546,9 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _isExporting ? null : () => Navigator.pop(context),
+                      onPressed: _isExporting
+                          ? null
+                          : () => Navigator.pop(context),
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(
@@ -538,7 +569,9 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: _isExporting || filteredReports.isEmpty ? null : _exportPdf,
+                      onPressed: _isExporting || filteredReports.isEmpty
+                          ? null
+                          : _exportPdf,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF6366F1),
                         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -548,7 +581,8 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                         elevation: 0,
                       ),
                       child: _isExporting
-                          ? Row( // UPDATED: Show custom progress message
+                          ? Row(
+                              // UPDATED: Show custom progress message
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 const SizedBox(
@@ -556,12 +590,16 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                                   width: 20,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
-                                  _exportingMessage.isNotEmpty ? _exportingMessage : 'Exporting...',
+                                  _exportingMessage.isNotEmpty
+                                      ? _exportingMessage
+                                      : 'Exporting...',
                                   style: const TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
@@ -626,11 +664,11 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
           const SizedBox(height: 12),
           _buildSummaryRow('Total Reports', '${widget.reports.length}'),
           _buildSummaryRow(
-            'Filtered Reports', 
+            'Filtered Reports',
             '${filteredReports.length}',
-            valueColor: filteredReports.length < widget.reports.length 
-              ? const Color(0xFF6366F1) 
-              : null,
+            valueColor: filteredReports.length < widget.reports.length
+                ? const Color(0xFF6366F1)
+                : null,
           ),
           if (widget.startDate != null && widget.endDate != null)
             _buildSummaryRow(
@@ -721,21 +759,28 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
                 // UPDATED: Stylized "All Included" message
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 16,
+                    horizontal: 12,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF6366F1).withOpacity(0.05),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: const Color(0xFF6366F1).withOpacity(0.2), 
+                      color: const Color(0xFF6366F1).withOpacity(0.2),
                       style: BorderStyle.solid,
                     ),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.check_circle_outline, size: 20, color: Color(0xFF6366F1)),
+                      const Icon(
+                        Icons.check_circle_outline,
+                        size: 20,
+                        color: Color(0xFF6366F1),
+                      ),
                       const SizedBox(width: 8),
                       Text(
-                        emptyMessage, 
+                        emptyMessage,
                         style: const TextStyle(
                           fontSize: 14,
                           color: Color(0xFF475569),
@@ -815,10 +860,7 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
         children: [
           Text(
             label,
-            style: const TextStyle(
-              fontSize: 13,
-              color: Color(0xFF64748B),
-            ),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
           ),
           Text(
             value,
@@ -834,76 +876,79 @@ class _PdfExportDialogState extends State<_PdfExportDialog> {
   }
 
   Future<void> _exportPdf() async {
-  final filteredReports = _getFilteredReports();
+    final filteredReports = _getFilteredReports();
 
-  if (filteredReports.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('No reports match the selected filters'),
-        backgroundColor: Color(0xFFEF4444),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-    return;
-  }
-
-  setState(() {
-    _isExporting = true;
-    _exportingMessage = 'Preparing PDF...';
-  });
-
-  try {
-    final pageFormat = PdfExportService.paperSizes[_selectedPaperSize]!;
-    final fileName = 'crime_reports_${DateFormat('yyyy-MM-dd_HHmmss').format(DateTime.now())}.pdf';
-
-    await PdfExportService.exportReportsToPdf(
-      reports: filteredReports,
-      fileName: fileName,
-      pageFormat: pageFormat,
-      addressCache: widget.addressCache, // ADDED: Pass cache from parent
-      onCacheUpdate: widget.onCacheUpdate, // ADDED: Pass callback
-      sortBy: _selectedSortBy,
-      ascending: _sortAscending,
-      startDate: widget.startDate,
-      endDate: widget.endDate,
-      onProgress: (current, total) {
-        if (mounted) {
-          setState(() {
-            _exportingMessage = 'Fetching Addresses: $current of $total';
-          });
-        }
-      },
-    );
-
-    if (mounted) {
-      Navigator.pop(context);
+    if (filteredReports.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('PDF exported successfully (${filteredReports.length} reports)'),
-          backgroundColor: const Color(0xFF10B981),
+        const SnackBar(
+          content: Text('No reports match the selected filters'),
+          backgroundColor: Color(0xFFEF4444),
           behavior: SnackBarBehavior.floating,
         ),
       );
+      return;
     }
-  } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error exporting PDF: $e'),
-          backgroundColor: const Color(0xFFEF4444),
-          behavior: SnackBarBehavior.floating,
-        ),
+
+    setState(() {
+      _isExporting = true;
+      _exportingMessage = 'Preparing PDF...';
+    });
+
+    try {
+      final pageFormat = PdfExportService.paperSizes[_selectedPaperSize]!;
+      final fileName =
+          'crime_reports_${DateFormat('yyyy-MM-dd_HHmmss').format(DateTime.now())}.pdf';
+
+      await PdfExportService.exportReportsToPdf(
+        reports: filteredReports,
+        fileName: fileName,
+        pageFormat: pageFormat,
+        addressCache: widget.addressCache, // ADDED: Pass cache from parent
+        onCacheUpdate: widget.onCacheUpdate, // ADDED: Pass callback
+        sortBy: _selectedSortBy,
+        ascending: _sortAscending,
+        startDate: widget.startDate,
+        endDate: widget.endDate,
+        onProgress: (current, total) {
+          if (mounted) {
+            setState(() {
+              _exportingMessage = 'Fetching Addresses: $current of $total';
+            });
+          }
+        },
       );
-    }
-  } finally {
-    if (mounted) {
-      setState(() {
-        _isExporting = false;
-        _exportingMessage = '';
-      });
+
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'PDF exported successfully (${filteredReports.length} reports)',
+            ),
+            backgroundColor: const Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error exporting PDF: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+          _exportingMessage = '';
+        });
+      }
     }
   }
-}
 }
 
 class _MultiSelectDialog extends StatefulWidget {
@@ -936,7 +981,9 @@ class _MultiSelectDialogState extends State<_MultiSelectDialog> {
   List<String> get _filteredItems {
     if (_searchQuery.isEmpty) return widget.items;
     return widget.items
-        .where((item) => item.toLowerCase().contains(_searchQuery.toLowerCase()))
+        .where(
+          (item) => item.toLowerCase().contains(_searchQuery.toLowerCase()),
+        )
         .toList();
   }
 
@@ -999,10 +1046,12 @@ class _MultiSelectDialogState extends State<_MultiSelectDialog> {
                       TextButton(
                         onPressed: () {
                           // Only select the currently filtered items if a query is active
-                          final itemsToSelect = _searchQuery.isEmpty 
-                              ? widget.items 
+                          final itemsToSelect = _searchQuery.isEmpty
+                              ? widget.items
                               : _filteredItems;
-                          setState(() => _tempSelected = Set.from(itemsToSelect));
+                          setState(
+                            () => _tempSelected = Set.from(itemsToSelect),
+                          );
                         },
                         child: const Text('Select All'),
                       ),
@@ -1012,7 +1061,9 @@ class _MultiSelectDialogState extends State<_MultiSelectDialog> {
                           if (_searchQuery.isNotEmpty) {
                             final filtered = _filteredItems;
                             setState(() {
-                              _tempSelected.removeWhere((item) => filtered.contains(item));
+                              _tempSelected.removeWhere(
+                                (item) => filtered.contains(item),
+                              );
                             });
                           } else {
                             setState(() => _tempSelected.clear());
@@ -1052,10 +1103,7 @@ class _MultiSelectDialogState extends State<_MultiSelectDialog> {
                         }
                       });
                     },
-                    title: Text(
-                      item,
-                      style: const TextStyle(fontSize: 14),
-                    ),
+                    title: Text(item, style: const TextStyle(fontSize: 14)),
                     activeColor: const Color(0xFF6366F1),
                   );
                 },

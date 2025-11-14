@@ -18,7 +18,8 @@ class PdfExportService {
     required String fileName,
     required PdfPageFormat pageFormat,
     Map<String, String>? addressCache, // ADDED: Optional address cache
-    Function(Map<String, String>)? onCacheUpdate, // ADDED: Callback to update cache
+    Function(Map<String, String>)?
+    onCacheUpdate, // ADDED: Callback to update cache
     String? sortBy,
     bool ascending = false,
     DateTime? startDate,
@@ -26,16 +27,17 @@ class PdfExportService {
     Function(int current, int total)? onProgress,
   }) async {
     // Use provided cache or create new one
-    Map<String, String> workingCache = addressCache != null 
-        ? Map.from(addressCache) 
+    Map<String, String> workingCache = addressCache != null
+        ? Map.from(addressCache)
         : {};
 
     // Enrich reports with full addresses before generating PDF
-    List<Map<String, dynamic>> enrichedReports = await _enrichReportsWithAddresses(
-      reports,
-      addressCache: workingCache,
-      onProgress: onProgress,
-    );
+    List<Map<String, dynamic>> enrichedReports =
+        await _enrichReportsWithAddresses(
+          reports,
+          addressCache: workingCache,
+          onProgress: onProgress,
+        );
 
     // Update parent cache if new addresses were fetched
     if (onCacheUpdate != null && addressCache != null) {
@@ -77,7 +79,10 @@ class PdfExportService {
                   endDate,
                 ),
                 pw.SizedBox(height: 20),
-                _buildPdfTable(pageReports, startIndex: startIndex), // ADDED: Pass startIndex
+                _buildPdfTable(
+                  pageReports,
+                  startIndex: startIndex,
+                ), // ADDED: Pass startIndex
                 pw.Spacer(),
                 _buildPdfFooter(),
               ],
@@ -103,10 +108,10 @@ class PdfExportService {
   }) async {
     List<Map<String, dynamic>> enrichedReports = [];
     int processedCount = 0;
-    
+
     for (var report in reports) {
       Map<String, dynamic> enrichedReport = Map.from(report);
-      
+
       if ((enrichedReport['full_address_display']?.toString() ?? '').isEmpty) {
         if (enrichedReport['location'] != null) {
           try {
@@ -116,24 +121,28 @@ class PdfExportService {
             );
             enrichedReport['full_address_display'] = address;
           } catch (e) {
-            print('Error getting address for report ${enrichedReport['id']}: $e');
-            enrichedReport['full_address_display'] = 
-              enrichedReport['cached_barangay']?.toString() ?? 'Unknown Location';
+            print(
+              'Error getting address for report ${enrichedReport['id']}: $e',
+            );
+            enrichedReport['full_address_display'] =
+                enrichedReport['cached_barangay']?.toString() ??
+                'Unknown Location';
           }
         } else {
-          enrichedReport['full_address_display'] = 
-            enrichedReport['cached_barangay']?.toString() ?? 'Unknown Location';
+          enrichedReport['full_address_display'] =
+              enrichedReport['cached_barangay']?.toString() ??
+              'Unknown Location';
         }
       }
-      
+
       enrichedReports.add(enrichedReport);
       processedCount++;
-      
+
       if (onProgress != null) {
         onProgress(processedCount, reports.length);
       }
     }
-    
+
     return enrichedReports;
   }
 
@@ -143,63 +152,67 @@ class PdfExportService {
     required Map<String, String> addressCache,
   }) async {
     if (location == null) return 'Unknown Location';
-   
+
     try {
       if (location is Map && location.containsKey('coordinates')) {
         final coords = location['coordinates'];
         if (coords is List && coords.length >= 2) {
           final lng = coords[0];
           final lat = coords[1];
-         
-          final cacheKey = '${lat}_${lng}';
-         
+
+          final cacheKey = '${lat}_$lng';
+
           // Check cache first
           if (addressCache.containsKey(cacheKey)) {
             return addressCache[cacheKey]!;
           }
-         
+
           await Future.delayed(const Duration(milliseconds: 1000));
-         
+
           final response = await http.get(
-            Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1'),
+            Uri.parse(
+              'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1',
+            ),
           );
 
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             final address = data['address'] as Map<String, dynamic>?;
-           
+
             if (address != null) {
               final List<String> addressParts = [];
-             
+
               if (address['house_number'] != null && address['road'] != null) {
-                addressParts.add('${address['house_number']} ${address['road']}');
+                addressParts.add(
+                  '${address['house_number']} ${address['road']}',
+                );
               } else if (address['road'] != null) {
                 addressParts.add(address['road'].toString());
               }
-             
+
               if (address['suburb'] != null) {
                 addressParts.add(address['suburb'].toString());
               } else if (address['neighbourhood'] != null) {
                 addressParts.add(address['neighbourhood'].toString());
               }
-             
+
               if (address['village'] != null) {
                 addressParts.add(address['village'].toString());
               } else if (address['hamlet'] != null) {
                 addressParts.add(address['hamlet'].toString());
               }
-             
+
               String? barangay;
               if (address['city_district'] != null) {
                 barangay = address['city_district'].toString();
               } else if (address['quarter'] != null) {
                 barangay = address['quarter'].toString();
               }
-             
+
               if (barangay != null && !addressParts.contains(barangay)) {
                 addressParts.add(barangay);
               }
-             
+
               if (address['city'] != null) {
                 addressParts.add(address['city'].toString());
               } else if (address['municipality'] != null) {
@@ -207,29 +220,32 @@ class PdfExportService {
               } else if (address['town'] != null) {
                 addressParts.add(address['town'].toString());
               }
-             
+
               if (address['state'] != null) {
                 addressParts.add(address['state'].toString());
               } else if (address['region'] != null) {
                 addressParts.add(address['region'].toString());
               }
-             
+
               if (address['postcode'] != null) {
                 addressParts.add(address['postcode'].toString());
               }
-             
+
               if (address['country'] != null) {
                 addressParts.add(address['country'].toString());
               }
-             
+
               final fullAddress = addressParts.join(', ');
-             
+
               // Cache the result
-              addressCache[cacheKey] = fullAddress.isNotEmpty ? fullAddress : data['display_name'] ?? 'Unknown Location';
+              addressCache[cacheKey] = fullAddress.isNotEmpty
+                  ? fullAddress
+                  : data['display_name'] ?? 'Unknown Location';
               return addressCache[cacheKey]!;
             }
-           
-            final displayName = data['display_name']?.toString() ?? 'Unknown Location';
+
+            final displayName =
+                data['display_name']?.toString() ?? 'Unknown Location';
             addressCache[cacheKey] = displayName;
             return displayName;
           }
@@ -303,7 +319,11 @@ class PdfExportService {
   }
 
   // Build PDF table
-  static pw.Widget _buildPdfTable(List<Map<String, dynamic>> reports, {int startIndex = 0}) { // ADDED: startIndex parameter
+  static pw.Widget _buildPdfTable(
+    List<Map<String, dynamic>> reports, {
+    int startIndex = 0,
+  }) {
+    // ADDED: startIndex parameter
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
       columnWidths: {
@@ -331,10 +351,13 @@ class PdfExportService {
           ],
         ),
         ...reports.asMap().entries.map((entry) {
-          final index = startIndex + entry.key + 1; // CHANGED: Add startIndex to continue numbering
+          final index =
+              startIndex +
+              entry.key +
+              1; // CHANGED: Add startIndex to continue numbering
           final report = entry.value;
           return _buildTableRow(report, index);
-        }).toList(),
+        }),
       ],
     );
   }
@@ -344,10 +367,7 @@ class PdfExportService {
       padding: const pw.EdgeInsets.all(6),
       child: pw.Text(
         text,
-        style: pw.TextStyle(
-          fontSize: 8,
-          fontWeight: pw.FontWeight.bold,
-        ),
+        style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
       ),
     );
   }
@@ -356,12 +376,8 @@ class PdfExportService {
     return pw.TableRow(
       children: [
         _buildTableCell(index.toString()),
-        _buildTableCell(
-          report['crime_type']?['name']?.toString() ?? 'Unknown',
-        ),
-        _buildTableCell(
-          report['crime_type']?['category']?.toString() ?? 'N/A',
-        ),
+        _buildTableCell(report['crime_type']?['name']?.toString() ?? 'Unknown'),
+        _buildTableCell(report['crime_type']?['category']?.toString() ?? 'N/A'),
         _buildTableCell(
           (report['crime_type']?['level']?.toString() ?? 'N/A').toUpperCase(),
         ),
@@ -372,18 +388,18 @@ class PdfExportService {
           (report['full_address_display']?.toString() ?? '').isNotEmpty
               ? report['full_address_display'].toString()
               : (report['cached_barangay']?.toString() ?? '').isNotEmpty
-                  ? report['cached_barangay'].toString()
-                  : 'Unknown Location',
+              ? report['cached_barangay'].toString()
+              : 'Unknown Location',
           fontSize: 7,
         ),
         _buildTableCell(
           report['time'] != null
-              ? DateFormat('MMM d, yyyy\nh:mm a').format(DateTime.parse(report['time']))
+              ? DateFormat(
+                  'MMM d, yyyy\nh:mm a',
+                ).format(DateTime.parse(report['time']))
               : 'N/A',
         ),
-        _buildTableCell(
-          _getReporterName(report),
-        ),
+        _buildTableCell(_getReporterName(report)),
       ],
     );
   }
@@ -459,8 +475,16 @@ class PdfExportService {
             'medium': 2,
             'low': 1,
           };
-          aValue = levelPriority[a['crime_type']?['level']?.toString().toLowerCase()] ?? 0;
-          bValue = levelPriority[b['crime_type']?['level']?.toString().toLowerCase()] ?? 0;
+          aValue =
+              levelPriority[a['crime_type']?['level']
+                  ?.toString()
+                  .toLowerCase()] ??
+              0;
+          bValue =
+              levelPriority[b['crime_type']?['level']
+                  ?.toString()
+                  .toLowerCase()] ??
+              0;
           break;
         case 'status':
           aValue = a['status']?.toString().toLowerCase() ?? '';
@@ -475,8 +499,12 @@ class PdfExportService {
           bValue = b['cached_barangay']?.toString().toLowerCase() ?? '';
           break;
         case 'date':
-          aValue = a['time'] != null ? DateTime.parse(a['time']) : DateTime.now();
-          bValue = b['time'] != null ? DateTime.parse(b['time']) : DateTime.now();
+          aValue = a['time'] != null
+              ? DateTime.parse(a['time'])
+              : DateTime.now();
+          bValue = b['time'] != null
+              ? DateTime.parse(b['time'])
+              : DateTime.now();
           break;
         case 'reporter':
           aValue = _getReporterName(a).toLowerCase();

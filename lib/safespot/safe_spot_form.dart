@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 import 'safe_spot_service.dart';
 
@@ -11,7 +10,7 @@ class SafeSpotForm {
     required VoidCallback onUpdate,
   }) {
     // Check if it's desktop/web
- final isDesktop = MediaQuery.of(context).size.width >= 800;
+    final isDesktop = MediaQuery.of(context).size.width >= 800;
 
     if (isDesktop) {
       // Show centered dialog for desktop/web
@@ -62,11 +61,12 @@ class SafeSpotFormModal extends StatefulWidget {
   final VoidCallback onUpdate;
 
   const SafeSpotFormModal({
-    Key? key,
+    super.key,
     required this.position,
     required this.userProfile,
-    required this.onUpdate, required bool isDesktop,
-  }) : super(key: key);
+    required this.onUpdate,
+    required bool isDesktop,
+  });
 
   @override
   State<SafeSpotFormModal> createState() => _SafeSpotFormModalState();
@@ -76,7 +76,7 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
-  
+
   List<Map<String, dynamic>> _safeSpotTypes = [];
   String? _selectedTypeName;
   int? _selectedTypeId;
@@ -105,12 +105,12 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
       print('Loading safe spot types...');
       final safeSpotTypes = await SafeSpotService.getSafeSpotTypes();
       print('Loaded ${safeSpotTypes.length} safe spot types: $safeSpotTypes');
-      
+
       if (mounted) {
         setState(() {
           _safeSpotTypes = safeSpotTypes;
           _isLoading = false;
-          
+
           if (safeSpotTypes.isNotEmpty) {
             _selectedTypeName = safeSpotTypes[0]['name'];
             _selectedTypeId = safeSpotTypes[0]['id'];
@@ -125,65 +125,67 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
           _isLoading = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading safe spot types: ${e.toString()}')),
+          SnackBar(
+            content: Text('Error loading safe spot types: ${e.toString()}'),
+          ),
         );
       }
     }
   }
 
   Future<void> _submitForm() async {
-  if (!_formKey.currentState!.validate() || _selectedTypeId == null) {
-    return;
-  }
-
-  setState(() {
-    _isSubmitting = true;
-  });
-
-  try {
-    await SafeSpotService.createSafeSpot(
-      typeId: _selectedTypeId!,
-      name: _nameController.text.trim(),
-      description: _descriptionController.text.trim().isEmpty 
-          ? null 
-          : _descriptionController.text.trim(),
-      location: widget.position,
-      userId: widget.userProfile!['id'],
-    );
-
-    if (mounted) {
-      Navigator.pop(context); // Close the modal first
-      
-      // Different messages for admin vs regular users
-      final successMessage = isAdmin
-          ? 'Safe spot created successfully! It is now visible to all users.'
-          : 'Safe spot submitted successfully! It will be visible after approval.';
-          
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(successMessage),
-          duration: Duration(seconds: 3),
-        ),
-      );
-      
-      // Add delay before refreshing to ensure database commit is complete
-      await Future.delayed(const Duration(milliseconds: 500));
-      widget.onUpdate(); // Call the update callback after delay
+    if (!_formKey.currentState!.validate() || _selectedTypeId == null) {
+      return;
     }
-  } catch (e) {
-    if (mounted) {
-      setState(() {
-        _isSubmitting = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to submit safe spot: ${e.toString()}'),
-          duration: const Duration(seconds: 5),
-        ),
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    try {
+      await SafeSpotService.createSafeSpot(
+        typeId: _selectedTypeId!,
+        name: _nameController.text.trim(),
+        description: _descriptionController.text.trim().isEmpty
+            ? null
+            : _descriptionController.text.trim(),
+        location: widget.position,
+        userId: widget.userProfile!['id'],
       );
+
+      if (mounted) {
+        Navigator.pop(context); // Close the modal first
+
+        // Different messages for admin vs regular users
+        final successMessage = isAdmin
+            ? 'Safe spot created successfully! It is now visible to all users.'
+            : 'Safe spot submitted successfully! It will be visible after approval.';
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(successMessage),
+            duration: Duration(seconds: 3),
+          ),
+        );
+
+        // Add delay before refreshing to ensure database commit is complete
+        await Future.delayed(const Duration(milliseconds: 500));
+        widget.onUpdate(); // Call the update callback after delay
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to submit safe spot: ${e.toString()}'),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     }
   }
-}
 
   IconData _getIconFromString(String iconName) {
     switch (iconName) {
@@ -238,7 +240,7 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            
+
             // Header
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -270,10 +272,7 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                         ),
                         Text(
                           'Create a new safe spot at this location',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey,
-                          ),
+                          style: TextStyle(fontSize: 14, color: Colors.grey),
                         ),
                       ],
                     ),
@@ -281,9 +280,9 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                 ],
               ),
             ),
-            
+
             const Divider(height: 1),
-            
+
             // Content wrapper
             Flexible(
               child: _isLoading
@@ -294,180 +293,201 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                       ),
                     )
                   : _safeSpotTypes.isEmpty
-                      ? const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(32.0),
-                            child: Text(
-                              'No safe spot types available.',
-                              style: TextStyle(fontSize: 16),
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32.0),
+                        child: Text(
+                          'No safe spot types available.',
+                          style: TextStyle(fontSize: 16),
+                        ),
+                      ),
+                    )
+                  : SingleChildScrollView(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // Location info
+                            _buildInfoTile(
+                              'Location',
+                              '${widget.position.latitude.toStringAsFixed(6)}, ${widget.position.longitude.toStringAsFixed(6)}',
+                              Icons.location_on,
                             ),
-                          ),
-                        )
-                      : SingleChildScrollView(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Form(
-                            key: _formKey,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                // Location info
-                                _buildInfoTile(
-                                  'Location',
-                                  '${widget.position.latitude.toStringAsFixed(6)}, ${widget.position.longitude.toStringAsFixed(6)}',
-                                  Icons.location_on,
-                                ),
-                                
-                                const SizedBox(height: 16),
 
-                                // Safe spot type dropdown
-                                DropdownButtonFormField<String>(
-                                  value: _selectedTypeName,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Safe Spot Type',
-                                    border: OutlineInputBorder(),
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                                  ),
-                                  isExpanded: true,
-                                  items: _safeSpotTypes.map((type) {
-                                    return DropdownMenuItem<String>(
-                                      value: type['name'],
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            _getIconFromString(type['icon']),
-                                            size: 20,
-                                            color: Colors.grey[600],
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Flexible(
-                                            child: Text(
-                                              type['name'],
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  }).toList(),
-                                  onChanged: _isSubmitting
-                                      ? null
-                                      : (value) {
-                                          if (value != null) {
-                                            final selected = _safeSpotTypes.firstWhere(
-                                                (t) => t['name'] == value);
-                                            setState(() {
-                                              _selectedTypeName = value;
-                                              _selectedTypeId = selected['id'];
-                                            });
-                                          }
-                                        },
-                                  validator: (value) {
-                                    if (value == null || value.isEmpty) {
-                                      return 'Please select a safe spot type';
-                                    }
-                                    return null;
-                                  },
-                                ),
-                                const SizedBox(height: 16),
+                            const SizedBox(height: 16),
 
-                                // Name field
-                                TextFormField(
-                                  controller: _nameController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Safe Spot Name',
-                                    border: OutlineInputBorder(),
-                                    hintText: 'e.g., Central Police Station',
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                                  ),
-                                  enabled: !_isSubmitting,
-                                  validator: (value) {
-                                    if (value == null || value.trim().isEmpty) {
-                                      return 'Please enter a name';
-                                    }
-                                    if (value.trim().length < 3) {
-                                      return 'Name must be at least 3 characters';
-                                    }
-                                    return null;
-                                  },
+                            // Safe spot type dropdown
+                            DropdownButtonFormField<String>(
+                              value: _selectedTypeName,
+                              decoration: const InputDecoration(
+                                labelText: 'Safe Spot Type',
+                                border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 16,
                                 ),
-                                const SizedBox(height: 16),
-
-                                // Description field
-                                TextFormField(
-                                  controller: _descriptionController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Description (Optional)',
-                                    border: OutlineInputBorder(),
-                                    hintText: 'Additional details about this safe spot...',
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                                  ),
-                                  maxLines: 3,
-                                  enabled: !_isSubmitting,
-                                ),
-                                const SizedBox(height: 16),
-
-                                // Info container
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.blue.shade50,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.blue.shade200),
-                                  ),
+                              ),
+                              isExpanded: true,
+                              items: _safeSpotTypes.map((type) {
+                                return DropdownMenuItem<String>(
+                                  value: type['name'],
                                   child: Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+                                      Icon(
+                                        _getIconFromString(type['icon']),
+                                        size: 20,
+                                        color: Colors.grey[600],
+                                      ),
                                       const SizedBox(width: 8),
-                                      Expanded(
+                                      Flexible(
                                         child: Text(
-                                          isAdmin
-                                              ? 'Your submission will be automatically approved and visible to all users.'
-                                              : 'Your submission will be reviewed and needs community upvotes to be approved.',
-                                          style: TextStyle(
-                                            color: Colors.blue.shade700,
-                                            fontSize: 12,
-                                          ),
+                                          type['name'],
+                                          overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
                                     ],
                                   ),
-                                ),
-                                const SizedBox(height: 24),
+                                );
+                              }).toList(),
+                              onChanged: _isSubmitting
+                                  ? null
+                                  : (value) {
+                                      if (value != null) {
+                                        final selected = _safeSpotTypes
+                                            .firstWhere(
+                                              (t) => t['name'] == value,
+                                            );
+                                        setState(() {
+                                          _selectedTypeName = value;
+                                          _selectedTypeId = selected['id'];
+                                        });
+                                      }
+                                    },
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please select a safe spot type';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
 
-                                // Submit button
-                                ElevatedButton(
-                                  onPressed: _isSubmitting ? null : _submitForm,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green.shade600,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
+                            // Name field
+                            TextFormField(
+                              controller: _nameController,
+                              decoration: const InputDecoration(
+                                labelText: 'Safe Spot Name',
+                                border: OutlineInputBorder(),
+                                hintText: 'e.g., Central Police Station',
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 16,
+                                ),
+                              ),
+                              enabled: !_isSubmitting,
+                              validator: (value) {
+                                if (value == null || value.trim().isEmpty) {
+                                  return 'Please enter a name';
+                                }
+                                if (value.trim().length < 3) {
+                                  return 'Name must be at least 3 characters';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+
+                            // Description field
+                            TextFormField(
+                              controller: _descriptionController,
+                              decoration: const InputDecoration(
+                                labelText: 'Description (Optional)',
+                                border: OutlineInputBorder(),
+                                hintText:
+                                    'Additional details about this safe spot...',
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 16,
+                                ),
+                              ),
+                              maxLines: 3,
+                              enabled: !_isSubmitting,
+                            ),
+                            const SizedBox(height: 16),
+
+                            // Info container
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.blue.shade200),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.info_outline,
+                                    color: Colors.blue.shade700,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      isAdmin
+                                          ? 'Your submission will be automatically approved and visible to all users.'
+                                          : 'Your submission will be reviewed and needs community upvotes to be approved.',
+                                      style: TextStyle(
+                                        color: Colors.blue.shade700,
+                                        fontSize: 12,
+                                      ),
                                     ),
                                   ),
-                                  child: _isSubmitting
-                                      ? const SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
-                                          ),
-                                        )
-                                      : const Text(
-                                          'Submit Safe Spot',
-                                          style: TextStyle(fontSize: 16),
-                                        ),
-                                ),
-                                
-                                // Add some bottom padding for better UX
-                                SizedBox(height: MediaQuery.of(context).viewInsets.bottom + 16),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
+                            const SizedBox(height: 24),
+
+                            // Submit button
+                            ElevatedButton(
+                              onPressed: _isSubmitting ? null : _submitForm,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green.shade600,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              child: _isSubmitting
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Text(
+                                      'Submit Safe Spot',
+                                      style: TextStyle(fontSize: 16),
+                                    ),
+                            ),
+
+                            // Add some bottom padding for better UX
+                            SizedBox(
+                              height:
+                                  MediaQuery.of(context).viewInsets.bottom + 16,
+                            ),
+                          ],
                         ),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -521,10 +541,7 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                   const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                   ),
                 ],
               ],

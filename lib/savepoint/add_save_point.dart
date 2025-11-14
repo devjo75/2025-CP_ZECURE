@@ -68,13 +68,13 @@ class AddSavePointFormModal extends StatefulWidget {
   final bool isDesktop;
 
   const AddSavePointFormModal({
-    Key? key,
+    super.key,
     required this.userProfile,
     this.initialLocation,
     this.editSavePoint,
     required this.onUpdate,
     required this.isDesktop,
-  }) : super(key: key);
+  });
 
   @override
   State<AddSavePointFormModal> createState() => _AddSavePointFormModalState();
@@ -85,7 +85,7 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
-  
+
   LatLng? _selectedLocation;
   String _locationName = '';
   bool _isLoading = false;
@@ -94,7 +94,7 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
   @override
   void initState() {
     super.initState();
-    
+
     if (widget.editSavePoint != null) {
       final editData = widget.editSavePoint!;
       _nameController.text = editData['name'] ?? '';
@@ -133,14 +133,16 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         setState(() {
-          _locationName = data['display_name'] ?? 
+          _locationName =
+              data['display_name'] ??
               "${location.latitude.toStringAsFixed(6)}, ${location.longitude.toStringAsFixed(6)}";
           _isLoadingLocation = false;
         });
       }
     } catch (e) {
       setState(() {
-        _locationName = "${location.latitude.toStringAsFixed(6)}, ${location.longitude.toStringAsFixed(6)}";
+        _locationName =
+            "${location.latitude.toStringAsFixed(6)}, ${location.longitude.toStringAsFixed(6)}";
         _isLoadingLocation = false;
       });
     }
@@ -169,12 +171,15 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
       final savePointData = {
         'user_id': widget.userProfile!['id'],
         'name': _nameController.text.trim(),
-        'description': _descriptionController.text.trim().isEmpty 
-            ? null 
+        'description': _descriptionController.text.trim().isEmpty
+            ? null
             : _descriptionController.text.trim(),
         'location': {
           'type': 'Point',
-          'coordinates': [_selectedLocation!.longitude, _selectedLocation!.latitude],
+          'coordinates': [
+            _selectedLocation!.longitude,
+            _selectedLocation!.latitude,
+          ],
         },
       };
 
@@ -183,7 +188,7 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
           widget.editSavePoint!['id'],
           savePointData,
         );
-        
+
         if (mounted) {
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -197,7 +202,7 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
         }
       } else {
         await _savePointService.createSavePoint(savePointData);
-        
+
         if (mounted) {
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -299,7 +304,7 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            
+
             // Header
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -344,9 +349,9 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
                 ],
               ),
             ),
-            
+
             const Divider(height: 1),
-            
+
             // Content wrapper
             Flexible(
               child: SingleChildScrollView(
@@ -363,11 +368,11 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
                         _isLoadingLocation
                             ? 'Loading location...'
                             : _locationName.isNotEmpty
-                                ? _locationName
-                                : '${_selectedLocation!.latitude.toStringAsFixed(6)}, ${_selectedLocation!.longitude.toStringAsFixed(6)}',
+                            ? _locationName
+                            : '${_selectedLocation!.latitude.toStringAsFixed(6)}, ${_selectedLocation!.longitude.toStringAsFixed(6)}',
                         Icons.location_on,
                       ),
-                      
+
                       const SizedBox(height: 16),
 
                       // Name field
@@ -377,7 +382,10 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
                           labelText: 'Save Point Name *',
                           hintText: 'e.g., Home, Office, Favorite Restaurant',
                           border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 16,
+                          ),
                         ),
                         maxLength: 100,
                         enabled: !_isLoading,
@@ -391,7 +399,7 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
                           return null;
                         },
                       ),
-                      
+
                       const SizedBox(height: 16),
 
                       // Description field
@@ -401,13 +409,16 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
                           labelText: 'Description (Optional)',
                           hintText: 'Add any notes about this location',
                           border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 16,
+                          ),
                         ),
                         maxLines: 3,
                         maxLength: 500,
                         enabled: !_isLoading,
                       ),
-                      
+
                       const SizedBox(height: 24),
 
                       // Submit button
@@ -431,13 +442,17 @@ class _AddSavePointFormModalState extends State<AddSavePointFormModal> {
                                 ),
                               )
                             : Text(
-                                isEditing ? 'Update Save Point' : 'Create Save Point',
+                                isEditing
+                                    ? 'Update Save Point'
+                                    : 'Create Save Point',
                                 style: const TextStyle(fontSize: 16),
                               ),
                       ),
-                      
+
                       // Add bottom padding for better UX
-                      SizedBox(height: MediaQuery.of(context).viewInsets.bottom + 16),
+                      SizedBox(
+                        height: MediaQuery.of(context).viewInsets.bottom + 16,
+                      ),
                     ],
                   ),
                 ),
