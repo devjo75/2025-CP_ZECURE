@@ -185,8 +185,11 @@ class _MapScreenState extends State<MapScreen> {
   Map<String, dynamic>? _userProfile;
   bool _isAdmin = false;
   bool _isOfficer = false;
-  // Helper getter for admin or officer permissions
+
+  // Helper getter for admin or officer permissions (for general access)
   bool get _hasAdminPermissions => _isAdmin || _isOfficer;
+
+  // NEW: Specific getter for admin-only actions
   MainTab _currentTab = MainTab.map;
   late ProfileScreen _profileScreen;
 
@@ -199,6 +202,8 @@ class _MapScreenState extends State<MapScreen> {
   List<Map<String, dynamic>> _hotspots = [];
   Map<String, dynamic>? _selectedHotspot;
   RealtimeChannel? _hotspotsChannel;
+
+  final Set<int> _processedHotspotIds = {};
 
   //HEATMAP
   List<HeatmapCluster> _heatmapClusters = [];
@@ -2508,138 +2513,181 @@ class _MapScreenState extends State<MapScreen> {
     if (!mounted) return;
 
     final hotspotId = payload.newRecord['id'];
+    final currentUserId = _userProfile?['id'];
+    final createdBy = payload.newRecord['created_by'];
+    final reportedBy = payload.newRecord['reported_by'];
 
-    // Check if hotspot already exists in the LIST
-    final existingIndex = _hotspots.indexWhere((h) => h['id'] == hotspotId);
-    final alreadyInList = existingIndex != -1;
+    // ✅ CRITICAL: Skip ONLY if this hotspot was created by the CURRENT user
+    // This prevents duplicate markers for the user who submitted the report
+    // But allows admins/officers to see new reports in real-time
+    final isMyOwnReport =
+        currentUserId != null &&
+        (currentUserId == createdBy || currentUserId == reportedBy);
 
-    if (alreadyInList) {
+    if (isMyOwnReport && _processedHotspotIds.contains(hotspotId)) {
       print(
-        '⚠️ Hotspot $hotspotId already exists at index $existingIndex, skipping list insert',
+        '⚠️ Hotspot $hotspotId was just created by current user - SKIPPING',
       );
+      return;
+    }
+
+    // ✅ CRITICAL: Check if hotspot already exists BEFORE any async operations
+    final existingIndex = _hotspots.indexWhere((h) => h['id'] == hotspotId);
+
+    if (existingIndex != -1) {
+      print(
+        '⚠️ Hotspot $hotspotId ALREADY EXISTS at index $existingIndex - SKIPPING ENTIRELY',
+      );
+      return; // Exit early, don't even fetch from database
     }
 
     try {
-      // ADD SMALL DELAY to ensure database relationships are fully committed
+      // Add delay to ensure database relationships are committed
       await Future.delayed(const Duration(milliseconds: 300));
 
-      // Fetch the complete hotspot data with proper crime type info AND user references
+      // Double-check after delay (in case another handler added it)
+      if (_hotspots.any((h) => h['id'] == hotspotId)) {
+        print('⚠️ Hotspot $hotspotId was added during delay - SKIPPING');
+        return;
+      }
+
+      // Fetch the complete hotspot data
       final response = await Supabase.instance.client
           .from('hotspot')
           .select('''
           *,
           crime_type: type_id (id, name, level, category, description),
-          created_by_profile: created_by (id, name, email),
-          reported_by_profile: reported_by (id, name, email)
+          created_by_profile: created_by (id, username, email),
+          reported_by_profile: reported_by (id, username, email),
+          verifier_profile: verified_by (first_name, last_name)
         ''')
           .eq('id', hotspotId)
           .single();
 
-      if (mounted) {
-        // ✅ CRITICAL FIX: Update list ONLY if not duplicate
-        if (!alreadyInList) {
-          setState(() {
-            final crimeType = response['crime_type'];
+      if (!mounted) return;
 
-            final crimeTypeData = crimeType != null && crimeType is Map
-                ? {
-                    'id': crimeType['id'] ?? response['type_id'],
-                    'name': crimeType['name'] ?? 'Unknown',
-                    'level': crimeType['level'] ?? 'unknown',
-                    'category': crimeType['category'] ?? 'General',
-                    'description': crimeType['description'],
-                  }
-                : {
-                    'id': response['type_id'],
-                    'name': 'Unknown',
-                    'level': 'unknown',
-                    'category': 'General',
-                    'description': null,
-                  };
+      // ✅ Check visibility permissions for non-admin users
+      if (!_hasAdminPermissions) {
+        final shouldShow = _shouldNonAdminOfficerSeeHotspot(response);
 
-            // INSERT AT THE BEGINNING (index 0)
-            _hotspots.insert(0, {
-              ...response,
-              'created_by': response['created_by'],
-              'reported_by': response['reported_by'],
-              'crime_type': crimeTypeData,
-            });
-
-            print(
-              '✅ Added hotspot $hotspotId with crime type: ${crimeTypeData['name']}',
-            );
-          });
-        } else {
-          print('📝 Skipped list insert (duplicate), but will update heatmap');
+        if (!shouldShow) {
+          print('🚫 Hotspot $hotspotId not visible to current user - SKIPPING');
+          return;
         }
-
-        // ✅ CRITICAL FIX: ALWAYS update heatmap regardless of duplicate status
-        _updateHeatmapOnInsert(response);
       }
-    } catch (e) {
-      print('Error in _handleHotspotInsert: $e');
 
-      // IMPROVED FALLBACK: Try one more time after a longer delay
+      // Triple-check before adding to list
+      if (_hotspots.any((h) => h['id'] == hotspotId)) {
+        print(
+          '⚠️ Hotspot $hotspotId appeared during fetch - SKIPPING LIST INSERT',
+        );
+      } else {
+        setState(() {
+          final crimeType = response['crime_type'];
+          final crimeTypeData = crimeType != null && crimeType is Map
+              ? {
+                  'id': crimeType['id'] ?? response['type_id'],
+                  'name': crimeType['name'] ?? 'Unknown',
+                  'level': crimeType['level'] ?? 'unknown',
+                  'category': crimeType['category'] ?? 'General',
+                  'description': crimeType['description'],
+                }
+              : {
+                  'id': response['type_id'],
+                  'name': 'Unknown',
+                  'level': 'unknown',
+                  'category': 'General',
+                  'description': null,
+                };
+
+          _hotspots.insert(0, {
+            ...response,
+            'created_by': response['created_by'],
+            'reported_by': response['reported_by'],
+            'crime_type': crimeTypeData,
+          });
+
+          print(
+            '✅ Added hotspot $hotspotId with crime type: ${crimeTypeData['name']}',
+          );
+        });
+      }
+
+      // ✅ Always update heatmap (even if duplicate in list)
+      _updateHeatmapOnInsert(response);
+    } catch (e) {
+      print('❌ Error in _handleHotspotInsert: $e');
+
+      // Retry logic
       try {
         await Future.delayed(const Duration(milliseconds: 800));
+
+        // Check again before retry
+        if (_hotspots.any((h) => h['id'] == hotspotId)) {
+          print('⚠️ Hotspot $hotspotId found during retry - SKIPPING');
+          return;
+        }
 
         final retryResponse = await Supabase.instance.client
             .from('hotspot')
             .select('''
             *,
             crime_type: type_id (id, name, level, category, description),
-            created_by_profile: created_by (id, name, email),
-            reported_by_profile: reported_by (id, name, email)
+            created_by_profile: created_by (id, username, email),
+            reported_by_profile: reported_by (id, username, email),
+            verifier_profile: verified_by (first_name, last_name)
           ''')
             .eq('id', hotspotId)
             .single();
 
-        if (mounted) {
-          // Check again if it was added during the retry delay
-          final nowExists = _hotspots.any((h) => h['id'] == hotspotId);
+        if (!mounted) return;
 
-          if (!nowExists) {
-            setState(() {
-              final crimeType = retryResponse['crime_type'];
-              final crimeTypeData = crimeType != null && crimeType is Map
-                  ? {
-                      'id': crimeType['id'] ?? retryResponse['type_id'],
-                      'name': crimeType['name'] ?? 'Unknown',
-                      'level': crimeType['level'] ?? 'unknown',
-                      'category': crimeType['category'] ?? 'General',
-                      'description': crimeType['description'],
-                    }
-                  : {
-                      'id': retryResponse['type_id'],
-                      'name': 'Unknown',
-                      'level': 'unknown',
-                      'category': 'General',
-                      'description': null,
-                    };
-
-              _hotspots.insert(0, {
-                ...retryResponse,
-                'created_by': retryResponse['created_by'],
-                'reported_by': retryResponse['reported_by'],
-                'crime_type': crimeTypeData,
-              });
-
-              print(
-                '✅ Retry successful - crime type loaded: ${crimeTypeData['name']}',
-              );
-            });
+        // Check visibility for non-admin users
+        if (!_hasAdminPermissions) {
+          final shouldShow = _shouldNonAdminOfficerSeeHotspot(retryResponse);
+          if (!shouldShow) {
+            print('🚫 Retry: Hotspot $hotspotId not visible to user');
+            return;
           }
-
-          // ✅ ALWAYS update heatmap
-          _updateHeatmapOnInsert(retryResponse);
         }
+
+        // Final check before adding
+        if (!_hotspots.any((h) => h['id'] == hotspotId)) {
+          setState(() {
+            final crimeType = retryResponse['crime_type'];
+            final crimeTypeData = crimeType != null && crimeType is Map
+                ? {
+                    'id': crimeType['id'] ?? retryResponse['type_id'],
+                    'name': crimeType['name'] ?? 'Unknown',
+                    'level': crimeType['level'] ?? 'unknown',
+                    'category': crimeType['category'] ?? 'General',
+                    'description': crimeType['description'],
+                  }
+                : {
+                    'id': retryResponse['type_id'],
+                    'name': 'Unknown',
+                    'level': 'unknown',
+                    'category': 'General',
+                    'description': null,
+                  };
+
+            _hotspots.insert(0, {
+              ...retryResponse,
+              'created_by': retryResponse['created_by'],
+              'reported_by': retryResponse['reported_by'],
+              'crime_type': crimeTypeData,
+            });
+
+            print('✅ Retry successful - added hotspot $hotspotId');
+          });
+        }
+
+        _updateHeatmapOnInsert(retryResponse);
       } catch (retryError) {
         print('❌ Retry also failed: $retryError');
 
-        // Check one last time before final fallback
-        final existsInFinalCheck = _hotspots.any((h) => h['id'] == hotspotId);
-
-        if (mounted && !existsInFinalCheck) {
+        // Last resort: add minimal data only if still not in list
+        if (mounted && !_hotspots.any((h) => h['id'] == hotspotId)) {
           setState(() {
             _hotspots.insert(0, {
               ...payload.newRecord,
@@ -2647,7 +2695,7 @@ class _MapScreenState extends State<MapScreen> {
               'reported_by': payload.newRecord['reported_by'],
               'crime_type': {
                 'id': payload.newRecord['type_id'],
-                'name': 'Loading...', // Better than "Unknown" for fallback
+                'name': 'Loading...',
                 'level': 'unknown',
                 'category': 'General',
                 'description': null,
@@ -2655,15 +2703,12 @@ class _MapScreenState extends State<MapScreen> {
             });
           });
 
-          // Schedule a refresh to fix the "Loading..." state
+          // Schedule refresh to fix incomplete data
           Timer(const Duration(seconds: 2), () {
-            if (mounted) {
-              _loadHotspots(); // This will refresh and fix the crime type
-            }
+            if (mounted) _loadHotspots();
           });
         }
 
-        // ✅ ALWAYS update heatmap even in error case
         _updateHeatmapOnInsert(payload.newRecord);
       }
     }
@@ -2687,11 +2732,12 @@ class _MapScreenState extends State<MapScreen> {
       final response = await Supabase.instance.client
           .from('hotspot')
           .select('''
-          *,
-          crime_type: type_id (id, name, level, category, description),
-          created_by_profile: created_by (id, name, email),
-          reported_by_profile: reported_by (id, name, email)
-        ''')
+  *,
+  crime_type: type_id (id, name, level, category, description),
+  created_by_profile: created_by (id, name, email),
+  reported_by_profile: reported_by (id, name, email),
+  verifier_profile: verified_by (first_name, last_name)  // ← ADD THIS
+''')
           .eq('id', payload.newRecord['id'])
           .single();
 
@@ -9106,7 +9152,6 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // EDIT HOTSPOT
-  // EDIT HOTSPOT
 
   void _showEditHotspotForm(Map<String, dynamic> hotspot) async {
     try {
@@ -10320,7 +10365,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // REPORT HOTSPOT
+  // MODIFIED: _reportHotspot - Clear temp pin IMMEDIATELY before database operation
   Future<bool> _reportHotspot(
     int typeId,
     String description,
@@ -10329,11 +10374,17 @@ class _MapScreenState extends State<MapScreen> {
     XFile? photo,
   ]) async {
     try {
-      // Get current user ID
       final currentUserId = _userProfile?['id'];
       if (currentUserId == null) {
         _showSnackBar('User not authenticated');
-        return false; // Return false on failure
+        return false;
+      }
+
+      // ✅ CRITICAL FIX: Clear temp pin IMMEDIATELY before any async operations
+      if (mounted) {
+        setState(() {
+          _tempPinnedLocation = null;
+        });
       }
 
       // Check daily report limit (5 per day)
@@ -10352,11 +10403,11 @@ class _MapScreenState extends State<MapScreen> {
         _showSnackBar(
           'Daily report limit reached (5 reports per day). Please try again tomorrow.',
         );
-        return false; // Return false on failure
+        return false;
       }
 
       // Check for nearby reports (within 50 meters)
-      final nearbyDistance = 50; // meters
+      final nearbyDistance = 50;
       final nearbyReportsResponse = await Supabase.instance.client.rpc(
         'get_nearby_hotspots',
         params: {
@@ -10366,7 +10417,6 @@ class _MapScreenState extends State<MapScreen> {
         },
       );
 
-      // Filter for reports from the last 24 hours to prevent immediate duplicates
       final oneDayAgo = DateTime.now().subtract(const Duration(hours: 24));
       final recentNearbyReports = (nearbyReportsResponse as List).where((
         report,
@@ -10379,19 +10429,19 @@ class _MapScreenState extends State<MapScreen> {
         _showSnackBar(
           'A recent report already exists near this location. Please check existing reports or try a different location.',
         );
-        return false; // Return false on failure
+        return false;
       }
 
-      // Proceed with normal report submission
+      // Proceed with report submission
       final insertData = {
         'type_id': typeId,
         'description': description.trim().isNotEmpty
             ? description.trim()
             : null,
         'location': 'POINT(${position.longitude} ${position.latitude})',
-        // Fix: Ensure the dateTime is treated as local time
         'time': dateTime.toUtc().toIso8601String(),
         'status': 'pending',
+        'verification_status': 'unverified',
         'created_by': currentUserId,
         'reported_by': currentUserId,
         'created_at': DateTime.now().toUtc().toIso8601String(),
@@ -10403,8 +10453,62 @@ class _MapScreenState extends State<MapScreen> {
           .select('id')
           .single();
 
-      print('Hotspot inserted successfully: ${response['id']}');
+      print('✅ Hotspot inserted successfully: ${response['id']}');
       final hotspotId = response['id'] as int;
+
+      // ✅ CRITICAL FIX: Mark as processed to prevent _handleHotspotInsert from adding it again
+      _processedHotspotIds.add(hotspotId);
+
+      // ✅ Manually fetch and add the hotspot for the current user
+      // This ensures they see their own report immediately without waiting for realtime
+      try {
+        final newHotspot = await Supabase.instance.client
+            .from('hotspot')
+            .select('''
+              *,
+              crime_type: type_id (id, name, level, category, description),
+              created_by_profile: created_by (id, username, email),
+              reported_by_profile: reported_by (id, username, email),
+              verifier_profile: verified_by (first_name, last_name)
+            ''')
+            .eq('id', hotspotId)
+            .single();
+
+        if (mounted) {
+          setState(() {
+            final crimeType = newHotspot['crime_type'];
+            final crimeTypeData = crimeType != null && crimeType is Map
+                ? {
+                    'id': crimeType['id'] ?? newHotspot['type_id'],
+                    'name': crimeType['name'] ?? 'Unknown',
+                    'level': crimeType['level'] ?? 'unknown',
+                    'category': crimeType['category'] ?? 'General',
+                    'description': crimeType['description'],
+                  }
+                : {
+                    'id': newHotspot['type_id'],
+                    'name': 'Unknown',
+                    'level': 'unknown',
+                    'category': 'General',
+                    'description': null,
+                  };
+
+            _hotspots.insert(0, {
+              ...newHotspot,
+              'created_by': newHotspot['created_by'],
+              'reported_by': newHotspot['reported_by'],
+              'crime_type': crimeTypeData,
+            });
+          });
+
+          // Update heatmap with the new hotspot
+          _updateHeatmapOnInsert(newHotspot);
+        }
+      } catch (fetchError) {
+        print('Error fetching newly created hotspot: $fetchError');
+        // Fallback to reload if fetch fails
+        if (mounted) await _loadHotspots();
+      }
 
       // Upload photo if provided
       if (photo != null) {
@@ -10440,29 +10544,27 @@ class _MapScreenState extends State<MapScreen> {
                   'type': 'report',
                   'hotspot_id': hotspotId,
                   'created_at': DateTime.now().toIso8601String(),
-                  'unique_key': 'report_${hotspotId}_${admin['id']}',
                 },
               )
               .toList();
 
           await Supabase.instance.client
               .from('notifications')
-              .upsert(notifications, onConflict: 'unique_key');
+              .insert(notifications);
         }
       } catch (notificationError) {
         print('Error creating notifications: $notificationError');
       }
 
-      // Show success message with remaining daily reports
       final remainingReports = 4 - dailyReportsResponse.length;
       _showSnackBar(
         'Report submitted successfully and is awaiting admin approval. You have $remainingReports reports remaining today.',
       );
-      return true; // Return true on success
+      return true;
     } catch (e) {
       _showSnackBar('Failed to report hotspot: ${e.toString()}');
       print('Error in _reportHotspot: $e');
-      return false; // Return false on failure
+      return false;
     }
   }
 
@@ -10562,6 +10664,9 @@ class _MapScreenState extends State<MapScreen> {
         'created_by': currentUserId,
         'status': 'approved',
         'active_status': activeStatus,
+        'verification_status': 'verified', // ← NEW
+        'verified_by': currentUserId, // ← NEW
+        'verified_at': DateTime.now().toIso8601String(), // ← NEW
         if (expirationTime != null)
           'expires_at': expirationTime.toUtc().toIso8601String(),
       };
@@ -14348,14 +14453,34 @@ class _MapScreenState extends State<MapScreen> {
                         IconData markerIcon;
                         double opacity = 1.0;
 
+                        // Get verification status for pending reports
+                        final verificationStatus =
+                            hotspot['verification_status'] ?? 'unverified';
+
                         if (status == 'pending') {
                           markerColor = Colors.deepPurple;
-                          markerIcon = Icons.hourglass_empty;
+
+                          // ✅ Dynamic icon based on verification status
+                          if (verificationStatus == 'verified') {
+                            markerIcon = Icons
+                                .check_circle_outline; // ✅ Verified by officer, awaiting admin approval
+                          } else if (verificationStatus ==
+                              'rejected_verification') {
+                            markerIcon = Icons
+                                .cancel_outlined; // ❌ Rejected during verification
+                            markerColor = Colors
+                                .red
+                                .shade700; // Change color to red for rejected verification
+                          } else {
+                            markerIcon = Icons
+                                .hourglass_empty; // ⏰ Awaiting officer verification
+                          }
                         } else if (status == 'rejected') {
                           markerColor = Colors.grey;
                           markerIcon = Icons.cancel_outlined;
                           opacity = isOwnHotspot ? 1.0 : 0.6;
                         } else {
+                          // Approved status - crime level colors
                           switch (crimeLevel) {
                             case 'critical':
                               markerColor = const Color.fromARGB(
@@ -14393,6 +14518,7 @@ class _MapScreenState extends State<MapScreen> {
                               markerColor = Colors.blue;
                           }
 
+                          // Crime category icons
                           switch (crimeCategory?.toLowerCase()) {
                             case 'property':
                               markerIcon = Icons.key;
@@ -15624,6 +15750,8 @@ class _MapScreenState extends State<MapScreen> {
 
   // HOTSPOT DETAILS
   void _showHotspotDetails(Map<String, dynamic> hotspot) async {
+    final verificationStatus = hotspot['verification_status'] ?? 'unverified';
+    final verifiedAt = hotspot['verified_at'];
     // Add null safety at the beginning
     if (hotspot['location'] == null) {
       _showSnackBar('Unable to load hotspot details');
@@ -15686,6 +15814,8 @@ class _MapScreenState extends State<MapScreen> {
     final formattedTime = DateFormat('MMM dd, yyyy - hh:mm a').format(time);
     final status = hotspot['status'] ?? 'approved';
     final activeStatus = hotspot['active_status'] ?? 'active';
+    bool isActiveStatus = activeStatus == 'active';
+    ValueNotifier<bool> statusNotifier = ValueNotifier<bool>(isActiveStatus);
     final isOwner =
         (_userProfile?['id'] != null) &&
         (hotspot['created_by'] == _userProfile!['id'] ||
@@ -15699,8 +15829,8 @@ class _MapScreenState extends State<MapScreen> {
         : null;
 
     // Fetch officer details
-    // Fetch officer details - UPDATED to include creator/reporter info
     Map<String, String> officerDetails = {};
+    Map<String, String?> contactNumbers = {}; // NEW: Store contact numbers
     try {
       final response = await Supabase.instance.client
           .from('hotspot')
@@ -15713,8 +15843,8 @@ class _MapScreenState extends State<MapScreen> {
         approved_profile:approved_by (first_name, last_name),
         rejected_profile:rejected_by (first_name, last_name),
         updated_profile:last_updated_by (first_name, last_name),
-        creator_profile:created_by (first_name, last_name),
-        reporter_profile:reported_by (first_name, last_name)
+        creator_profile:created_by (first_name, last_name, contact_number),
+        reporter_profile:reported_by (first_name, last_name, contact_number)
       ''')
           .eq('id', hotspot['id'])
           .single();
@@ -15743,19 +15873,30 @@ class _MapScreenState extends State<MapScreen> {
                 .trim();
       }
 
-      // Process created_by - NEW
+      // Process created_by - NEW: Include contact
       if (response['created_by'] != null &&
           response['creator_profile'] != null) {
         officerDetails['created_by'] =
             '${response['creator_profile']['first_name'] ?? ''} ${response['creator_profile']['last_name'] ?? ''}'
                 .trim();
+        contactNumbers['creator'] =
+            response['creator_profile']['contact_number']; // NEW
       }
 
-      // Process reported_by - NEW
+      // Process reported_by - NEW: Include contact
       if (response['reported_by'] != null &&
           response['reporter_profile'] != null) {
         officerDetails['reported_by'] =
             '${response['reporter_profile']['first_name'] ?? ''} ${response['reporter_profile']['last_name'] ?? ''}'
+                .trim();
+        contactNumbers['reporter'] =
+            response['reporter_profile']['contact_number']; // NEW
+      }
+
+      if (response['verified_by'] != null &&
+          response['verifier_profile'] != null) {
+        officerDetails['verified_by'] =
+            '${response['verifier_profile']['first_name'] ?? ''} ${response['verifier_profile']['last_name'] ?? ''}'
                 .trim();
       }
     } catch (e) {
@@ -16389,6 +16530,7 @@ class _MapScreenState extends State<MapScreen> {
                                       ],
                                     ),
                                   ),
+
                                 // Action buttons
                                 // Officer details section - CLEANED
                                 if (_hasAdminPermissions || _isOfficer) ...[
@@ -16456,27 +16598,61 @@ class _MapScreenState extends State<MapScreen> {
                                         ),
                                         const SizedBox(height: 8),
 
-                                        // Creator / Reporter (just under Review Status)
+                                        // For pending status - show reporter first
                                         if (status == 'pending') ...[
                                           if (officerDetails['reported_by']
                                                   ?.isNotEmpty ??
                                               false)
-                                            Text(
-                                              '📝 Reported by: ${officerDetails['reported_by']}',
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                color: Colors.black87,
-                                              ),
+                                            Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '📝 Reported by: ${officerDetails['reported_by']}',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                if (contactNumbers['reporter'] !=
+                                                    null) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    '📞 ${contactNumbers['reporter']}',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      color: Colors.grey[700],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
                                             )
                                           else if (officerDetails['created_by']
                                                   ?.isNotEmpty ??
                                               false)
-                                            Text(
-                                              '📝 Created by: ${officerDetails['created_by']}',
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                color: Colors.black87,
-                                              ),
+                                            Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '📝 Created by: ${officerDetails['created_by']}',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                if (contactNumbers['creator'] !=
+                                                    null) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    '📞 ${contactNumbers['creator']}',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      color: Colors.grey[700],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
                                             )
                                           else
                                             Text(
@@ -16488,25 +16664,60 @@ class _MapScreenState extends State<MapScreen> {
                                               ),
                                             ),
                                         ] else ...[
+                                          // For approved/rejected - show creator first
                                           if (officerDetails['created_by']
                                                   ?.isNotEmpty ??
                                               false)
-                                            Text(
-                                              '📝 Created by: ${officerDetails['created_by']}',
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                color: Colors.black87,
-                                              ),
+                                            Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '📝 Created by: ${officerDetails['created_by']}',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                if (contactNumbers['creator'] !=
+                                                    null) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    '📞 ${contactNumbers['creator']}',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      color: Colors.grey[700],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
                                             )
                                           else if (officerDetails['reported_by']
                                                   ?.isNotEmpty ??
                                               false)
-                                            Text(
-                                              '📝 Reported by: ${officerDetails['reported_by']}',
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                color: Colors.black87,
-                                              ),
+                                            Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '📝 Reported by: ${officerDetails['reported_by']}',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                if (contactNumbers['reporter'] !=
+                                                    null) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    '📞 ${contactNumbers['reporter']}',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      color: Colors.grey[700],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
                                             )
                                           else
                                             Text(
@@ -16518,6 +16729,147 @@ class _MapScreenState extends State<MapScreen> {
                                               ),
                                             ),
                                         ],
+
+                                        const SizedBox(height: 12),
+                                        const Divider(),
+                                        const SizedBox(height: 8),
+
+                                        // Verification Status Badge
+                                        if (verificationStatus == 'verified')
+                                          Container(
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.green.shade50,
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                              border: Border.all(
+                                                color: Colors.green.shade200,
+                                              ),
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    Icon(
+                                                      Icons.verified,
+                                                      color:
+                                                          Colors.green.shade600,
+                                                      size: 18,
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Text(
+                                                      '✅ Verified',
+                                                      style: TextStyle(
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color: Colors
+                                                            .green
+                                                            .shade700,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                                if (officerDetails['verified_by']
+                                                        ?.isNotEmpty ??
+                                                    false) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    'By: ${officerDetails['verified_by']}',
+                                                    style: const TextStyle(
+                                                      fontSize: 13,
+                                                      color: Colors.black87,
+                                                    ),
+                                                  ),
+                                                ],
+                                                if (verifiedAt != null) ...[
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(verifiedAt).toLocal())}',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.grey[700],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          )
+                                        else if (verificationStatus ==
+                                            'rejected_verification')
+                                          Container(
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.red.shade50,
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                              border: Border.all(
+                                                color: Colors.red.shade200,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.cancel,
+                                                  color: Colors.red.shade600,
+                                                  size: 18,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    '❌ Verification Rejected',
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      color:
+                                                          Colors.red.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          )
+                                        else if (verificationStatus ==
+                                                'unverified' &&
+                                            status == 'pending')
+                                          Container(
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.orange.shade50,
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                              border: Border.all(
+                                                color: Colors.orange.shade200,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.pending,
+                                                  color: Colors.orange.shade700,
+                                                  size: 18,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    '⚠️ Pending Verification',
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      color: Colors
+                                                          .orange
+                                                          .shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+
                                         const SizedBox(height: 8),
 
                                         // Show approval / rejection
@@ -16564,6 +16916,80 @@ class _MapScreenState extends State<MapScreen> {
                                   ),
                                 ],
 
+                                // Add this AFTER the officer details section and BEFORE action buttons
+                                if (_hasAdminPermissions &&
+                                    status == 'approved') ...[
+                                  StatefulBuilder(
+                                    builder: (context, setStateDialog) {
+                                      return Container(
+                                        margin: const EdgeInsets.symmetric(
+                                          vertical: 12,
+                                          horizontal:
+                                              8, // Add horizontal for mobile
+                                        ),
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: statusNotifier.value
+                                              ? Colors.green.shade50
+                                              : Colors.grey.shade50,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: statusNotifier.value
+                                                ? Colors.green.shade200
+                                                : Colors.grey.shade300,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  statusNotifier.value
+                                                      ? Icons.check_circle
+                                                      : Icons.cancel,
+                                                  color: statusNotifier.value
+                                                      ? Colors.green
+                                                      : Colors.grey,
+                                                  size: 20,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  'Status: ${statusNotifier.value ? 'Active' : 'Inactive'}',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            Switch(
+                                              value: statusNotifier.value,
+                                              onChanged: (value) async {
+                                                // Update UI immediately
+                                                setStateDialog(() {
+                                                  statusNotifier.value = value;
+                                                });
+
+                                                // Update database
+                                                await _updateHotspotStatus(
+                                                  hotspot['id'],
+                                                  value ? 'active' : 'inactive',
+                                                );
+                                              },
+                                              activeColor: Colors.green,
+                                              inactiveThumbColor: Colors.grey,
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+
                                 const SizedBox(height: 20),
                                 _buildDesktopActionButtons(
                                   hotspot,
@@ -16593,403 +17019,311 @@ class _MapScreenState extends State<MapScreen> {
       isScrollControlled: true,
       enableDrag: true,
       isDismissible: true,
-      builder: (context) => GestureDetector(
-        onTap: () {}, // Prevents dismissal when tapping content
-        child: Container(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.95,
-            minHeight: MediaQuery.of(context).size.height * 0.2,
-          ),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          child: Column(
-            mainAxisSize:
-                MainAxisSize.min, // This makes it auto-size to content
-            children: [
-              // Drag handle at the top
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.symmetric(vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.grey[400],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
+      builder: (context) {
+        // ⭐ Variables for mobile view
+        final activeStatusMobile = hotspot['active_status'] ?? 'active';
+        final isActiveStatusMobile = activeStatusMobile == 'active';
+        final statusNotifierMobile = ValueNotifier<bool>(isActiveStatusMobile);
 
-              // Content wrapper that auto-expands or scrolls
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8.0,
-                    vertical: 16.0,
-                  ), // Reduced horizontal padding
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Photo section for mobile - Now clickable
-                      if (hotspotPhoto != null) ...[
-                        GestureDetector(
-                          onTap: () =>
-                              _showFullScreenImage(hotspotPhoto?['photo_url']),
-                          child: Container(
-                            height: 200,
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(8),
+        return GestureDetector(
+          onTap: () {}, // Prevents dismissal when tapping content
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.95,
+              minHeight: MediaQuery.of(context).size.height * 0.2,
+            ),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Drag handle at the top
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[400],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+
+                // Content wrapper that auto-expands or scrolls
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8.0,
+                      vertical: 16.0,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Photo section for mobile
+                        if (hotspotPhoto != null) ...[
+                          GestureDetector(
+                            onTap: () => _showFullScreenImage(
+                              hotspotPhoto?['photo_url'],
                             ),
-                            child: Stack(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.network(
-                                    hotspotPhoto['photo_url'],
-                                    fit: BoxFit.cover,
-                                    width: double.infinity,
-                                    height: double.infinity,
-                                    loadingBuilder:
-                                        (context, child, loadingProgress) {
-                                          if (loadingProgress == null) {
-                                            return child;
-                                          }
-                                          return const Center(
-                                            child: CircularProgressIndicator(),
-                                          );
-                                        },
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return const Center(
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              Icons.error,
-                                              color: Colors.red,
-                                            ),
-                                            Text('Failed to load image'),
-                                          ],
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                // Overlay to indicate clickability
-                                Positioned(
-                                  top: 8,
-                                  right: 8,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(6),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withOpacity(0.6),
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: const Icon(
-                                      Icons.zoom_in,
-                                      color: Colors.white,
-                                      size: 20,
+                            child: Container(
+                              height: 200,
+                              width: double.infinity,
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade300),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Stack(
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      hotspotPhoto['photo_url'],
+                                      fit: BoxFit.cover,
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      loadingBuilder:
+                                          (context, child, loadingProgress) {
+                                            if (loadingProgress == null) {
+                                              return child;
+                                            }
+                                            return const Center(
+                                              child:
+                                                  CircularProgressIndicator(),
+                                            );
+                                          },
+                                      errorBuilder:
+                                          (context, error, stackTrace) {
+                                            return const Center(
+                                              child: Column(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(
+                                                    Icons.error,
+                                                    color: Colors.red,
+                                                  ),
+                                                  Text('Failed to load image'),
+                                                ],
+                                              ),
+                                            );
+                                          },
                                     ),
                                   ),
-                                ),
-                              ],
+                                  Positioned(
+                                    top: 8,
+                                    right: 8,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.6),
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      child: const Icon(
+                                        Icons.zoom_in,
+                                        color: Colors.white,
+                                        size: 20,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                      ],
+                          const SizedBox(height: 16),
+                        ],
 
-                      // Crime Type with mini icon
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 12,
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.category,
-                              size: 18,
-                              color: Colors.grey[600],
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Text('Type: ${crimeType['name']}'),
-                                      const SizedBox(width: 6),
-                                      _buildStatusWidget(activeStatus, status),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Category: $category',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[600],
-                                    ),
-                                  ),
-                                  Text(
-                                    'Level: ${crimeType['level']}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[600],
-                                    ),
-                                  ),
-                                ],
+                        // Crime Type with mini icon
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.category,
+                                size: 18,
+                                color: Colors.grey[600],
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Description with mini icon
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 12,
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              Icons.description,
-                              size: 18,
-                              color: Colors.grey[600],
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Description:',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    (hotspot['description'] == null ||
-                                            hotspot['description']
-                                                .toString()
-                                                .trim()
-                                                .isEmpty)
-                                        ? 'No description'
-                                        : hotspot['description'],
-                                    style: TextStyle(color: Colors.grey[700]),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Location with mini icon
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 12,
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              Icons.location_pin,
-                              size: 18,
-                              color: Colors.grey[600],
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Location:',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    address,
-                                    style: TextStyle(color: Colors.grey[700]),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    coordinatesString,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[600],
-                                    ),
-                                  ),
-
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 8),
-                                    child: TextButton.icon(
-                                      onPressed: () {
-                                        final lat =
-                                            hotspot['location']['coordinates'][1];
-                                        final lng =
-                                            hotspot['location']['coordinates'][0];
-                                        _showDirectionsConfirmation(
-                                          LatLng(lat, lng),
-                                          context,
-                                          () {
-                                            Navigator.pop(context);
-                                            _getDirections(LatLng(lat, lng));
-                                          },
-                                        );
-                                      },
-                                      icon: const Icon(
-                                        Icons.directions,
-                                        size: 16,
-                                      ),
-                                      label: const Text('Get Directions'),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: Colors.blue.shade600,
-                                        padding: EdgeInsets.zero,
-                                        minimumSize: const Size(0, 0),
-                                        tapTargetSize:
-                                            MaterialTapTargetSize.shrinkWrap,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.copy, size: 18),
-                              onPressed: () {
-                                Clipboard.setData(
-                                  ClipboardData(text: fullLocation),
-                                );
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Location copied to clipboard',
-                                    ),
-                                  ),
-                                );
-                              },
-                              constraints: const BoxConstraints(),
-                              padding: const EdgeInsets.all(8),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Time with mini icon
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 12,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.access_time,
-                                  size: 18,
-                                  color: Colors.grey[600],
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const Text(
-                                        'Date and Time:',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        formattedTime,
-                                        style: TextStyle(
-                                          color: Colors.grey[700],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            // Add expiration indicator if exists
-                            if (expiresAt != null &&
-                                activeStatus == 'active') ...[
-                              const SizedBox(height: 8),
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.shade50,
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                    color: Colors.orange.shade200,
-                                  ),
-                                ),
-                                child: Row(
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Icon(
-                                      Icons.timer,
-                                      size: 16,
-                                      color: Colors.orange.shade700,
+                                    Row(
+                                      children: [
+                                        Text('Type: ${crimeType['name']}'),
+                                        const SizedBox(width: 6),
+                                        _buildStatusWidget(
+                                          activeStatus,
+                                          status,
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            'Investigation expires: ${DateFormat('MMM dd, yyyy - hh:mm a').format(expiresAt.toLocal())}',
-                                            style: TextStyle(
-                                              color: Colors.orange.shade700,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            formatTimeRemaining(expiresAt),
-                                            style: TextStyle(
-                                              color: Colors.orange.shade800,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ],
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Category: $category',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                    Text(
+                                      'Level: ${crimeType['level']}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
                             ],
-                          ],
-                        ),
-                      ),
-
-                      // Show rejection reason for rejected reports
-                      if (status == 'rejected' &&
-                          hotspot['rejection_reason'] != null)
-                        Container(
-                          margin: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 8,
                           ),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.red.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.red.shade200),
+                        ),
+
+                        // Description with mini icon
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.description,
+                                size: 18,
+                                color: Colors.grey[600],
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Description:',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      (hotspot['description'] == null ||
+                                              hotspot['description']
+                                                  .toString()
+                                                  .trim()
+                                                  .isEmpty)
+                                          ? 'No description'
+                                          : hotspot['description'],
+                                      style: TextStyle(color: Colors.grey[700]),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Location with mini icon
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.location_pin,
+                                size: 18,
+                                color: Colors.grey[600],
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Location:',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      address,
+                                      style: TextStyle(color: Colors.grey[700]),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      coordinatesString,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: TextButton.icon(
+                                        onPressed: () {
+                                          final lat =
+                                              hotspot['location']['coordinates'][1];
+                                          final lng =
+                                              hotspot['location']['coordinates'][0];
+                                          _showDirectionsConfirmation(
+                                            LatLng(lat, lng),
+                                            context,
+                                            () {
+                                              Navigator.pop(context);
+                                              _getDirections(LatLng(lat, lng));
+                                            },
+                                          );
+                                        },
+                                        icon: const Icon(
+                                          Icons.directions,
+                                          size: 16,
+                                        ),
+                                        label: const Text('Get Directions'),
+                                        style: TextButton.styleFrom(
+                                          foregroundColor: Colors.blue.shade600,
+                                          padding: EdgeInsets.zero,
+                                          minimumSize: const Size(0, 0),
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.copy, size: 18),
+                                onPressed: () {
+                                  Clipboard.setData(
+                                    ClipboardData(text: fullLocation),
+                                  );
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Location copied to clipboard',
+                                      ),
+                                    ),
+                                  );
+                                },
+                                constraints: const BoxConstraints(),
+                                padding: const EdgeInsets.all(8),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Time with mini icon
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 12,
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -16997,465 +17331,955 @@ class _MapScreenState extends State<MapScreen> {
                               Row(
                                 children: [
                                   Icon(
-                                    Icons.cancel,
-                                    color: Colors.red.shade600,
-                                    size: 20,
+                                    Icons.access_time,
+                                    size: 18,
+                                    color: Colors.grey[600],
                                   ),
                                   const SizedBox(width: 8),
-                                  Text(
-                                    'Rejection Reason:',
-                                    style: TextStyle(
-                                      color: Colors.red.shade700,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Date and Time:',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          formattedTime,
+                                          style: TextStyle(
+                                            color: Colors.grey[700],
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                hotspot['rejection_reason']
-                                        .toString()
-                                        .trim()
-                                        .isEmpty
-                                    ? 'No reason provided'
-                                    : hotspot['rejection_reason'],
-                                style: TextStyle(
-                                  color: Colors.red.shade700,
-                                  fontSize: 14,
-                                  fontStyle: FontStyle.italic,
+                              if (expiresAt != null &&
+                                  activeStatus == 'active') ...[
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.shade50,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: Colors.orange.shade200,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.timer,
+                                        size: 16,
+                                        color: Colors.orange.shade700,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Investigation expires: ${DateFormat('MMM dd, yyyy - hh:mm a').format(expiresAt.toLocal())}',
+                                              style: TextStyle(
+                                                color: Colors.orange.shade700,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              formatTimeRemaining(expiresAt),
+                                              style: TextStyle(
+                                                color: Colors.orange.shade800,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
 
-                      // Show approval note for approved reports by users (visible only to the report owner, not admin)
-                      if (status == 'approved' &&
-                          !_hasAdminPermissions &&
-                          isOwner)
-                        Container(
-                          margin: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 8,
-                          ),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.green.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.green.shade200),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.check_circle,
-                                color: Colors.green.shade600,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Your post has been approved and is being managed by the admin.',
+                        // Show rejection reason for rejected reports
+                        if (status == 'rejected' &&
+                            hotspot['rejection_reason'] != null)
+                          Container(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.red.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.cancel,
+                                      color: Colors.red.shade600,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Rejection Reason:',
+                                      style: TextStyle(
+                                        color: Colors.red.shade700,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  hotspot['rejection_reason']
+                                          .toString()
+                                          .trim()
+                                          .isEmpty
+                                      ? 'No reason provided'
+                                      : hotspot['rejection_reason'],
                                   style: TextStyle(
-                                    color: Colors.green.shade700,
+                                    color: Colors.red.shade700,
                                     fontSize: 14,
                                     fontStyle: FontStyle.italic,
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
 
-                      // Officer details section - CLEANED
-                      if (_hasAdminPermissions || _isOfficer) ...[
-                        Container(
-                          margin: const EdgeInsets.symmetric(vertical: 12),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color:
-                                (officerDetails['approved_by']?.isNotEmpty ??
-                                    false)
-                                ? Colors.green.shade50
-                                : (officerDetails['rejected_by']?.isNotEmpty ??
-                                      false)
-                                ? Colors.red.shade50
-                                : Colors.blue.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
+                        // Show approval note for approved reports by users
+                        if (status == 'approved' &&
+                            !_hasAdminPermissions &&
+                            isOwner)
+                          Container(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.green.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.check_circle,
+                                  color: Colors.green.shade600,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Your post has been approved and is being managed by the admin.',
+                                    style: TextStyle(
+                                      color: Colors.green.shade700,
+                                      fontSize: 14,
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                        // Officer details section with contact numbers
+                        if (_hasAdminPermissions || _isOfficer) ...[
+                          Container(
+                            margin: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 8,
+                            ),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
                               color:
                                   (officerDetails['approved_by']?.isNotEmpty ??
                                       false)
-                                  ? Colors.green.shade200
+                                  ? Colors.green.shade50
                                   : (officerDetails['rejected_by']
                                             ?.isNotEmpty ??
                                         false)
-                                  ? Colors.red.shade200
-                                  : Colors.blue.shade200,
+                                  ? Colors.red.shade50
+                                  : Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color:
+                                    (officerDetails['approved_by']
+                                            ?.isNotEmpty ??
+                                        false)
+                                    ? Colors.green.shade200
+                                    : (officerDetails['rejected_by']
+                                              ?.isNotEmpty ??
+                                          false)
+                                    ? Colors.red.shade200
+                                    : Colors.blue.shade200,
+                              ),
                             ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Review Status Header
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.person,
-                                    color:
-                                        (officerDetails['approved_by']
-                                                ?.isNotEmpty ??
-                                            false)
-                                        ? Colors.green.shade600
-                                        : (officerDetails['rejected_by']
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Review Status Header
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.person,
+                                      color:
+                                          (officerDetails['approved_by']
                                                   ?.isNotEmpty ??
                                               false)
-                                        ? Colors.red.shade600
-                                        : Colors.blue.shade600,
-                                    size: 20,
+                                          ? Colors.green.shade600
+                                          : (officerDetails['rejected_by']
+                                                    ?.isNotEmpty ??
+                                                false)
+                                          ? Colors.red.shade600
+                                          : Colors.blue.shade600,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Text(
+                                      'Review Status',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+
+                                // Creator / Reporter with contact number
+                                if (status == 'pending') ...[
+                                  if (officerDetails['reported_by']
+                                          ?.isNotEmpty ??
+                                      false)
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '📝 Reported by: ${officerDetails['reported_by']}',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        if (contactNumbers['reporter'] !=
+                                            null) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '📞 ${contactNumbers['reporter']}',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    )
+                                  else if (officerDetails['created_by']
+                                          ?.isNotEmpty ??
+                                      false)
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '📝 Created by: ${officerDetails['created_by']}',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        if (contactNumbers['creator'] !=
+                                            null) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '📞 ${contactNumbers['creator']}',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    )
+                                  else
+                                    Text(
+                                      'Reporter information not available',
+                                      style: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontSize: 14,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                ] else ...[
+                                  if (officerDetails['created_by']
+                                          ?.isNotEmpty ??
+                                      false)
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '📝 Created by: ${officerDetails['created_by']}',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        if (contactNumbers['creator'] !=
+                                            null) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '📞 ${contactNumbers['creator']}',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    )
+                                  else if (officerDetails['reported_by']
+                                          ?.isNotEmpty ??
+                                      false)
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '📝 Reported by: ${officerDetails['reported_by']}',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        if (contactNumbers['reporter'] !=
+                                            null) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '📞 ${contactNumbers['reporter']}',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    )
+                                  else
+                                    Text(
+                                      'Creator information not available',
+                                      style: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontSize: 14,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                ],
+                                const SizedBox(height: 12),
+                                const Divider(),
+                                const SizedBox(height: 8),
+
+                                // Verification Status Badge
+                                if (verificationStatus == 'verified')
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.green.shade50,
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: Colors.green.shade200,
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              Icons.verified,
+                                              color: Colors.green.shade600,
+                                              size: 18,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              '✅ Verified',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.green.shade700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        if (officerDetails['verified_by']
+                                                ?.isNotEmpty ??
+                                            false) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'By: ${officerDetails['verified_by']}',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                        ],
+                                        if (verifiedAt != null) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(verifiedAt).toLocal())}',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  )
+                                else if (verificationStatus ==
+                                    'rejected_verification')
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.shade50,
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: Colors.red.shade200,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.cancel,
+                                          color: Colors.red.shade600,
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            '❌ Verification Rejected',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.red.shade700,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                else if (verificationStatus == 'unverified' &&
+                                    status == 'pending')
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange.shade50,
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: Colors.orange.shade200,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.pending,
+                                          color: Colors.orange.shade700,
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            '⚠️ Pending Verification',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.orange.shade700,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'Review Status',
-                                    style: TextStyle(
+
+                                const SizedBox(height: 8),
+
+                                // Show approval / rejection
+                                if (officerDetails['approved_by']?.isNotEmpty ??
+                                    false) ...[
+                                  Text(
+                                    '✅ Approved by: ${officerDetails['approved_by']}',
+                                    style: const TextStyle(
                                       fontSize: 14,
-                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                ],
+                                if (officerDetails['rejected_by']?.isNotEmpty ??
+                                    false) ...[
+                                  Text(
+                                    '❌ Rejected by: ${officerDetails['rejected_by']}',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                ],
+
+                                // Last updated by
+                                if (officerDetails['last_updated_by']
+                                        ?.isNotEmpty ??
+                                    false) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '🔄 Last updated by: ${officerDetails['last_updated_by']}',
+                                    style: const TextStyle(
+                                      fontSize: 14,
                                       color: Colors.black87,
                                     ),
                                   ),
                                 ],
-                              ),
-                              const SizedBox(height: 8),
-
-                              // Creator / Reporter (just under Review Status)
-                              if (status == 'pending') ...[
-                                if (officerDetails['reported_by']?.isNotEmpty ??
-                                    false)
-                                  Text(
-                                    '📝 Reported by: ${officerDetails['reported_by']}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
-                                  )
-                                else if (officerDetails['created_by']
-                                        ?.isNotEmpty ??
-                                    false)
-                                  Text(
-                                    '📝 Created by: ${officerDetails['created_by']}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
-                                  )
-                                else
-                                  Text(
-                                    'Reporter information not available',
-                                    style: TextStyle(
-                                      color: Colors.grey.shade600,
-                                      fontSize: 14,
-                                      fontStyle: FontStyle.italic,
-                                    ),
-                                  ),
-                              ] else ...[
-                                if (officerDetails['created_by']?.isNotEmpty ??
-                                    false)
-                                  Text(
-                                    '📝 Created by: ${officerDetails['created_by']}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
-                                  )
-                                else if (officerDetails['reported_by']
-                                        ?.isNotEmpty ??
-                                    false)
-                                  Text(
-                                    '📝 Reported by: ${officerDetails['reported_by']}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
-                                  )
-                                else
-                                  Text(
-                                    'Creator information not available',
-                                    style: TextStyle(
-                                      color: Colors.grey.shade600,
-                                      fontSize: 14,
-                                      fontStyle: FontStyle.italic,
-                                    ),
-                                  ),
                               ],
-                              const SizedBox(height: 8),
-
-                              // Show approval / rejection
-                              if (officerDetails['approved_by']?.isNotEmpty ??
-                                  false) ...[
-                                Text(
-                                  '✅ Approved by: ${officerDetails['approved_by']}',
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                              ],
-                              if (officerDetails['rejected_by']?.isNotEmpty ??
-                                  false) ...[
-                                Text(
-                                  '❌ Rejected by: ${officerDetails['rejected_by']}',
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                              ],
-
-                              // Always at the bottom: Last updated by
-                              if (officerDetails['last_updated_by']
-                                      ?.isNotEmpty ??
-                                  false) ...[
-                                const SizedBox(height: 8),
-                                Text(
-                                  '🔄 Last updated by: ${officerDetails['last_updated_by']}',
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                              ],
-                            ],
+                            ),
                           ),
-                        ),
+                        ],
+
+                        // Active Status Section - Only for approved posts
+                        if (_hasAdminPermissions && status == 'approved') ...[
+                          StatefulBuilder(
+                            builder: (context, setStateDialog) {
+                              return Container(
+                                margin: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                  horizontal: 8,
+                                ),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: statusNotifierMobile.value
+                                      ? Colors.green.shade50
+                                      : Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: statusNotifierMobile.value
+                                        ? Colors.green.shade200
+                                        : Colors.grey.shade300,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          statusNotifierMobile.value
+                                              ? Icons.check_circle
+                                              : Icons.cancel,
+                                          color: statusNotifierMobile.value
+                                              ? Colors.green
+                                              : Colors.grey,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'Status: ${statusNotifierMobile.value ? 'Active' : 'Inactive'}',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Switch(
+                                      value: statusNotifierMobile.value,
+                                      onChanged: (value) async {
+                                        setStateDialog(() {
+                                          statusNotifierMobile.value = value;
+                                        });
+                                        await _updateHotspotStatus(
+                                          hotspot['id'],
+                                          value ? 'active' : 'inactive',
+                                        );
+                                      },
+                                      activeColor: Colors.green,
+                                      inactiveThumbColor: Colors.grey,
+                                      materialTapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+
+                        // Mobile action buttons
+
+                        // OFFICER BUTTONS - Verify/Reject Verification
+                        if (_isOfficer && !_isAdmin && status == 'pending') ...[
+                          if (verificationStatus == 'unverified')
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 16.0,
+                              ),
+                              child: Column(
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          onPressed: () =>
+                                              _verifyHotspot(hotspot['id']),
+                                          icon: const Icon(
+                                            Icons.verified,
+                                            size: 16,
+                                          ),
+                                          label: const Text('Verify'),
+                                          style: ElevatedButton.styleFrom(
+                                            foregroundColor: Colors.green,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                            ),
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 12,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: ElevatedButton(
+                                          onPressed: () =>
+                                              _showRejectVerificationDialog(
+                                                hotspot['id'],
+                                              ),
+                                          style: ElevatedButton.styleFrom(
+                                            foregroundColor: Colors.orange,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                            ),
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 12,
+                                            ),
+                                          ),
+                                          child: const Text('Reject'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton.icon(
+                                      onPressed: () =>
+                                          _deleteHotspot(hotspot['id']),
+                                      icon: const Icon(Icons.delete, size: 16),
+                                      label: const Text('Delete'),
+                                      style: ElevatedButton.styleFrom(
+                                        foregroundColor: Colors.red,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 8.0,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.blue.shade200,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.info,
+                                      color: Colors.blue.shade700,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        verificationStatus == 'verified'
+                                            ? 'This report has been verified. Waiting for admin approval.'
+                                            : 'This report has been rejected.',
+                                        style: TextStyle(
+                                          color: Colors.blue.shade700,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+
+                        // ADMIN BUTTONS
+                        if (_isAdmin && status == 'pending')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 16.0,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () =>
+                                        _showApprovalWithDurationDialog(
+                                          hotspot['id'],
+                                        ),
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: Colors.green,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      verificationStatus == 'unverified'
+                                          ? 'Approve*'
+                                          : 'Approve',
+                                      style: const TextStyle(fontSize: 13),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () =>
+                                        _showRejectDialog(hotspot['id']),
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: Colors.blueGrey,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    child: const Text('Reject'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () =>
+                                        _deleteHotspot(hotspot['id']),
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: Colors.red,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    child: const Text('Delete'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                        // USER OWNER BUTTONS
+                        if (!_hasAdminPermissions &&
+                            !_isOfficer &&
+                            status == 'pending' &&
+                            isOwner)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6.0,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      _showEditHotspotForm(hotspot);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: const Color.fromARGB(
+                                        255,
+                                        19,
+                                        111,
+                                        187,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    child: const Text('Edit'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () =>
+                                        _deleteHotspot(hotspot['id']),
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: Colors.red,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    child: const Text('Delete'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                        // REJECTED STATUS
+                        if (status == 'rejected')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6.0,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                if (isOwner || _hasAdminPermissions)
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      onPressed: () =>
+                                          _deleteHotspot(hotspot['id']),
+                                      style: ElevatedButton.styleFrom(
+                                        foregroundColor: Colors.red,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+
+                        // APPROVED STATUS
+                        if (_hasAdminPermissions && status == 'approved')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6.0,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      _showEditHotspotForm(hotspot);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: const Color.fromARGB(
+                                        255,
+                                        19,
+                                        111,
+                                        187,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    child: const Text('Edit'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () =>
+                                        _deleteHotspot(hotspot['id']),
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: Colors.red,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    child: const Text('Delete'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
-
-                      // Mobile action buttons
-                      if (_hasAdminPermissions && status == 'pending')
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 16.0,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () =>
-                                      _showApprovalWithDurationDialog(
-                                        hotspot['id'],
-                                      ),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: Colors.green,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  child: const Text('Approve'),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () =>
-                                      _showRejectDialog(hotspot['id']),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: Colors.blueGrey,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  child: const Text('Reject'),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () =>
-                                      _deleteHotspot(hotspot['id']),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: Colors.red,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  child: const Text('Delete'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      if (!_hasAdminPermissions &&
-                          status == 'pending' &&
-                          isOwner)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 6.0,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _showEditHotspotForm(hotspot);
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: const Color.fromARGB(
-                                      255,
-                                      19,
-                                      111,
-                                      187,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  child: const Text('Edit'),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () =>
-                                      _deleteHotspot(hotspot['id']),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: Colors.red,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  child: const Text('Delete'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      if (status == 'rejected')
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 6.0,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              if (isOwner)
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () =>
-                                        _deleteHotspot(hotspot['id']),
-                                    style: ElevatedButton.styleFrom(
-                                      foregroundColor: Colors.red,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 12,
-                                      ),
-                                    ),
-                                    child: const Text('Delete'),
-                                  ),
-                                ),
-                              if (_hasAdminPermissions)
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () =>
-                                        _deleteHotspot(hotspot['id']),
-                                    style: ElevatedButton.styleFrom(
-                                      foregroundColor: Colors.red,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 12,
-                                      ),
-                                    ),
-                                    child: const Text('Delete'),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      if (_hasAdminPermissions && status == 'approved')
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 6.0,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _showEditHotspotForm(hotspot);
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: const Color.fromARGB(
-                                      255,
-                                      19,
-                                      111,
-                                      187,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  child: const Text('Edit'),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () =>
-                                      _deleteHotspot(hotspot['id']),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: Colors.red,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 12,
-                                    ),
-                                  ),
-                                  child: const Text('Delete'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -17611,23 +18435,136 @@ class _MapScreenState extends State<MapScreen> {
     return statusWidget;
   }
 
-  //DESKTOP ACTION BUTTONS FOR HOTSPOT DETAILS - MODERN DESIGN
+  //DESKTOP ACTION BUTTONS FOR HOTSPOT DETAILS - MODERN DESIGN WITH VERIFICATION
   Widget _buildDesktopActionButtons(
     Map<String, dynamic> hotspot,
     String status,
     bool isOwner,
   ) {
+    final verificationStatus = hotspot['verification_status'] ?? 'unverified';
     final buttons = <Widget>[];
 
-    if (_hasAdminPermissions && status == 'pending') {
+    // OFFICER BUTTONS - Verify/Reject Verification (Officers only, not admins)
+    if (_isOfficer && !_isAdmin && status == 'pending') {
+      if (verificationStatus == 'unverified') {
+        buttons.addAll([
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _verifyHotspot(hotspot['id']),
+              icon: const Icon(Icons.verified, size: 18),
+              label: const Text(
+                'Verify',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey.shade100,
+                foregroundColor: Colors.green.shade700,
+                elevation: 0,
+                shadowColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.grey.shade300, width: 1),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 16,
+                  horizontal: 20,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _showRejectVerificationDialog(hotspot['id']),
+              icon: const Icon(Icons.cancel, size: 18),
+              label: const Text(
+                'Reject Verification',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey.shade100,
+                foregroundColor: Colors.orange.shade700,
+                elevation: 0,
+                shadowColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.grey.shade300, width: 1),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 16,
+                  horizontal: 20,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _deleteHotspot(hotspot['id']),
+              icon: const Icon(Icons.delete, size: 18),
+              label: const Text(
+                'Delete',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey.shade100,
+                foregroundColor: Colors.red.shade700,
+                elevation: 0,
+                shadowColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.grey.shade300, width: 1),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 16,
+                  horizontal: 20,
+                ),
+              ),
+            ),
+          ),
+        ]);
+      } else {
+        // Officer has already verified or rejected - show info message
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blue.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info, color: Colors.blue.shade700, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  verificationStatus == 'verified'
+                      ? 'This report has been verified. Waiting for admin approval.'
+                      : 'This report has been rejected.',
+                  style: TextStyle(
+                    color: Colors.blue.shade700,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+    // ADMIN BUTTONS - Approve/Reject/Delete
+    else if (_isAdmin && status == 'pending') {
       buttons.addAll([
         Expanded(
           child: ElevatedButton.icon(
             onPressed: () => _showApprovalWithDurationDialog(hotspot['id']),
             icon: const Icon(Icons.check_circle, size: 18),
-            label: const Text(
-              'Approve',
-              style: TextStyle(fontWeight: FontWeight.w600),
+            label: Text(
+              verificationStatus == 'unverified'
+                  ? 'Approve (Unverified)'
+                  : 'Approve',
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.grey.shade100,
@@ -17687,7 +18624,12 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
       ]);
-    } else if (!_hasAdminPermissions && status == 'pending' && isOwner) {
+    }
+    // USER OWNER BUTTONS - Edit/Delete
+    else if (!_hasAdminPermissions &&
+        !_isOfficer &&
+        status == 'pending' &&
+        isOwner) {
       buttons.addAll([
         Expanded(
           child: ElevatedButton.icon(
@@ -17736,7 +18678,9 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
       ]);
-    } else if (status == 'rejected') {
+    }
+    // REJECTED STATUS
+    else if (status == 'rejected') {
       if (isOwner || _hasAdminPermissions) {
         buttons.add(
           Center(
@@ -17768,7 +18712,9 @@ class _MapScreenState extends State<MapScreen> {
           ),
         );
       }
-    } else if (_hasAdminPermissions && status == 'approved') {
+    }
+    // APPROVED STATUS (Admin only)
+    else if (_hasAdminPermissions && status == 'approved') {
       buttons.addAll([
         Expanded(
           child: ElevatedButton.icon(
@@ -18566,6 +19512,191 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // VERIFY HOTSPOT (Officer only)
+  Future<void> _verifyHotspot(int hotspotId) async {
+    try {
+      await Supabase.instance.client
+          .from('hotspot')
+          .update({
+            'verification_status': 'verified',
+            'verified_by': _userProfile?['id'],
+            'verified_at': DateTime.now().toUtc().toIso8601String(),
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+            'last_updated_by': _userProfile?['id'],
+          })
+          .eq('id', hotspotId);
+
+      // Send notification to admins
+      await _sendVerificationNotificationToAdmins(hotspotId, verified: true);
+
+      await _loadHotspots();
+      if (mounted) {
+        Navigator.pop(context);
+        _showSnackBar('Report verified successfully');
+      }
+    } catch (e) {
+      print('Error verifying report: $e');
+      if (mounted) {
+        _showSnackBar('Error verifying report: $e');
+      }
+    }
+  }
+
+  // REJECT VERIFICATION (Officer only) - Fully rejects the report
+  Future<void> _rejectVerification(int hotspotId, String? reason) async {
+    try {
+      await Supabase.instance.client
+          .from('hotspot')
+          .update({
+            'status': 'rejected', // ← CHANGED: Fully reject the report
+            'active_status': 'inactive', // ← CHANGED: Set to inactive
+            'verification_status': 'rejected_verification',
+            'rejection_reason': reason,
+            'rejected_by': _userProfile?['id'],
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+            'last_updated_by': _userProfile?['id'],
+          })
+          .eq('id', hotspotId);
+
+      // Notify user their report was rejected
+      await _sendRejectionNotificationToUser(hotspotId, reason);
+
+      await _loadHotspots();
+      if (mounted) {
+        Navigator.pop(context);
+        _showSnackBar('Report rejected');
+      }
+    } catch (e) {
+      print('Error rejecting verification: $e');
+      if (mounted) {
+        _showSnackBar('Error rejecting report: $e');
+      }
+    }
+  }
+
+  // Send notification to user when officer rejects their report
+  Future<void> _sendRejectionNotificationToUser(
+    int hotspotId,
+    String? reason,
+  ) async {
+    try {
+      // Get the report details
+      final hotspotResponse = await Supabase.instance.client
+          .from('hotspot')
+          .select('''
+          reported_by,
+          created_by,
+          crime_type:type_id(name)
+        ''')
+          .eq('id', hotspotId)
+          .single();
+
+      final reporterId =
+          hotspotResponse['reported_by'] ?? hotspotResponse['created_by'];
+
+      if (reporterId != null) {
+        final crimeName =
+            hotspotResponse['crime_type']?['name'] ?? 'Unknown crime';
+
+        final notificationData = {
+          'user_id': reporterId,
+          'title': 'Report Rejected',
+          'message':
+              'Your report about $crimeName was rejected. Reason: ${reason ?? "No reason provided"}',
+          'type': 'rejection',
+          'hotspot_id': hotspotId,
+          'created_at': DateTime.now().toIso8601String(),
+        };
+
+        await Supabase.instance.client
+            .from('notifications')
+            .insert(notificationData);
+      }
+    } catch (e) {
+      print('Error sending rejection notification: $e');
+    }
+  }
+
+  Future<void> _sendVerificationNotificationToAdmins(
+    int hotspotId, {
+    required bool verified,
+  }) async {
+    if (!verified) return;
+
+    try {
+      final admins = await Supabase.instance.client
+          .from('users')
+          .select('id')
+          .eq('role', 'admin');
+
+      if (admins.isNotEmpty) {
+        final notifications = admins
+            .map(
+              (admin) => {
+                'user_id': admin['id'],
+                'title': 'Report Verified',
+                'message':
+                    'A crime report has been verified by an officer and is awaiting your approval',
+                'type': 'verified',
+                'hotspot_id': hotspotId,
+                'created_at': DateTime.now().toIso8601String(),
+                // ❌ REMOVED: 'unique_key': 'verify_${hotspotId}_${admin['id']}_${DateTime.now().millisecondsSinceEpoch}',
+              },
+            )
+            .toList();
+
+        await Supabase.instance.client
+            .from('notifications')
+            .insert(notifications); // ✅ Changed from upsert to insert
+      }
+    } catch (e) {
+      print('Error sending verification notification: $e');
+    }
+  }
+
+  // Show reject verification dialog
+  void _showRejectVerificationDialog(int hotspotId) {
+    final reasonController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reject Verification'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Why is this report being rejected during verification?',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(
+                labelText: 'Reason (optional)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _rejectVerification(hotspotId, reasonController.text.trim());
+            },
+            style: ElevatedButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _reviewHotspot(
     int id,
     bool approve, [
@@ -18577,15 +19708,45 @@ class _MapScreenState extends State<MapScreen> {
       final hotspotResponse = await Supabase.instance.client
           .from('hotspot')
           .select('''
-          id,
-          created_by,
-          reported_by,
-          crime_type:type_id(name),
-          description,
-          status
-        ''')
+        id,
+        created_by,
+        reported_by,
+        verification_status,
+        crime_type:type_id(name),
+        description,
+        status,
+        creator_profile:created_by(id, first_name, last_name, contact_number),
+        reporter_profile:reported_by(id, first_name, last_name, contact_number)
+      ''')
           .eq('id', id)
           .single();
+
+      // Extract contact information
+      final reporterId =
+          hotspotResponse['reported_by'] ?? hotspotResponse['created_by'];
+
+      // Get the contact number from the appropriate profile
+      String? reporterContact;
+      String? reporterName;
+
+      if (hotspotResponse['reported_by'] != null &&
+          hotspotResponse['reporter_profile'] != null) {
+        reporterContact = hotspotResponse['reporter_profile']['contact_number'];
+        reporterName =
+            '${hotspotResponse['reporter_profile']['first_name']} ${hotspotResponse['reporter_profile']['last_name']}';
+      } else if (hotspotResponse['created_by'] != null &&
+          hotspotResponse['creator_profile'] != null) {
+        reporterContact = hotspotResponse['creator_profile']['contact_number'];
+        reporterName =
+            '${hotspotResponse['creator_profile']['first_name']} ${hotspotResponse['creator_profile']['last_name']}';
+      }
+
+      // Optional: Log the contact info for debugging
+      print('Reporter: $reporterName, Contact: $reporterContact');
+
+      // Get current verification status
+      final currentVerificationStatus =
+          hotspotResponse['verification_status'] ?? 'unverified';
 
       // Update the hotspot status
       final updateResponse = await Supabase.instance.client
@@ -18599,7 +19760,14 @@ class _MapScreenState extends State<MapScreen> {
             if (approve) 'approved_by': _userProfile?['id'],
             if (!approve) 'rejected_by': _userProfile?['id'],
             if (approve && expirationTime != null)
-              'expires_at': expirationTime.toIso8601String(), // NEW
+              'expires_at': expirationTime.toIso8601String(),
+            // Auto-verify when admin approves if not already verified
+            if (approve && currentVerificationStatus != 'verified')
+              'verification_status': 'verified',
+            if (approve && currentVerificationStatus != 'verified')
+              'verified_by': _userProfile?['id'],
+            if (approve && currentVerificationStatus != 'verified')
+              'verified_at': DateTime.now().toIso8601String(),
           })
           .eq('id', id)
           .select('id')
@@ -18608,8 +19776,6 @@ class _MapScreenState extends State<MapScreen> {
       print('Report update response: $updateResponse');
 
       // Send notification to the reporter
-      final reporterId =
-          hotspotResponse['reported_by'] ?? hotspotResponse['created_by'];
       if (reporterId != null) {
         final crimeName =
             hotspotResponse['crime_type']?['name'] ?? 'Unknown crime';
@@ -18624,6 +19790,7 @@ class _MapScreenState extends State<MapScreen> {
         };
 
         print('Attempting to insert notification: $notificationData');
+        print('Reporter contact: $reporterContact'); // Available for future use
 
         final insertResponse = await Supabase.instance.client
             .from('notifications')
@@ -22003,6 +23170,39 @@ class _MapScreenState extends State<MapScreen> {
         }
       },
     );
+  }
+
+  Future<void> _updateHotspotStatus(int hotspotId, String newStatus) async {
+    try {
+      final updateData = {
+        'active_status': newStatus,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+        'last_updated_by': _userProfile?['id'],
+      };
+
+      // If setting to inactive, clear the expiration time
+      if (newStatus == 'inactive') {
+        updateData['expires_at'] = null;
+      }
+
+      await Supabase.instance.client
+          .from('hotspot')
+          .update(updateData)
+          .eq('id', hotspotId);
+
+      await _loadHotspots();
+      if (mounted) {
+        Navigator.pop(context); // Close the details modal
+        _showSnackBar(
+          'Status updated to ${newStatus == 'active' ? 'Active' : 'Inactive'}',
+        );
+      }
+    } catch (e) {
+      print('Error updating status: $e');
+      if (mounted) {
+        _showSnackBar('Error updating status: $e');
+      }
+    }
   }
 }
 
