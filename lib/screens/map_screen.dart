@@ -43,6 +43,7 @@ import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
 import 'package:zecure/desktop/save_point_desktop.dart';
 import 'package:zecure/services/firebase_service.dart';
+import 'package:zecure/services/heatmap_settings_service.dart';
 import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
@@ -163,7 +164,6 @@ class _MapScreenState extends State<MapScreen> {
   List<Map<String, dynamic>> _nearbyHotspots = [];
   bool _showProximityAlert = false;
   Timer? _proximityCheckTimer;
-  static const double _alertDistanceMeters = 500.0;
 
   // NEW: Heatmap proximity alerts
   List<HeatmapCluster> _nearbyHeatmapClusters = [];
@@ -207,24 +207,58 @@ class _MapScreenState extends State<MapScreen> {
   bool _isCalculatingHeatmap = false;
   Timer? _heatmapUpdateTimer;
 
-  static const double CLUSTER_MERGE_DISTANCE = 500.0;
-  static const int MIN_CRIMES_FOR_HOTSPOT = 3;
-  static const Map<String, int> SEVERITY_TIME_WINDOWS = {
-    'critical': 120, // 90 days for critical crimes
-    'high': 90, // 75 days for high severity
-    'medium': 60, // 60 days for medium
-    'low': 30, // 45 days for low
+  // HEATMAP SETTINGS SERVICE
+  final HeatmapSettingsService _heatmapSettings = HeatmapSettingsService();
+  Timer? _settingsUpdateDebouncer;
+
+  // Dynamic settings (loaded from database)
+  double _clusterMergeDistance = 500.0;
+  int _minCrimesForCluster = 3;
+  double _proximityAlertDistance = 500.0;
+
+  Map<String, int> _severityTimeWindows = {
+    'critical': 120,
+    'high': 90,
+    'medium': 60,
+    'low': 30,
   };
 
-  // Get the maximum time window for initial data loading
-  static int get MAX_TIME_WINDOW =>
-      SEVERITY_TIME_WINDOWS.values.reduce((a, b) => a > b ? a : b);
-
-  static const Map<String, double> SEVERITY_WEIGHTS = {
+  Map<String, double> _severityWeights = {
     'critical': 1.0,
     'high': 0.75,
     'medium': 0.5,
     'low': 0.25,
+  };
+
+  Map<String, Map<String, double>> _severityRadiusConfig = {
+    'critical': {
+      'base': 400.0,
+      'min': 500.0,
+      'max': 2500.0,
+      'countMultiplier': 30.0,
+      'intensityMultiplier': 80.0,
+    },
+    'high': {
+      'base': 300.0,
+      'min': 400.0,
+      'max': 1800.0,
+      'countMultiplier': 25.0,
+      'intensityMultiplier': 60.0,
+    },
+    'medium': {
+      'base': 250.0,
+      'min': 300.0,
+      'max': 1200.0,
+      'countMultiplier': 20.0,
+      'intensityMultiplier': 50.0,
+    },
+    'low': {
+      'base': 200.0,
+      'min': 250.0,
+      'max': 800.0,
+      'countMultiplier': 15.0,
+      'intensityMultiplier': 40.0,
+    },
   };
 
   // PERSISTENT HEATMAP CLUSTERS
@@ -697,6 +731,14 @@ class _MapScreenState extends State<MapScreen> {
       _clustersChannel = null;
     }
 
+    // ⭐ ADD: Remove heatmap settings listener
+    try {
+      _heatmapSettings.removeListener(_onHeatmapSettingsChanged);
+    } catch (e) {
+      print('Error removing heatmap settings listener: $e');
+    }
+
+    // Remove filter listener
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
@@ -826,6 +868,17 @@ class _MapScreenState extends State<MapScreen> {
       _markersLoaded = true;
     });
 
+    await Future.delayed(Duration(milliseconds: 200));
+    if (!mounted) return;
+
+    print('Loading heatmap settings...');
+    await _loadHeatmapSettings();
+    if (!mounted) return;
+
+    print('Setting up heatmap settings real-time...');
+    _heatmapSettings.setupRealtimeSubscription();
+    _heatmapSettings.addListener(_onHeatmapSettingsChanged);
+
     // HEATMAP INITIALIZATION
     await Future.delayed(Duration(milliseconds: 300));
     if (!mounted) return;
@@ -951,7 +1004,17 @@ class _MapScreenState extends State<MapScreen> {
     _savePoints.clear();
     _heatmapUpdateTimer?.cancel();
     _timeUpdateTimer?.cancel();
+    _settingsUpdateDebouncer?.cancel();
 
+    // ⭐ ADD: Remove heatmap settings listener
+    try {
+      _heatmapSettings.removeListener(_onHeatmapSettingsChanged);
+      print('Removed heatmap settings listener');
+    } catch (e) {
+      print('Error removing heatmap settings listener in dispose: $e');
+    }
+
+    // Remove filter listener
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
@@ -1827,7 +1890,7 @@ class _MapScreenState extends State<MapScreen> {
       // final alertDistance = _alertDistances[crimeLevel] ?? 200.0;
 
       // For Option 1, just use the constant:
-      final alertDistance = _alertDistanceMeters;
+      final alertDistance = _proximityAlertDistance;
 
       print(
         'DEBUG: Hotspot ${hotspot['id']} ($crimeTypeName - $crimeLevel) distance: ${distance.toStringAsFixed(1)}m (threshold: ${alertDistance.toStringAsFixed(0)}m)',
@@ -2905,7 +2968,7 @@ class _MapScreenState extends State<MapScreen> {
             .length;
 
         // Check if cluster should be deleted based on minimum crime requirements
-        if (crimeCount == 0 || crimeCount < MIN_CRIMES_FOR_HOTSPOT) {
+        if (crimeCount == 0 || crimeCount < _minCrimesForCluster) {
           // Not enough crimes to maintain cluster - check special cases
           bool shouldDelete = true;
 
@@ -3045,8 +3108,8 @@ class _MapScreenState extends State<MapScreen> {
 
       final reductionFactor = activeCrimes.length / allCrimes.length;
       final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-        SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-        SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['max']!,
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!, // ⭐ CHANGED
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!, // ⭐ CHANGED
       );
 
       await Supabase.instance.client
@@ -3495,8 +3558,8 @@ class _MapScreenState extends State<MapScreen> {
 
       final reductionFactor = activeCrimes.length / allCrimes.length;
       final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-        SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-        SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['max']!,
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!, // ⭐ CHANGED
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!, // ⭐ CHANGED
       );
 
       await Supabase.instance.client
@@ -3929,6 +3992,101 @@ class _MapScreenState extends State<MapScreen> {
       print('Error loading hotspots: $e');
       if (mounted) {
         _showSnackBar('Error loading hotspots: ${e.toString()}');
+      }
+    }
+  }
+
+  // ============================================
+  // LOAD HEATMAP SETTINGS FROM DATABASE
+  // ============================================
+  Future<void> _loadHeatmapSettings() async {
+    try {
+      print('📊 Loading heatmap settings from database...');
+
+      final settings = await _heatmapSettings.getAllSettings();
+
+      if (!mounted) return;
+
+      setState(() {
+        // Distance settings
+        _clusterMergeDistance =
+            settings['cluster_merge_distance']?.toDouble() ?? 500.0;
+        _minCrimesForCluster = settings['min_crimes_for_cluster'] ?? 3;
+        _proximityAlertDistance =
+            settings['proximity_alert_distance']?.toDouble() ?? 500.0;
+
+        // Time windows
+        _severityTimeWindows = {
+          'critical': settings['time_window_critical'] ?? 120,
+          'high': settings['time_window_high'] ?? 90,
+          'medium': settings['time_window_medium'] ?? 60,
+          'low': settings['time_window_low'] ?? 30,
+        };
+
+        // Weights
+        _severityWeights = {
+          'critical': settings['weight_critical']?.toDouble() ?? 1.0,
+          'high': settings['weight_high']?.toDouble() ?? 0.75,
+          'medium': settings['weight_medium']?.toDouble() ?? 0.5,
+          'low': settings['weight_low']?.toDouble() ?? 0.25,
+        };
+
+        // Radius configs
+        _severityRadiusConfig = {
+          'critical': {
+            'base': settings['radius_critical_base']?.toDouble() ?? 400.0,
+            'min': settings['radius_critical_min']?.toDouble() ?? 500.0,
+            'max': settings['radius_critical_max']?.toDouble() ?? 2500.0,
+            'countMultiplier':
+                settings['radius_critical_count_multiplier']?.toDouble() ??
+                30.0,
+            'intensityMultiplier':
+                settings['radius_critical_intensity_multiplier']?.toDouble() ??
+                80.0,
+          },
+          'high': {
+            'base': settings['radius_high_base']?.toDouble() ?? 300.0,
+            'min': settings['radius_high_min']?.toDouble() ?? 400.0,
+            'max': settings['radius_high_max']?.toDouble() ?? 1800.0,
+            'countMultiplier':
+                settings['radius_high_count_multiplier']?.toDouble() ?? 25.0,
+            'intensityMultiplier':
+                settings['radius_high_intensity_multiplier']?.toDouble() ??
+                60.0,
+          },
+          'medium': {
+            'base': settings['radius_medium_base']?.toDouble() ?? 250.0,
+            'min': settings['radius_medium_min']?.toDouble() ?? 300.0,
+            'max': settings['radius_medium_max']?.toDouble() ?? 1200.0,
+            'countMultiplier':
+                settings['radius_medium_count_multiplier']?.toDouble() ?? 20.0,
+            'intensityMultiplier':
+                settings['radius_medium_intensity_multiplier']?.toDouble() ??
+                50.0,
+          },
+          'low': {
+            'base': settings['radius_low_base']?.toDouble() ?? 200.0,
+            'min': settings['radius_low_min']?.toDouble() ?? 250.0,
+            'max': settings['radius_low_max']?.toDouble() ?? 800.0,
+            'countMultiplier':
+                settings['radius_low_count_multiplier']?.toDouble() ?? 15.0,
+            'intensityMultiplier':
+                settings['radius_low_intensity_multiplier']?.toDouble() ?? 40.0,
+          },
+        };
+      });
+
+      print('✅ Heatmap settings loaded successfully');
+      print('   Cluster merge distance: $_clusterMergeDistance m');
+      print('   Min crimes for cluster: $_minCrimesForCluster');
+      print('   Proximity alert distance: $_proximityAlertDistance m');
+    } catch (e) {
+      print('❌ Error loading heatmap settings: $e');
+      // Keep default values already set
+      if (mounted) {
+        setState(() {
+          // Mark as loaded even on error to prevent blocking
+        });
       }
     }
   }
@@ -5259,6 +5417,8 @@ class _MapScreenState extends State<MapScreen> {
                   },
                 ),
 
+                // === TEMPORARILY DISABLED: Report Crime for regular users ===
+                /*
                 if (!_hasAdminPermissions && _userProfile != null)
                   FutureBuilder<int>(
                     future: _getDailyReportCount(),
@@ -5290,6 +5450,7 @@ class _MapScreenState extends State<MapScreen> {
                       );
                     },
                   ),
+                */
                 if (_hasAdminPermissions)
                   ListTile(
                     leading: const Icon(Icons.add_location_alt),
@@ -6919,7 +7080,7 @@ class _MapScreenState extends State<MapScreen> {
         // Calculate danger score based on proximity and severity
         final proximityFactor = 1.0 - (distanceToCenter / dangerZoneRadius);
         final severityWeight =
-            SEVERITY_WEIGHTS[cluster.dominantSeverity] ?? 0.25;
+            _severityWeights[cluster.dominantSeverity] ?? 0.25;
         final dangerScore =
             proximityFactor * severityWeight * cluster.intensity;
 
@@ -20007,7 +20168,7 @@ class _MapScreenState extends State<MapScreen> {
 
       // Otherwise, use severity-based time windows (your original logic)
       final level = crime['crime_type']['level'] ?? 'low';
-      final daysWindow = SEVERITY_TIME_WINDOWS[level] ?? 30;
+      final daysWindow = _severityTimeWindows[level] ?? 30;
       final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
 
       return crimeTime.isAfter(cutoffDate);
@@ -20045,12 +20206,18 @@ class _MapScreenState extends State<MapScreen> {
         listen: false,
       );
 
-      // Use filter dates if available, otherwise use default time window
+      // Get the maximum time window
+      final maxTimeWindow = _severityTimeWindows.values.reduce(
+        (a, b) => a > b ? a : b,
+      ); // ⭐ CHANGED
+
       DateTime cutoffDate;
       if (filterService.crimeStartDate != null) {
         cutoffDate = filterService.crimeStartDate!;
       } else {
-        cutoffDate = DateTime.now().subtract(Duration(days: MAX_TIME_WINDOW));
+        cutoffDate = DateTime.now().subtract(
+          Duration(days: maxTimeWindow),
+        ); // ⭐ CHANGED
       }
 
       // Build query
@@ -20307,7 +20474,7 @@ class _MapScreenState extends State<MapScreen> {
         );
         final distance = _calculateDistance(clusterCenter, crimePoint);
 
-        if (distance <= CLUSTER_MERGE_DISTANCE) {
+        if (distance <= _clusterMergeDistance) {
           await _addCrimeToExistingCluster(cluster['id'], crime);
           foundCluster = true;
           break;
@@ -20417,8 +20584,8 @@ class _MapScreenState extends State<MapScreen> {
 
       final reductionFactor = activeCrimeCount / crimes.length;
       final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-        SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-        cluster['current_radius'].toDouble(),
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!, // ⭐ CHANGED
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!, // ⭐ CHANGED
       );
 
       await Supabase.instance.client
@@ -20433,6 +20600,27 @@ class _MapScreenState extends State<MapScreen> {
           .eq('id', clusterId);
     } catch (e) {
       print('Error updating single cluster: $e');
+    }
+  }
+
+  // ============================================
+  // REFRESH SETTINGS (call after admin updates)
+  // ============================================
+  Future<void> refreshHeatmapSettings() async {
+    _heatmapSettings.clearCache();
+    await _loadHeatmapSettings();
+
+    // Recalculate heatmap with new settings
+    await _calculateHeatmap();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Heatmap settings updated successfully'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -20592,16 +20780,13 @@ class _MapScreenState extends State<MapScreen> {
         );
 
         final distance = _calculateDistance(primaryPoint, crimePoint);
-        return distance <= CLUSTER_MERGE_DISTANCE;
+        return distance <= _clusterMergeDistance; // ⭐ CHANGED
       }).toList();
 
-      // ⭐ CHANGED: Count active crimes BUT use ALL crimes for cluster requirements
       final activeCrimes = nearbyCrimes
           .where((c) => _isWithinHeatmapTimeWindow(c))
           .toList();
 
-      // ⭐ NEW: Check minimum requirements based on ALL nearby crimes (not just active)
-      // This allows historical clusters to form
       final criticalCount = nearbyCrimes
           .where((c) => c['crime_type']['level'] == 'critical')
           .length;
@@ -20609,10 +20794,10 @@ class _MapScreenState extends State<MapScreen> {
           .where((c) => c['crime_type']['level'] == 'high')
           .length;
 
-      // Check if meets minimum requirements to form cluster
       bool canFormCluster = false;
 
-      if (nearbyCrimes.length >= MIN_CRIMES_FOR_HOTSPOT) {
+      if (nearbyCrimes.length >= _minCrimesForCluster) {
+        // ⭐ CHANGED
         canFormCluster = true;
       } else if (criticalCount >= 1 && nearbyCrimes.length >= 2) {
         canFormCluster = true;
@@ -20697,7 +20882,7 @@ class _MapScreenState extends State<MapScreen> {
           .insert(crimeLinks);
 
       print(
-        '✅ Created ${clusterStatus} cluster $clusterId with ${nearbyCrimes.length} crimes (${activeCrimes.length} active)',
+        '✅ Created $clusterStatus cluster $clusterId with ${nearbyCrimes.length} crimes (${activeCrimes.length} active)',
       );
     } catch (e) {
       print('Error creating new cluster: $e');
@@ -20729,7 +20914,7 @@ class _MapScreenState extends State<MapScreen> {
       final coords = crime['location']['coordinates'];
       final point = LatLng(coords[1].toDouble(), coords[0].toDouble());
       final level = crime['crime_type']['level'] ?? 'low';
-      final weight = SEVERITY_WEIGHTS[level] ?? 0.25;
+      final weight = _severityWeights[level] ?? 0.25;
 
       totalLat += point.latitude * weight;
       totalLng += point.longitude * weight;
@@ -21690,6 +21875,134 @@ class _MapScreenState extends State<MapScreen> {
     });
 
     print('✅ Chat subscription setup complete');
+  }
+
+  // ============================================
+  // ⭐ UPDATED: Handle real-time settings changes with debouncing
+  // ============================================
+  void _onHeatmapSettingsChanged(Map<String, dynamic> newSettings) async {
+    if (!mounted) return;
+
+    print('🔄 Heatmap settings changed, debouncing update...');
+
+    // ⭐ Cancel previous timer if exists
+    _settingsUpdateDebouncer?.cancel();
+
+    // ⭐ Wait for 1 second of no updates before processing
+    _settingsUpdateDebouncer = Timer(
+      const Duration(milliseconds: 1000),
+      () async {
+        if (!mounted) return;
+
+        print('🔄 Processing batched settings update...');
+
+        setState(() {
+          // Update all dynamic settings
+          _clusterMergeDistance =
+              newSettings['cluster_merge_distance']?.toDouble() ?? 500.0;
+          _minCrimesForCluster = newSettings['min_crimes_for_cluster'] ?? 3;
+          _proximityAlertDistance =
+              newSettings['proximity_alert_distance']?.toDouble() ?? 500.0;
+
+          _severityTimeWindows = {
+            'critical': newSettings['time_window_critical'] ?? 120,
+            'high': newSettings['time_window_high'] ?? 90,
+            'medium': newSettings['time_window_medium'] ?? 60,
+            'low': newSettings['time_window_low'] ?? 30,
+          };
+
+          _severityWeights = {
+            'critical': newSettings['weight_critical']?.toDouble() ?? 1.0,
+            'high': newSettings['weight_high']?.toDouble() ?? 0.75,
+            'medium': newSettings['weight_medium']?.toDouble() ?? 0.5,
+            'low': newSettings['weight_low']?.toDouble() ?? 0.25,
+          };
+
+          _severityRadiusConfig = {
+            'critical': {
+              'base': newSettings['radius_critical_base']?.toDouble() ?? 400.0,
+              'min': newSettings['radius_critical_min']?.toDouble() ?? 500.0,
+              'max': newSettings['radius_critical_max']?.toDouble() ?? 2500.0,
+              'countMultiplier':
+                  newSettings['radius_critical_count_multiplier']?.toDouble() ??
+                  30.0,
+              'intensityMultiplier':
+                  newSettings['radius_critical_intensity_multiplier']
+                      ?.toDouble() ??
+                  80.0,
+            },
+            'high': {
+              'base': newSettings['radius_high_base']?.toDouble() ?? 300.0,
+              'min': newSettings['radius_high_min']?.toDouble() ?? 400.0,
+              'max': newSettings['radius_high_max']?.toDouble() ?? 1800.0,
+              'countMultiplier':
+                  newSettings['radius_high_count_multiplier']?.toDouble() ??
+                  25.0,
+              'intensityMultiplier':
+                  newSettings['radius_high_intensity_multiplier']?.toDouble() ??
+                  60.0,
+            },
+            'medium': {
+              'base': newSettings['radius_medium_base']?.toDouble() ?? 250.0,
+              'min': newSettings['radius_medium_min']?.toDouble() ?? 300.0,
+              'max': newSettings['radius_medium_max']?.toDouble() ?? 1200.0,
+              'countMultiplier':
+                  newSettings['radius_medium_count_multiplier']?.toDouble() ??
+                  20.0,
+              'intensityMultiplier':
+                  newSettings['radius_medium_intensity_multiplier']
+                      ?.toDouble() ??
+                  50.0,
+            },
+            'low': {
+              'base': newSettings['radius_low_base']?.toDouble() ?? 200.0,
+              'min': newSettings['radius_low_min']?.toDouble() ?? 250.0,
+              'max': newSettings['radius_low_max']?.toDouble() ?? 800.0,
+              'countMultiplier':
+                  newSettings['radius_low_count_multiplier']?.toDouble() ??
+                  15.0,
+              'intensityMultiplier':
+                  newSettings['radius_low_intensity_multiplier']?.toDouble() ??
+                  40.0,
+            },
+          };
+        });
+
+        print('✅ Settings updated in memory');
+        print('   Cluster merge distance: $_clusterMergeDistance m');
+        print('   Min crimes for cluster: $_minCrimesForCluster');
+        print('   Proximity alert distance: $_proximityAlertDistance m');
+
+        // Recalculate heatmap with new settings
+        await _calculateHeatmap();
+
+        // ⭐ Show notification ONCE after all updates
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.settings, color: Colors.white, size: 20),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Heatmap settings updated by administrator',
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF6366F1),
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          );
+        }
+      },
+    );
   }
 }
 

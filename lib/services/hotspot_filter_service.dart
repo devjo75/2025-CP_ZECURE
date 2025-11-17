@@ -476,8 +476,9 @@ class HotspotFilterService with ChangeNotifier {
       final typeName = safeSpotType['name']?.toString().toLowerCase() ?? '';
 
       if (typeName.contains('police') && !_showPoliceStations) return false;
-      if (typeName.contains('government') && !_showGovernmentBuildings)
+      if (typeName.contains('government') && !_showGovernmentBuildings) {
         return false;
+      }
       if (typeName.contains('hospital') && !_showHospitals) return false;
       if (typeName.contains('school') && !_showSchools) return false;
       if (typeName.contains('mall') && !_showShoppingMalls) return false;
@@ -485,10 +486,12 @@ class HotspotFilterService with ChangeNotifier {
       if (typeName.contains('security') && !_showSecurityCameras) return false;
       if (typeName.contains('fire') && !_showFireStations) return false;
       if ((typeName.contains('church') || typeName.contains('religious')) &&
-          !_showReligiousBuildings)
+          !_showReligiousBuildings) {
         return false;
-      if (typeName.contains('community') && !_showCommunityCenters)
+      }
+      if (typeName.contains('community') && !_showCommunityCenters) {
         return false;
+      }
     }
 
     return true;

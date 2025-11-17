@@ -11,6 +11,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:zecure/pdf/pdt_export_modal.dart';
+import 'package:zecure/screens/crime_types_page.dart';
+import 'package:zecure/screens/heatmap_settings_page.dart';
 import '../services/search_filter_service.dart';
 
 void main() async {
@@ -2110,6 +2112,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         return 'Safe Spots';
       case 'officers':
         return 'Officer Management';
+      case 'crime_types':
+        return _isAdmin ? 'Crime Types' : 'Access Denied';
+      case 'heatmap_settings':
+        return _isAdmin ? 'Heatmap Settings' : 'Access Denied';
       default:
         return 'System Dashboard';
     }
@@ -2125,6 +2131,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         return 'Manage safe spot reports';
       case 'officers':
         return 'Manage system officers';
+      case 'crime_types':
+        return _isAdmin
+            ? 'Manage crime type categories'
+            : 'Admin access required';
+      case 'heatmap_settings':
+        return _isAdmin
+            ? 'Configure heatmap calculation parameters'
+            : 'Admin access required';
       default:
         return 'Crime Analytics & Reports';
     }
@@ -2311,6 +2325,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 isActive: _currentPage == 'safespots',
                                 onTap: () => _navigateToPage('safespots'),
                               ),
+
+                              // Only show Crime Types for admins
+                              if (_isAdmin) const SizedBox(height: 4),
+                              if (_isAdmin)
+                                _buildNavItem(
+                                  icon: Icons.category_rounded,
+                                  title: 'Crime Types',
+                                  isActive: _currentPage == 'crime_types',
+                                  onTap: () => _navigateToPage('crime_types'),
+                                ),
+
+                              if (_isAdmin) const SizedBox(height: 4),
+                              if (_isAdmin)
+                                _buildNavItem(
+                                  icon: Icons.map_outlined,
+                                  title: 'Heatmap Settings',
+                                  isActive: _currentPage == 'heatmap_settings',
+                                  onTap: () =>
+                                      _navigateToPage('heatmap_settings'),
+                                ),
 
                               // Extra space to push content up when scrolling
                               const SizedBox(height: 100),
@@ -2674,10 +2708,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         return _buildUsersPage();
       case 'reports':
         return _buildReportsPage();
-      case 'safespots': // ADD THIS CASE
+      case 'safespots':
         return _buildSafeSpotsPage();
       case 'officers':
         return _buildOfficersPage();
+      case 'crime_types':
+        // Only admins can access crime types
+        if (!_isAdmin) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _navigateToPage('dashboard');
+          });
+          return const Center(child: Text('Access Denied'));
+        }
+        return const CrimeTypesPage();
+      case 'heatmap_settings': // ⭐ ADD THIS
+        // Only admins can access heatmap settings
+        if (!_isAdmin) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _navigateToPage('dashboard');
+          });
+          return const Center(child: Text('Access Denied'));
+        }
+        return const HeatmapSettingsPage();
       default:
         return _isLoading
             ? _buildLoadingState()
