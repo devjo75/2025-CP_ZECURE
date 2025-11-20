@@ -532,7 +532,7 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                         ),
                         buildFilterToggle(
                           context,
-                          'Inactive (last 60 days)',
+                          'Inactive (last 30 days)',
                           Icons.pause_circle_outline,
                           Colors.grey,
                           filterService.showInactive,

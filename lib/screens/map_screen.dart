@@ -195,7 +195,7 @@ class _MapScreenState extends State<MapScreen> {
 
   //HOTSPOT MARKER LIMIT ON THE MAP
   bool _markersLoaded = false;
-  int _maxMarkersToShow = 50; // Progressive loading
+  int _maxMarkersToShow = 77; // Progressive loading
   Timer? _deferredLoadTimer;
 
   // HOTSPOT
@@ -318,12 +318,28 @@ class _MapScreenState extends State<MapScreen> {
         filterService.crimeStartDate != null ||
         filterService.crimeEndDate != null;
 
+    // Calculate 30-day cutoff date (for incident time, not report time)
+    final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
+
     if (_currentZoom < 8.0) {
       return _hotspots
           .where((h) {
             final status = h['status'] ?? 'approved';
             final activeStatus = h['active_status'] ?? 'active';
-            return status == 'approved' && activeStatus == 'active';
+
+            // Show only approved and active hotspots
+            if (status != 'approved' || activeStatus != 'active') return false;
+
+            // Filter by 30-day rule unless custom date range is set
+            if (!hasCustomDateRange) {
+              final incidentTime = DateTime.tryParse(h['time'] ?? '');
+              if (incidentTime == null ||
+                  incidentTime.isBefore(thirtyDaysAgo)) {
+                return false;
+              }
+            }
+
+            return true;
           })
           .take(100)
           .toList();
@@ -338,8 +354,25 @@ class _MapScreenState extends State<MapScreen> {
                 currentUserId != null &&
                 (currentUserId == createdBy || currentUserId == reportedBy);
 
-            return (status == 'approved' && activeStatus == 'active') ||
-                (status == 'pending' && (_hasAdminPermissions || isOwnHotspot));
+            // For pending: only show to admin/officer or owner
+            if (status == 'pending') {
+              return _hasAdminPermissions || isOwnHotspot;
+            }
+
+            // Show approved active hotspots
+            if (status == 'approved' && activeStatus == 'active') {
+              // Filter by 30-day rule unless custom date range is set
+              if (!hasCustomDateRange) {
+                final incidentTime = DateTime.tryParse(h['time'] ?? '');
+                if (incidentTime == null ||
+                    incidentTime.isBefore(thirtyDaysAgo)) {
+                  return false;
+                }
+              }
+              return true;
+            }
+
+            return false;
           })
           .take(50)
           .toList();
@@ -353,15 +386,38 @@ class _MapScreenState extends State<MapScreen> {
             final isOwnHotspot =
                 currentUserId != null &&
                 (currentUserId == createdBy || currentUserId == reportedBy);
+            final incidentTime = DateTime.tryParse(h['time'] ?? '');
+            final isRecent =
+                incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
 
-            return _hasAdminPermissions ||
-                (status == 'approved' && activeStatus == 'active') ||
-                (status == 'pending' && (_hasAdminPermissions || isOwnHotspot));
+            // Admin sees everything
+            if (_hasAdminPermissions) return true;
+
+            // For pending: only show to owner
+            if (status == 'pending') {
+              return isOwnHotspot;
+            }
+
+            // For rejected: only show to owner
+            if (status == 'rejected') {
+              return isOwnHotspot;
+            }
+
+            // For approved active: show to everyone if recent (or custom date range)
+            if (status == 'approved' && activeStatus == 'active') {
+              return hasCustomDateRange || isRecent;
+            }
+
+            // For approved inactive: show to everyone IF within 30 days (or custom date range)
+            if (status == 'approved' && activeStatus == 'inactive') {
+              return hasCustomDateRange || isRecent;
+            }
+
+            return false;
           })
           .take(_maxMarkersToShow)
           .toList();
     } else if (_currentZoom < 15.5) {
-      // Below zoom 16: Only show approved+active and pending (NO rejected or inactive)
       return _hotspots
           .where((h) {
             final status = h['status'] ?? 'approved';
@@ -371,43 +427,82 @@ class _MapScreenState extends State<MapScreen> {
             final isOwnHotspot =
                 currentUserId != null &&
                 (currentUserId == createdBy || currentUserId == reportedBy);
+            final incidentTime = DateTime.tryParse(h['time'] ?? '');
+            final isRecent =
+                incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
 
-            // Show approved+active OR pending (for admins OR own reports)
-            return _hasAdminPermissions ||
-                (status == 'approved' && activeStatus == 'active') ||
-                (status == 'pending' && (_hasAdminPermissions || isOwnHotspot));
+            // Admin sees everything
+            if (_hasAdminPermissions) return true;
+
+            // For pending: only show to owner
+            if (status == 'pending') {
+              return isOwnHotspot;
+            }
+
+            // For rejected: only show to owner
+            if (status == 'rejected') {
+              return isOwnHotspot;
+            }
+
+            // For approved active: show to everyone if recent (or custom date range)
+            if (status == 'approved' && activeStatus == 'active') {
+              return hasCustomDateRange || isRecent;
+            }
+
+            // For approved inactive: show to everyone IF within 30 days (or custom date range)
+            if (status == 'approved' && activeStatus == 'inactive') {
+              return hasCustomDateRange || isRecent;
+            }
+
+            return false;
           })
           .take(_maxMarkersToShow)
           .toList();
     } else {
       // ✅ Zoom 16+: Show ALL including rejected, inactive, and OLD crimes
-      return _hotspots
-          .where((h) {
-            final status = h['status'] ?? 'approved';
-            final activeStatus = h['active_status'] ?? 'active';
-            final createdBy = h['created_by'];
-            final reportedBy = h['reported_by'];
-            final isOwnHotspot =
-                currentUserId != null &&
-                (currentUserId == createdBy || currentUserId == reportedBy);
+      return _hotspots.where((h) {
+        final status = h['status'] ?? 'approved';
+        final activeStatus = h['active_status'] ?? 'active';
+        final createdBy = h['created_by'];
+        final reportedBy = h['reported_by'];
+        final isOwnHotspot =
+            currentUserId != null &&
+            (currentUserId == createdBy || currentUserId == reportedBy);
+        final createdAt = DateTime.tryParse(h['created_at'] ?? '');
+        final isRecent = createdAt != null && createdAt.isAfter(thirtyDaysAgo);
 
-            // ✅ CRITICAL: If date filter is active, include ALL approved crimes (active or inactive)
-            if (hasCustomDateRange && status == 'approved') {
-              return true;
-            }
+        // ✅ CRITICAL: If date filter is active, include ALL approved crimes (active or inactive)
+        if (hasCustomDateRange && status == 'approved') {
+          return true;
+        }
 
-            // Default zoom 16+ logic (show everything for admins or own reports)
-            return _hasAdminPermissions ||
-                status == 'approved' ||
-                status == 'pending' ||
-                (status == 'rejected' && isOwnHotspot) ||
-                activeStatus == 'active' ||
-                (activeStatus == 'inactive' && isOwnHotspot);
-          })
-          .take(
-            hasCustomDateRange ? 2000 : _maxMarkersToShow * 2,
-          ) // ✅ Increase limit only when date filtering
-          .toList();
+        // Admin sees everything
+        if (_hasAdminPermissions) {
+          return true;
+        }
+
+        // For pending: only show to owner
+        if (status == 'pending') {
+          return isOwnHotspot;
+        }
+
+        // For rejected: only show to owner
+        if (status == 'rejected') {
+          return isOwnHotspot;
+        }
+
+        // For approved active: show to everyone if recent (or custom date range)
+        if (status == 'approved' && activeStatus == 'active') {
+          return hasCustomDateRange || isRecent;
+        }
+
+        // For approved inactive: show to everyone IF within 30 days (or custom date range)
+        if (status == 'approved' && activeStatus == 'inactive') {
+          return hasCustomDateRange || isRecent;
+        }
+
+        return false;
+      }).toList(); // ✅ REMOVED .take() - No limit on markers
     }
   }
 
@@ -566,22 +661,27 @@ class _MapScreenState extends State<MapScreen> {
       _deferredInitialization();
     });
 
+    // ✅ Setup filter listeners (including date filter for heatmap)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         final filterService = Provider.of<HotspotFilterService>(
           context,
           listen: false,
         );
+
+        // General filter listener (existing)
         filterService.addListener(_onFilterChanged);
+
+        // ✅ NEW: Date filter listener specifically for heatmap
+        filterService.addListener(_onDateFilterChanged);
       }
     });
   }
 
-  // UPDATED: Handle filter changes
+  // EXISTING: Handle general filter changes
   void _onFilterChanged() {
     if (!mounted) return;
 
-    // Don't need to store filterService since we're not using it
     print('🔄 Filter changed - reloading heatmap data...');
 
     _loadHeatmapData().then((_) {
@@ -589,6 +689,25 @@ class _MapScreenState extends State<MapScreen> {
         _calculateHeatmap();
       }
     });
+  }
+
+  // ✅ NEW: Handle date filter changes specifically
+  void _onDateFilterChanged() async {
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: false,
+    );
+
+    final hasCustomDateRange =
+        filterService.crimeStartDate != null ||
+        filterService.crimeEndDate != null;
+
+    print('📅 Date filter changed. Custom range: $hasCustomDateRange');
+
+    // Reload everything when date filter changes
+    await _loadHeatmapData();
+    await _loadPersistentClusters();
+    await _calculateHeatmap();
   }
 
   bool _authListenerSetup = false; // Prevent duplicate listeners
@@ -1011,7 +1130,7 @@ class _MapScreenState extends State<MapScreen> {
     _timeUpdateTimer?.cancel();
     _settingsUpdateDebouncer?.cancel();
 
-    // ⭐ ADD: Remove heatmap settings listener
+    // ⭐ EXISTING: Remove heatmap settings listener
     try {
       _heatmapSettings.removeListener(_onHeatmapSettingsChanged);
       print('Removed heatmap settings listener');
@@ -1019,15 +1138,22 @@ class _MapScreenState extends State<MapScreen> {
       print('Error removing heatmap settings listener in dispose: $e');
     }
 
-    // Remove filter listener
+    // ✅ UPDATED: Remove both filter listeners
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
         listen: false,
       );
+
+      // Remove general filter listener
       filterService.removeListener(_onFilterChanged);
+
+      // ✅ NEW: Remove date filter listener
+      filterService.removeListener(_onDateFilterChanged);
+
+      print('Removed filter listeners');
     } catch (e) {
-      print('Error removing filter listener in dispose: $e');
+      print('Error removing filter listeners in dispose: $e');
     }
 
     super.dispose();
@@ -3227,6 +3353,45 @@ class _MapScreenState extends State<MapScreen> {
 
       final formattedCrime = _formatCrimeForHeatmap(response);
 
+      // ✅ Check if crime falls within current date filter (if active)
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
+
+      final hasCustomDateRange =
+          filterService.crimeStartDate != null ||
+          filterService.crimeEndDate != null;
+
+      bool shouldAddToHeatmap = true;
+
+      // If date filter is active, check if crime is within range
+      if (hasCustomDateRange) {
+        final crimeTime = DateTime.tryParse(formattedCrime['time'] ?? '');
+
+        if (crimeTime != null) {
+          final isAfterStart =
+              filterService.crimeStartDate == null ||
+              crimeTime.isAfter(filterService.crimeStartDate!) ||
+              crimeTime.isAtSameMomentAs(filterService.crimeStartDate!);
+
+          final isBeforeEnd =
+              filterService.crimeEndDate == null ||
+              crimeTime.isBefore(filterService.crimeEndDate!) ||
+              crimeTime.isAtSameMomentAs(filterService.crimeEndDate!);
+
+          shouldAddToHeatmap = isAfterStart && isBeforeEnd;
+        }
+      }
+
+      if (!shouldAddToHeatmap) {
+        print(
+          '⚠️ Crime ${newCrime['id']} outside current date filter range - not adding to heatmap display',
+        );
+        // Still process it for database, but don't show in current view
+        return;
+      }
+
       // Double-check it wasn't added during the async operation
       final stillNotInHeatmap = !_heatmapCrimes.any(
         (c) => c['id'] == newCrime['id'],
@@ -3238,13 +3403,14 @@ class _MapScreenState extends State<MapScreen> {
         });
 
         print(
-          '✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']})',
+          '✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']}) '
+          '${hasCustomDateRange ? "[Historical Mode]" : "[Live Mode]"}',
         );
       } else {
         print('⚠️ Crime was added to heatmap during fetch, skipping');
       }
 
-      // Trigger cluster processing
+      // ✅ Trigger cluster processing (will create cluster even in historical mode)
       _scheduleHeatmapUpdate();
     } catch (e) {
       print('Error fetching complete crime data for heatmap insert: $e');
@@ -3942,8 +4108,27 @@ class _MapScreenState extends State<MapScreen> {
       return true;
     }
 
-    // Public hotspots (approved and active)
-    return status == 'approved' && activeStatus == 'active';
+    // Only show approved hotspots to public
+    if (status != 'approved') {
+      return false;
+    }
+
+    // For approved hotspots: show active ones always
+    if (activeStatus == 'active') {
+      return true;
+    }
+
+    // For approved inactive: show only if within 30 days (based on incident time)
+    if (activeStatus == 'inactive') {
+      final incidentTime = DateTime.tryParse(hotspot['time'] ?? '');
+      if (incidentTime != null) {
+        final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
+        return incidentTime.isAfter(thirtyDaysAgo);
+      }
+      return false; // If no incident time, don't show
+    }
+
+    return false;
   }
 
   Future<void> _cleanupOrphanedNotifications() async {
@@ -3972,9 +4157,9 @@ class _MapScreenState extends State<MapScreen> {
     try {
       // Start building the query with proper crime type data
       final query = Supabase.instance.client.from('hotspot').select('''
-          *,
-          crime_type: type_id (id, name, level, category, description)
-        ''');
+        *,
+        crime_type: type_id (id, name, level, category, description)
+      ''');
 
       // Apply filters based on admin/officer status
       PostgrestFilterBuilder filteredQuery;
@@ -3982,20 +4167,31 @@ class _MapScreenState extends State<MapScreen> {
         print('Filtering hotspots for non-admin/officer user');
         final currentUserId = _userProfile?['id'];
 
+        // Calculate 30 days ago (based on incident time, not report time)
+        final thirtyDaysAgo = DateTime.now()
+            .subtract(const Duration(days: 30))
+            .toUtc()
+            .toIso8601String();
+
         if (currentUserId != null) {
           // For non-admins/officers, show:
           // 1. All approved active hotspots
-          // 2. User's own reports (regardless of status and active_status)
+          // 2. Approved inactive hotspots created within last 30 days
+          // 3. User's own reports (regardless of status and active_status)
           filteredQuery = query.or(
             'and(active_status.eq.active,status.eq.approved),'
+            'and(active_status.eq.inactive,status.eq.approved,created_at.gte.$thirtyDaysAgo),'
             'created_by.eq.$currentUserId,'
             'reported_by.eq.$currentUserId',
           );
         } else {
-          // If user ID is null, only show approved active hotspots
-          filteredQuery = query
-              .eq('active_status', 'active')
-              .eq('status', 'approved');
+          // If user ID is null, show:
+          // 1. Approved active hotspots
+          // 2. Approved inactive hotspots within 30 days
+          filteredQuery = query.or(
+            'and(active_status.eq.active,status.eq.approved),'
+            'and(active_status.eq.inactive,status.eq.approved,created_at.gte.$thirtyDaysAgo)',
+          );
         }
       } else {
         print('Admin/Officer user - loading all hotspots');
@@ -4031,6 +4227,13 @@ class _MapScreenState extends State<MapScreen> {
                 .where((h) => h['active_status'] == 'inactive')
                 .length;
             print('Inactive hotspots count: $inactiveCount');
+          } else {
+            final inactiveCount = _hotspots
+                .where((h) => h['active_status'] == 'inactive')
+                .length;
+            print(
+              'Approved inactive hotspots (within 30 days) visible to public: $inactiveCount',
+            );
           }
         });
       }
@@ -14520,6 +14723,79 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Widget _buildHistoricalModeIndicator() {
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: true,
+    );
+
+    final hasCustomDateRange =
+        filterService.crimeStartDate != null ||
+        filterService.crimeEndDate != null;
+
+    // ✅ Check screen width - only show on desktop/tablets (600px+)
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isDesktop = screenWidth >= 600; // Adjust breakpoint as needed
+
+    // ✅ Only show if: desktop screen AND date filter is active AND heatmap is enabled AND there's at least 1 cluster
+    if (!isDesktop ||
+        !hasCustomDateRange ||
+        !_showHeatmap ||
+        _heatmapClusters.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned(
+      top: 100,
+      left: 16,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.deepPurple.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.history, color: Colors.white, size: 16),
+            const SizedBox(width: 6),
+            Text(
+              'Historical Heatmap Mode',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '${_heatmapClusters.length} clusters',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // MAP MAP MAP
 
   Widget _buildMap() {
@@ -14744,29 +15020,60 @@ class _MapScreenState extends State<MapScreen> {
                 // FIXED: Hotspots layer with stable markers and labels
                 Consumer<HotspotFilterService>(
                   builder: (context, filterService, child) {
+                    final thirtyDaysAgo = DateTime.now().subtract(
+                      const Duration(days: 30),
+                    );
+
                     final visibleHotspots = _visibleHotspots.where((hotspot) {
                       final currentUserId = _userProfile?['id'];
                       final hasAdminPermissions = _hasAdminPermissions;
                       final status = hotspot['status'] ?? 'approved';
-                      final activeStatus = hotspot['active_status'] ?? 'active';
                       final createdBy = hotspot['created_by'];
                       final reportedBy = hotspot['reported_by'];
                       final isOwnHotspot =
                           currentUserId != null &&
                           (currentUserId == createdBy ||
                               currentUserId == reportedBy);
+                      final incidentTime = DateTime.tryParse(
+                        hotspot['time'] ?? '',
+                      );
+                      final isRecent =
+                          incidentTime != null &&
+                          incidentTime.isAfter(thirtyDaysAgo);
 
+                      // First check the filter service
                       if (!filterService.shouldShowHotspot(hotspot)) {
                         return false;
                       }
 
+                      // Admin sees everything that passes filter service
                       if (hasAdminPermissions) return true;
 
-                      if (status == 'approved' && activeStatus == 'active') {
-                        return true;
+                      // For pending: only show to owner
+                      if (status == 'pending') {
+                        return isOwnHotspot;
                       }
 
-                      if (isOwnHotspot && currentUserId != null) return true;
+                      // For rejected: only show to owner
+                      if (status == 'rejected') {
+                        return isOwnHotspot;
+                      }
+
+                      // For approved hotspots (both active and inactive)
+                      if (status == 'approved') {
+                        // Check if custom date range is set
+                        final hasCustomDateRange =
+                            filterService.crimeStartDate != null ||
+                            filterService.crimeEndDate != null;
+
+                        // If custom date range, show all approved (handled by filter service)
+                        if (hasCustomDateRange) {
+                          return true;
+                        }
+
+                        // Otherwise, show if within 30 days (both active and inactive)
+                        return isRecent;
+                      }
 
                       return false;
                     }).toList();
@@ -14946,6 +15253,8 @@ class _MapScreenState extends State<MapScreen> {
                     );
                   },
                 ),
+
+                _buildHistoricalModeIndicator(),
 
                 // Safe Spots Marker Layer
                 if (_showSafeSpots)
@@ -21816,7 +22125,7 @@ class _MapScreenState extends State<MapScreen> {
       );
       final crimeTime = parseStoredDateTime(crime['time']);
 
-      // If filter dates are set, use those instead of severity-based windows
+      // ✅ If filter dates are set, use those instead of severity-based windows
       if (filterService.crimeStartDate != null ||
           filterService.crimeEndDate != null) {
         bool isAfterStart =
@@ -21832,7 +22141,7 @@ class _MapScreenState extends State<MapScreen> {
         return isAfterStart && isBeforeEnd;
       }
 
-      // Otherwise, use severity-based time windows (your original logic)
+      // ✅ Otherwise, use severity-based time windows (live mode)
       final level = crime['crime_type']['level'] ?? 'low';
       final daysWindow = _severityTimeWindows[level] ?? 30;
       final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
@@ -21872,18 +22181,25 @@ class _MapScreenState extends State<MapScreen> {
         listen: false,
       );
 
-      // Get the maximum time window
-      final maxTimeWindow = _severityTimeWindows.values.reduce(
-        (a, b) => a > b ? a : b,
-      ); // ⭐ CHANGED
+      final hasCustomDateRange =
+          filterService.crimeStartDate != null ||
+          filterService.crimeEndDate != null;
 
       DateTime cutoffDate;
-      if (filterService.crimeStartDate != null) {
-        cutoffDate = filterService.crimeStartDate!;
+
+      if (hasCustomDateRange) {
+        // ✅ Use custom start date if provided
+        cutoffDate =
+            filterService.crimeStartDate ??
+            DateTime(2000); // Very old date as fallback
+        print('📅 Loading crimes from custom date: $cutoffDate');
       } else {
-        cutoffDate = DateTime.now().subtract(
-          Duration(days: maxTimeWindow),
-        ); // ⭐ CHANGED
+        // ✅ Use severity-based time window for live mode
+        final maxTimeWindow = _severityTimeWindows.values.reduce(
+          (a, b) => a > b ? a : b,
+        );
+        cutoffDate = DateTime.now().subtract(Duration(days: maxTimeWindow));
+        print('🔴 Loading crimes from last $maxTimeWindow days');
       }
 
       // Build query
@@ -21921,7 +22237,8 @@ class _MapScreenState extends State<MapScreen> {
       });
 
       print(
-        'Loaded ${_heatmapCrimes.length} crimes for heatmap (filtered range)',
+        '✅ Loaded ${_heatmapCrimes.length} crimes for heatmap '
+        '${hasCustomDateRange ? "(historical range)" : "(recent)"}',
       );
     } catch (e) {
       print('Error loading heatmap data: $e');
@@ -21933,10 +22250,18 @@ class _MapScreenState extends State<MapScreen> {
   // ============================================
   Future<void> _loadPersistentClusters() async {
     try {
-      // Fetch all active clusters with their associated crimes
-      final clustersResponse = await Supabase.instance.client
-          .from('heatmap_clusters')
-          .select('''
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
+
+      // Check if custom date range is set
+      final hasCustomDateRange =
+          filterService.crimeStartDate != null ||
+          filterService.crimeEndDate != null;
+
+      // Build base query
+      var query = Supabase.instance.client.from('heatmap_clusters').select('''
           *,
           heatmap_cluster_crimes!inner(
             hotspot_id,
@@ -21944,9 +22269,31 @@ class _MapScreenState extends State<MapScreen> {
             was_renewal_trigger,
             added_at
           )
-        ''')
-          .eq('status', 'active');
+        ''');
 
+      if (hasCustomDateRange) {
+        // ✅ SHOW HISTORICAL CLUSTERS: Include both active AND inactive clusters
+        // Filter clusters that overlap with the selected date range
+
+        if (filterService.crimeStartDate != null) {
+          // Show clusters that were created before or during the date range
+          query = query.or(
+            'status.eq.active,'
+            'and(status.eq.inactive,created_at.lte.${filterService.crimeEndDate?.toIso8601String() ?? DateTime.now().toIso8601String()})',
+          );
+        }
+
+        print(
+          '📅 Loading historical clusters for date range: '
+          '${filterService.crimeStartDate} to ${filterService.crimeEndDate}',
+        );
+      } else {
+        // ✅ DEFAULT: Show only active clusters (current heatmap)
+        query = query.eq('status', 'active');
+        print('🔴 Loading only active clusters (no date filter)');
+      }
+
+      final clustersResponse = await query;
       final clusters = clustersResponse as List;
 
       // For each cluster, fetch full crime details
@@ -21961,7 +22308,7 @@ class _MapScreenState extends State<MapScreen> {
         if (hotspotIds.isEmpty) continue;
 
         // Fetch complete crime data
-        final crimesResponse = await Supabase.instance.client
+        var crimeQuery = Supabase.instance.client
             .from('hotspot')
             .select('''
             id,
@@ -21977,9 +22324,30 @@ class _MapScreenState extends State<MapScreen> {
           ''')
             .inFilter('id', hotspotIds);
 
+        // ✅ Filter crimes by date range if custom dates are set
+        if (hasCustomDateRange) {
+          if (filterService.crimeStartDate != null) {
+            crimeQuery = crimeQuery.gte(
+              'time',
+              filterService.crimeStartDate!.toIso8601String(),
+            );
+          }
+          if (filterService.crimeEndDate != null) {
+            crimeQuery = crimeQuery.lte(
+              'time',
+              filterService.crimeEndDate!.toIso8601String(),
+            );
+          }
+        }
+
+        final crimesResponse = await crimeQuery;
+
         final crimes = (crimesResponse as List)
             .map((crime) => _formatCrimeForHeatmap(crime))
             .toList();
+
+        // Skip clusters with no crimes in the date range
+        if (crimes.isEmpty) continue;
 
         // Merge is_still_active status from junction table
         for (final crime in crimes) {
@@ -21999,7 +22367,8 @@ class _MapScreenState extends State<MapScreen> {
       });
 
       print(
-        '✅ Loaded ${_persistentClusters.length} persistent clusters from database',
+        '✅ Loaded ${_persistentClusters.length} clusters '
+        '${hasCustomDateRange ? "(historical + active)" : "(active only)"}',
       );
     } catch (e) {
       print('Error loading persistent clusters: $e');
@@ -22055,29 +22424,55 @@ class _MapScreenState extends State<MapScreen> {
     setState(() => _isCalculatingHeatmap = true);
 
     try {
-      // Process only NEW crimes
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
+
+      final hasCustomDateRange =
+          filterService.crimeStartDate != null ||
+          filterService.crimeEndDate != null;
+
+      // ✅ ALWAYS process new crimes first (even in historical mode)
       final validCrimes = _heatmapCrimes.where((crime) {
         return crime['status'] == 'approved';
       }).toList();
 
       if (validCrimes.isNotEmpty) {
         await _processCrimesAgainstPersistentClusters(validCrimes);
-
-        // Reload clusters after processing
-        await _loadPersistentClusters();
       }
 
-      // Convert to display clusters
-      final displayClusters = _persistentClusters
-          .where((pc) => pc['status'] == 'active')
-          .map((pc) => _convertPersistentToDisplayCluster(pc))
-          .toList();
+      // ✅ Reload clusters after processing new crimes
+      await _loadPersistentClusters();
 
-      setState(() {
-        _heatmapClusters = displayClusters;
-      });
+      if (hasCustomDateRange) {
+        // ✅ HISTORICAL MODE: Display all clusters from date range
+        final displayClusters = _persistentClusters
+            .map((pc) => _convertPersistentToDisplayCluster(pc))
+            .toList();
 
-      print('✅ Heatmap updated: ${displayClusters.length} active clusters');
+        setState(() {
+          _heatmapClusters = displayClusters;
+        });
+
+        print(
+          '✅ Historical heatmap displayed: ${displayClusters.length} clusters',
+        );
+      } else {
+        // ✅ LIVE MODE: Display only active clusters
+        final displayClusters = _persistentClusters
+            .where((pc) => pc['status'] == 'active')
+            .map((pc) => _convertPersistentToDisplayCluster(pc))
+            .toList();
+
+        setState(() {
+          _heatmapClusters = displayClusters;
+        });
+
+        print(
+          '✅ Live heatmap updated: ${displayClusters.length} active clusters',
+        );
+      }
     } catch (e) {
       print('Heatmap calculation error: $e');
     } finally {
@@ -22089,6 +22484,9 @@ class _MapScreenState extends State<MapScreen> {
   // PROCESS CRIMES AGAINST PERSISTENT CLUSTERS
   // ============================================
 
+  // ============================================
+  // IMPROVED: Process crimes against persistent clusters (works with historical data)
+  // ============================================
   Future<void> _processCrimesAgainstPersistentClusters(
     List<Map<String, dynamic>> crimes,
   ) async {
@@ -22130,10 +22528,9 @@ class _MapScreenState extends State<MapScreen> {
 
       bool foundCluster = false;
 
-      // Check against ACTIVE clusters only
+      // ✅ CHANGED: Check against BOTH active AND inactive clusters
+      // This allows historical crimes to be added to inactive clusters
       for (final cluster in _persistentClusters) {
-        if (cluster['status'] != 'active') continue;
-
         final clusterCenter = LatLng(
           cluster['center_lat'],
           cluster['center_lng'],
@@ -22143,11 +22540,28 @@ class _MapScreenState extends State<MapScreen> {
         if (distance <= _clusterMergeDistance) {
           await _addCrimeToExistingCluster(cluster['id'], crime);
           foundCluster = true;
+
+          // ✅ If adding to an inactive cluster, check if it should be reactivated
+          if (cluster['status'] == 'inactive') {
+            final isActive = _isWithinHeatmapTimeWindow(crime);
+            if (isActive) {
+              // Reactivate the cluster
+              await Supabase.instance.client
+                  .from('heatmap_clusters')
+                  .update({'status': 'active', 'deactivated_at': null})
+                  .eq('id', cluster['id']);
+
+              print(
+                '✅ Reactivated cluster ${cluster['id']} with new active crime',
+              );
+            }
+          }
+
           break;
         }
       }
 
-      // Create new cluster only if NOT found
+      // Create new cluster only if NOT found in any existing cluster
       if (!foundCluster) {
         await _checkAndCreateNewCluster(crime, crimes);
       }

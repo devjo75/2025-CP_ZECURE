@@ -360,6 +360,15 @@ class HotspotFilterService with ChangeNotifier {
 
   // Updated hotspot filtering logic
   bool shouldShowHotspot(Map<String, dynamic> hotspot) {
+    final status = hotspot['status'] ?? 'approved';
+    final activeStatus = hotspot['active_status'] ?? 'active';
+
+    // Calculate 30-day cutoff (based on incident time, not report time)
+    final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
+    final incidentTime = DateTime.tryParse(hotspot['time'] ?? '');
+    final isRecent =
+        incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
+
     // Time frame filtering - use crime dates
     if (_crimeStartDate != null || _crimeEndDate != null) {
       final hotspotDateStr =
@@ -376,9 +385,13 @@ class HotspotFilterService with ChangeNotifier {
           }
         }
       }
+    } else {
+      // ✅ NEW: If no custom date range, apply 30-day filter for approved crimes
+      if (status == 'approved' && !isRecent) {
+        return false; // Don't show approved crimes older than 30 days
+      }
     }
 
-    final status = hotspot['status'] ?? 'approved';
     final crimeType = hotspot['crime_type'];
     final level = crimeType['level'];
     final category = crimeType['category'];
@@ -392,11 +405,11 @@ class HotspotFilterService with ChangeNotifier {
 
     // For approved hotspots, check active/inactive filters
     if (status == 'approved' || status == null) {
-      final activeStatus = hotspot['active_status'] ?? 'active';
-      final isActive = activeStatus == 'active';
+      // ✅ Both active and inactive approved hotspots are now visible to public
+      // (as long as they're within 30 days or custom date range is set)
 
-      if (isActive && !_showActive) return false;
-      if (!isActive && !_showInactive) return false;
+      if (activeStatus == 'active' && !_showActive) return false;
+      if (activeStatus == 'inactive' && !_showInactive) return false;
     }
 
     // Check category filters for approved hotspots
