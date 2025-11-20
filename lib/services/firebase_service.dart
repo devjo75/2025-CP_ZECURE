@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' show Color;
 import 'package:firebase_core/firebase_core.dart';
@@ -24,9 +26,9 @@ class FirebaseService {
   FirebaseService._internal();
 
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
-  final FlutterLocalNotificationsPlugin _localNotifications = 
+  final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
-  
+
   String? _fcmToken;
   String? get fcmToken => _fcmToken;
 
@@ -37,17 +39,19 @@ class FirebaseService {
   Future<void> initialize() async {
     // Skip Firebase initialization on web - push notifications not supported
     if (kIsWeb) {
-      print('⚠️ Firebase push notifications not supported on web platform');
+      print('âš ï¸ Firebase push notifications not supported on web platform');
       return;
     }
-    
+
     try {
       // Initialize Firebase (mobile only)
       await Firebase.initializeApp();
-      print('✅ Firebase initialized');
+      print('âœ… Firebase initialized');
 
       // Configure background message handler
-      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+      FirebaseMessaging.onBackgroundMessage(
+        _firebaseMessagingBackgroundHandler,
+      );
 
       // Request notification permissions
       await _requestPermissions();
@@ -61,9 +65,9 @@ class FirebaseService {
       // Setup message listeners
       _setupMessageListeners();
 
-      print('✅ Firebase Service fully initialized');
+      print('âœ… Firebase Service fully initialized');
     } catch (e) {
-      print('❌ Error initializing Firebase: $e');
+      print('âŒ Error initializing Firebase: $e');
     }
   }
 
@@ -80,19 +84,22 @@ class FirebaseService {
     );
 
     print('Notification permission status: ${settings.authorizationStatus}');
-    
+
     if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      print('✅ User granted notification permission');
-    } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
-      print('✅ User granted provisional notification permission');
+      print('âœ… User granted notification permission');
+    } else if (settings.authorizationStatus ==
+        AuthorizationStatus.provisional) {
+      print('âœ… User granted provisional notification permission');
     } else {
-      print('❌ User declined notification permission');
+      print('âŒ User declined notification permission');
     }
   }
 
   /// Initialize local notifications for foreground display
   Future<void> _initializeLocalNotifications() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -115,7 +122,7 @@ class FirebaseService {
 
   /// Create Android notification channels
   Future<void> _createNotificationChannels() async {
-    // ✅ Channel 1: Crime Alerts (for all users)
+    // âœ… Channel 1: Crime Alerts (for all users)
     const crimeAlertsChannel = AndroidNotificationChannel(
       'crime_alerts', // id
       'Crime Alerts', // name
@@ -127,7 +134,7 @@ class FirebaseService {
       ledColor: Color.fromARGB(255, 255, 0, 0), // Red LED
     );
 
-    // ✅ Channel 2: Admin Alerts (for admin/officers only)
+    // âœ… Channel 2: Admin Alerts (for admin/officers only)
     const adminAlertsChannel = AndroidNotificationChannel(
       'admin_alerts', // id
       'Admin Alerts', // name
@@ -141,12 +148,13 @@ class FirebaseService {
 
     final androidPlugin = _localNotifications
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+          AndroidFlutterLocalNotificationsPlugin
+        >();
 
     if (androidPlugin != null) {
       await androidPlugin.createNotificationChannel(crimeAlertsChannel);
       await androidPlugin.createNotificationChannel(adminAlertsChannel);
-      print('✅ Notification channels created');
+      print('âœ… Notification channels created');
     }
   }
 
@@ -154,22 +162,22 @@ class FirebaseService {
   Future<void> _getFCMToken() async {
     try {
       _fcmToken = await _firebaseMessaging.getToken();
-      
+
       if (_fcmToken != null) {
-        print('📱 FCM Token: $_fcmToken');
+        print('ðŸ“± FCM Token: $_fcmToken');
         await _saveFCMTokenToDatabase(_fcmToken!);
       } else {
-        print('❌ Failed to get FCM token');
+        print('âŒ Failed to get FCM token');
       }
 
       // Listen for token refresh
       _firebaseMessaging.onTokenRefresh.listen((newToken) {
         _fcmToken = newToken;
-        print('🔄 FCM Token refreshed: $newToken');
+        print('ðŸ”„ FCM Token refreshed: $newToken');
         _saveFCMTokenToDatabase(newToken);
       });
     } catch (e) {
-      print('❌ Error getting FCM token: $e');
+      print('âŒ Error getting FCM token: $e');
     }
   }
 
@@ -178,19 +186,22 @@ class FirebaseService {
     try {
       final user = Supabase.instance.client.auth.currentUser;
       if (user == null) {
-        print('⚠️ No user logged in, cannot save FCM token');
+        print('âš ï¸ No user logged in, cannot save FCM token');
         return;
       }
 
       // Update or insert FCM token in users table
       await Supabase.instance.client
           .from('users')
-          .update({'fcm_token': token, 'updated_at': DateTime.now().toIso8601String()})
+          .update({
+            'fcm_token': token,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
           .eq('email', user.email!);
 
-      print('✅ FCM token saved to database');
+      print('âœ… FCM token saved to database');
     } catch (e) {
-      print('❌ Error saving FCM token: $e');
+      print('âŒ Error saving FCM token: $e');
     }
   }
 
@@ -198,15 +209,19 @@ class FirebaseService {
   void _setupMessageListeners() {
     // Handle foreground messages
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print('📨 Foreground message received');
-      print('Notification type: ${message.data['notification_type'] ?? 'crime_alert'}');
+      print('ðŸ“¨ Foreground message received');
+      print(
+        'Notification type: ${message.data['notification_type'] ?? 'crime_alert'}',
+      );
       _handleMessage(message, isForeground: true);
     });
 
     // Handle background messages (app opened from notification)
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      print('📬 Background message opened');
-      print('Notification type: ${message.data['notification_type'] ?? 'crime_alert'}');
+      print('ðŸ“¬ Background message opened');
+      print(
+        'Notification type: ${message.data['notification_type'] ?? 'crime_alert'}',
+      );
       _handleMessage(message, isForeground: false);
       _navigateToHotspot(message.data);
     });
@@ -219,8 +234,10 @@ class FirebaseService {
   Future<void> _handleTerminatedMessage() async {
     final initialMessage = await _firebaseMessaging.getInitialMessage();
     if (initialMessage != null) {
-      print('📭 Terminated message received');
-      print('Notification type: ${initialMessage.data['notification_type'] ?? 'crime_alert'}');
+      print('ðŸ“­ Terminated message received');
+      print(
+        'Notification type: ${initialMessage.data['notification_type'] ?? 'crime_alert'}',
+      );
       _handleMessage(initialMessage, isForeground: false);
       // Navigate after a slight delay to ensure app is ready
       Future.delayed(const Duration(milliseconds: 500), () {
@@ -242,18 +259,24 @@ class FirebaseService {
         'hotspot_id': data['hotspot_id']?.toString() ?? '',
         'latitude': data['latitude']?.toString() ?? '',
         'longitude': data['longitude']?.toString() ?? '',
-        'notification_type': data['notification_type']?.toString() ?? 'crime_alert',
+        'notification_type':
+            data['notification_type']?.toString() ?? 'crime_alert',
         'status': data['status']?.toString() ?? 'active',
       };
-      
+
       final payload = payloadMap.entries
           .map((e) => '${e.key}=${e.value}')
           .join('&');
 
-      // ✅ Determine which channel to use based on notification type
-      final notificationType = data['notification_type']?.toString() ?? 'crime_alert';
-      final channelId = notificationType == 'pending_report' ? 'admin_alerts' : 'crime_alerts';
-      final channelName = notificationType == 'pending_report' ? 'Admin Alerts' : 'Crime Alerts';
+      // âœ… Determine which channel to use based on notification type
+      final notificationType =
+          data['notification_type']?.toString() ?? 'crime_alert';
+      final channelId = notificationType == 'pending_report'
+          ? 'admin_alerts'
+          : 'crime_alerts';
+      final channelName = notificationType == 'pending_report'
+          ? 'Admin Alerts'
+          : 'Crime Alerts';
 
       _showLocalNotification(
         title: notification.title ?? 'New Alert',
@@ -276,7 +299,7 @@ class FirebaseService {
     final androidDetails = AndroidNotificationDetails(
       channelId,
       channelName,
-      channelDescription: channelId == 'admin_alerts' 
+      channelDescription: channelId == 'admin_alerts'
           ? 'Notifications for pending reports requiring review'
           : 'Notifications for new crime reports in your area',
       importance: Importance.high,
@@ -285,7 +308,7 @@ class FirebaseService {
       playSound: true,
       enableVibration: true,
       enableLights: true,
-      ledColor: channelId == 'admin_alerts' 
+      ledColor: channelId == 'admin_alerts'
           ? const Color.fromARGB(255, 255, 165, 0) // Orange for admin
           : const Color.fromARGB(255, 255, 0, 0), // Red for crime alerts
     );
@@ -313,18 +336,18 @@ class FirebaseService {
   /// Handle notification tap - parse payload and navigate
   void _onNotificationTapped(NotificationResponse response) {
     print('Notification tapped with payload: ${response.payload}');
-    
+
     if (response.payload != null) {
       // Parse payload (format: "hotspot_id=123&latitude=6.9214&longitude=122.0790&notification_type=crime_alert")
       final params = Uri.splitQueryString(response.payload!);
       print('Parsed params: $params');
-      
+
       // Check notification type
       final notificationType = params['notification_type'] ?? 'crime_alert';
       final status = params['status'] ?? 'active';
-      
+
       print('Opening notification - Type: $notificationType, Status: $status');
-      
+
       _navigateToHotspot(params);
     }
   }
@@ -334,10 +357,11 @@ class FirebaseService {
     final hotspotId = data['hotspot_id']?.toString();
     final latStr = data['latitude']?.toString();
     final lonStr = data['longitude']?.toString();
-    final notificationType = data['notification_type']?.toString() ?? 'crime_alert';
+    final notificationType =
+        data['notification_type']?.toString() ?? 'crime_alert';
     final status = data['status']?.toString() ?? 'active';
 
-    print('🗺️ Navigating to hotspot: $hotspotId at ($latStr, $lonStr)');
+    print('ðŸ—ºï¸ Navigating to hotspot: $hotspotId at ($latStr, $lonStr)');
     print('   Type: $notificationType, Status: $status');
 
     if (hotspotId != null && latStr != null && lonStr != null) {
@@ -350,10 +374,10 @@ class FirebaseService {
         if (onNotificationTap != null) {
           onNotificationTap!(hotspotId, location);
         } else {
-          print('⚠️ Navigation callback not set');
+          print('âš ï¸ Navigation callback not set');
         }
       } catch (e) {
-        print('❌ Error parsing coordinates: $e');
+        print('âŒ Error parsing coordinates: $e');
       }
     }
   }
@@ -361,37 +385,37 @@ class FirebaseService {
   /// Clear FCM token on logout
   Future<void> clearToken() async {
     if (kIsWeb) return; // Skip on web
-    
+
     try {
       await _firebaseMessaging.deleteToken();
       _fcmToken = null;
-      print('✅ FCM token cleared');
+      print('âœ… FCM token cleared');
     } catch (e) {
-      print('❌ Error clearing FCM token: $e');
+      print('âŒ Error clearing FCM token: $e');
     }
   }
 
   /// Subscribe to topic (for broadcast notifications)
   Future<void> subscribeToTopic(String topic) async {
     if (kIsWeb) return; // Skip on web
-    
+
     try {
       await _firebaseMessaging.subscribeToTopic(topic);
-      print('✅ Subscribed to topic: $topic');
+      print('âœ… Subscribed to topic: $topic');
     } catch (e) {
-      print('❌ Error subscribing to topic: $e');
+      print('âŒ Error subscribing to topic: $e');
     }
   }
 
   /// Unsubscribe from topic
   Future<void> unsubscribeFromTopic(String topic) async {
     if (kIsWeb) return; // Skip on web
-    
+
     try {
       await _firebaseMessaging.unsubscribeFromTopic(topic);
-      print('✅ Unsubscribed from topic: $topic');
+      print('âœ… Unsubscribed from topic: $topic');
     } catch (e) {
-      print('❌ Error unsubscribing from topic: $e');
+      print('âŒ Error unsubscribing from topic: $e');
     }
   }
 }

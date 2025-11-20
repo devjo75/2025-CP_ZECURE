@@ -2896,7 +2896,7 @@ class _MapScreenState extends State<MapScreen> {
             'The investigation for "${expiredHotspot['crime_type']?['name'] ?? 'crime incident'}" has automatically ended.',
         'type': 'expiration',
         'hotspot_id': expiredHotspot['id'],
-        'created_at': DateTime.now().toIso8601String(),
+        'created_at': DateTime.now().toUtc().toIso8601String(),
       };
 
       await Supabase.instance.client.from('notifications').insert(notification);
@@ -10543,7 +10543,7 @@ class _MapScreenState extends State<MapScreen> {
                   'message': 'New crime report awaiting review',
                   'type': 'report',
                   'hotspot_id': hotspotId,
-                  'created_at': DateTime.now().toIso8601String(),
+                  'created_at': DateTime.now().toUtc().toIso8601String(),
                 },
               )
               .toList();
@@ -13310,159 +13310,382 @@ class _MapScreenState extends State<MapScreen> {
             )
           : RefreshIndicator(
               onRefresh: _loadNotifications,
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                itemCount: _getFilteredNotifications().length,
-                itemBuilder: (context, index) {
-                  final notification = _getFilteredNotifications()[index];
-                  final isUnread = !notification['is_read'];
-                  final createdAt = DateTime.parse(
-                    notification['created_at'],
-                  ).toLocal();
-                  final isToday = _isToday(createdAt);
+              child: _buildMobileNotificationsList(), // ✅ NEW METHOD
+            ),
+    );
+  }
 
-                  return Container(
-                    margin: const EdgeInsets.symmetric(
-                      vertical: 4,
-                      horizontal: 8,
+  // ✅ NEW: Mobile notifications list with Unread/Read sections
+  Widget _buildMobileNotificationsList() {
+    final filteredNotifications = _getFilteredNotifications();
+    final unreadNotifications = filteredNotifications
+        .where((n) => !n['is_read'])
+        .toList();
+    final readNotifications = filteredNotifications
+        .where((n) => n['is_read'])
+        .toList();
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      children: [
+        // ✅ UNREAD SECTION
+        if (unreadNotifications.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(left: 12, bottom: 8, top: 4),
+            child: Row(
+              children: [
+                Text(
+                  'Unread (${unreadNotifications.length})',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[700],
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[100],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'NEW',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[700],
                     ),
-                    decoration: BoxDecoration(
-                      color: isUnread ? Colors.blue[50] : Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isUnread ? Colors.blue[200]! : Colors.grey[200]!,
-                        width: 1,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.04),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ...unreadNotifications.map((notification) {
+            final createdAt = DateTime.parse(
+              notification['created_at'],
+            ).toLocal();
+            final isToday = _isToday(createdAt);
+
+            return Container(
+              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue[200]!, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () {
+                    _markAsRead(notification['id']);
+                    _handleNotificationTap(notification);
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Stack(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: _getIconBackgroundColor(notification),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: _getNotificationIcon(notification),
+                            ),
+                            Positioned(
+                              right: 0,
+                              top: 0,
+                              child: Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: Colors.blue[600],
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () {
-                          if (!notification['is_read']) {
-                            _markAsRead(notification['id']);
-                          }
-                          _handleNotificationTap(notification);
-                        },
-                        borderRadius: BorderRadius.circular(12),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Row(
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // Icon with status indicator
-                              Stack(
+                              Row(
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: _getIconBackgroundColor(
-                                        notification,
-                                      ),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: _getNotificationIcon(notification),
-                                  ),
-                                  if (isUnread)
-                                    Positioned(
-                                      right: 0,
-                                      top: 0,
-                                      child: Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          color: Colors.blue[600],
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-
-                              const SizedBox(width: 16),
-
-                              // Content
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    // Title with priority badge
-                                    Row(
+                                  Expanded(
+                                    child: Row(
                                       children: [
-                                        Expanded(
+                                        Flexible(
                                           child: Text(
                                             notification['title'],
-                                            style: TextStyle(
+                                            style: const TextStyle(
                                               fontSize: 16,
-                                              fontWeight: isUnread
-                                                  ? FontWeight.w600
-                                                  : FontWeight.w500,
+                                              fontWeight: FontWeight.w600,
                                               color: Colors.black87,
                                             ),
                                           ),
                                         ),
-                                        _buildPriorityBadge(notification),
-                                      ],
-                                    ),
-
-                                    const SizedBox(height: 6),
-
-                                    // Message
-                                    Text(
-                                      notification['message'],
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey[600],
-                                        height: 1.3,
-                                      ),
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-
-                                    const SizedBox(height: 8),
-
-                                    // Timestamp
-                                    Row(
-                                      children: [
-                                        Icon(
-                                          Icons.access_time,
-                                          size: 12,
-                                          color: Colors.grey[500],
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          isToday
-                                              ? DateFormat(
-                                                  'h:mm a',
-                                                ).format(createdAt)
-                                              : DateFormat(
-                                                  'MMM dd, h:mm a',
-                                                ).format(createdAt),
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey[500],
+                                        // ✅ NEW: Show (Verified) badge for verified reports
+                                        if (notification['type'] == 'report' &&
+                                            notification['hotspot_id'] !=
+                                                null &&
+                                            _isHotspotVerified(
+                                              notification['hotspot_id'],
+                                            )) ...[
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.green[100],
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                              border: Border.all(
+                                                color: Colors.green[300]!,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              'VERIFIED',
+                                              style: TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.green[700],
+                                                letterSpacing: 0.3,
+                                              ),
+                                            ),
                                           ),
-                                        ),
+                                        ],
                                       ],
                                     ),
-                                  ],
+                                  ),
+                                  _buildPriorityBadge(notification),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                notification['message'],
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[600],
+                                  height: 1.3,
                                 ),
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.access_time,
+                                    size: 12,
+                                    color: Colors.grey[500],
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    isToday
+                                        ? DateFormat('h:mm a').format(createdAt)
+                                        : DateFormat(
+                                            'MMM dd, h:mm a',
+                                          ).format(createdAt),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[500],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                  );
-                },
+                  ),
+                ),
+              ),
+            );
+          }),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Divider(color: Colors.grey[300], thickness: 1),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        // ✅ READ SECTION
+        if (readNotifications.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(left: 12, bottom: 8, top: 8),
+            child: Text(
+              'Earlier',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[600],
+                letterSpacing: 0.3,
               ),
             ),
+          ),
+          ...readNotifications.map((notification) {
+            final createdAt = DateTime.parse(
+              notification['created_at'],
+            ).toLocal();
+            final isToday = _isToday(createdAt);
+
+            return Container(
+              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[200]!, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _handleNotificationTap(notification),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _getIconBackgroundColor(notification),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: _getNotificationIcon(notification),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            notification['title'],
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w500,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                        ),
+                                        // ✅ NEW: Show (Verified) badge for verified reports
+                                        if (notification['type'] == 'report' &&
+                                            notification['hotspot_id'] !=
+                                                null &&
+                                            _isHotspotVerified(
+                                              notification['hotspot_id'],
+                                            )) ...[
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.green[100],
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                              border: Border.all(
+                                                color: Colors.green[300]!,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              'VERIFIED',
+                                              style: TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.green[700],
+                                                letterSpacing: 0.3,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  _buildPriorityBadge(notification),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                notification['message'],
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[600],
+                                  height: 1.3,
+                                ),
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.access_time,
+                                    size: 12,
+                                    color: Colors.grey[500],
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    isToday
+                                        ? DateFormat('h:mm a').format(createdAt)
+                                        : DateFormat(
+                                            'MMM dd, h:mm a',
+                                          ).format(createdAt),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[500],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ],
     );
   }
 
@@ -13611,89 +13834,181 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Widget _buildScrollableNotifications() {
+    final filteredNotifications = _getFilteredNotifications();
+
+    // ✅ NEW: Separate unread and read notifications
+    final unreadNotifications = filteredNotifications
+        .where((n) => !n['is_read'])
+        .toList();
+    final readNotifications = filteredNotifications
+        .where((n) => n['is_read'])
+        .toList();
+
     return RefreshIndicator(
       onRefresh: _loadNotifications,
-      child: ListView.builder(
+      child: ListView(
         padding: const EdgeInsets.all(16),
-        itemCount: _getFilteredNotifications().length,
-        itemBuilder: (context, index) {
-          final notification = _getFilteredNotifications()[index];
-          final isUnread = !notification['is_read'];
-          final createdAt = DateTime.parse(
-            notification['created_at'],
-          ).toLocal();
-          final isToday = _isToday(createdAt);
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              color: isUnread ? Colors.blue[25] : Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isUnread ? Colors.blue[200]! : Colors.grey[200]!,
-                width: isUnread ? 1.5 : 1,
+        children: [
+          // ✅ UNREAD SECTION
+          if (unreadNotifications.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12, left: 4),
+              child: Row(
+                children: [
+                  Text(
+                    'Unread (${unreadNotifications.length})',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[700],
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[100],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'NEW',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
             ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () {
-                  if (isUnread) {
-                    _markAsRead(notification['id']);
-                  }
-                  _handleNotificationTap(notification);
-                },
-                borderRadius: BorderRadius.circular(12),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
+            ...unreadNotifications.map(
+              (notification) =>
+                  _buildNotificationCard(notification, isUnread: true),
+            ),
+
+            const SizedBox(height: 24),
+            Divider(color: Colors.grey[300], thickness: 1),
+            const SizedBox(height: 16),
+          ],
+
+          // ✅ READ SECTION
+          if (readNotifications.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12, left: 4),
+              child: Text(
+                'Earlier',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[600],
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+            ...readNotifications.map(
+              (notification) =>
+                  _buildNotificationCard(notification, isUnread: false),
+            ),
+          ],
+
+          // Empty state
+          if (unreadNotifications.isEmpty && readNotifications.isEmpty)
+            _buildEmptyState(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNotificationCard(
+    Map<String, dynamic> notification, {
+    required bool isUnread,
+  }) {
+    final createdAt = DateTime.parse(notification['created_at']).toLocal();
+    final isToday = _isToday(createdAt);
+
+    // ✅ NEW: Check if this is a "New Crime Report" that has been verified
+    final isVerifiedReport =
+        notification['type'] == 'report' &&
+        notification['hotspot_id'] != null &&
+        _isHotspotVerified(notification['hotspot_id']);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: isUnread ? Colors.blue[25] : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isUnread ? Colors.blue[200]! : Colors.grey[200]!,
+          width: isUnread ? 1.5 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            if (isUnread) {
+              _markAsRead(notification['id']);
+            }
+            _handleNotificationTap(notification);
+          },
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Icon with unread indicator
+                Stack(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _getIconBackgroundColor(notification),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: _getNotificationIcon(notification),
+                    ),
+                    if (isUnread)
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        child: Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: Colors.blue[600],
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+
+                const SizedBox(width: 16),
+
+                // Content
+                Expanded(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Icon with unread indicator
-                      Stack(
+                      Row(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: _getIconBackgroundColor(notification),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: _getNotificationIcon(notification),
-                          ),
-                          if (isUnread)
-                            Positioned(
-                              right: 0,
-                              top: 0,
-                              child: Container(
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  color: Colors.blue[600],
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-
-                      const SizedBox(width: 16),
-
-                      // Content
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Title with priority badge
-                            Row(
+                          Expanded(
+                            child: Row(
                               children: [
-                                Expanded(
+                                Flexible(
                                   child: Text(
                                     notification['title'],
                                     style: TextStyle(
@@ -13705,60 +14020,92 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ),
                                 ),
-                                _buildPriorityBadge(notification),
-                              ],
-                            ),
-
-                            const SizedBox(height: 6),
-
-                            // Message
-                            Text(
-                              notification['message'],
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                                height: 1.3,
-                              ),
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-
-                            const SizedBox(height: 8),
-
-                            // Timestamp
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.access_time,
-                                  size: 12,
-                                  color: Colors.grey[500],
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  isToday
-                                      ? DateFormat('h:mm a').format(createdAt)
-                                      : DateFormat(
-                                          'MMM dd, h:mm a',
-                                        ).format(createdAt),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[500],
+                                // ✅ NEW: Show (Verified) badge for verified reports
+                                if (isVerifiedReport) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.green[100],
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(
+                                        color: Colors.green[300]!,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      'VERIFIED',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green[700],
+                                        letterSpacing: 0.3,
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
-                          ],
+                          ),
+                          _buildPriorityBadge(notification),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        notification['message'],
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                          height: 1.3,
                         ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.access_time,
+                            size: 12,
+                            color: Colors.grey[500],
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isToday
+                                ? DateFormat('h:mm a').format(createdAt)
+                                : DateFormat(
+                                    'MMM dd, h:mm a',
+                                  ).format(createdAt),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[500],
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-              ),
+              ],
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
+  }
+
+  // ✅ NEW: Helper method to check if a hotspot is verified
+  bool _isHotspotVerified(int? hotspotId) {
+    if (hotspotId == null) return false;
+
+    final hotspot = _hotspots.firstWhere(
+      (h) => h['id'] == hotspotId,
+      orElse: () => {},
+    );
+
+    return hotspot.isNotEmpty && hotspot['verification_status'] == 'verified';
   }
 
   Widget _buildPriorityBadge(Map<String, dynamic> notification) {
@@ -13862,7 +14209,10 @@ class _MapScreenState extends State<MapScreen> {
   Color _getIconBackgroundColor(Map<String, dynamic> notification) {
     final type = notification['type'];
 
-    // Handle safe spot notifications
+    if (type == 'verified') {
+      return Colors.green.withOpacity(0.1);
+    }
+
     if (type == 'safe_spot_report') {
       return Colors.blue.withOpacity(0.1);
     } else if (type == 'safe_spot_approval') {
@@ -13910,7 +14260,10 @@ class _MapScreenState extends State<MapScreen> {
   Widget _getNotificationIcon(Map<String, dynamic> notification) {
     final type = notification['type'];
 
-    // Handle safe spot notifications
+    if (type == 'verified') {
+      return const Icon(Icons.verified, color: Colors.green, size: 18);
+    }
+
     if (type == 'safe_spot_report') {
       return const Icon(Icons.add_location_alt, color: Colors.blue, size: 18);
     } else if (type == 'safe_spot_approval') {
@@ -13919,7 +14272,6 @@ class _MapScreenState extends State<MapScreen> {
       return const Icon(Icons.cancel, color: Colors.red, size: 18);
     }
 
-    // For report notifications, get the crime level from the related hotspot
     if (type == 'report' && notification['hotspot_id'] != null) {
       final relatedHotspot = _hotspots.firstWhere(
         (hotspot) => hotspot['id'] == notification['hotspot_id'],
@@ -13960,7 +14312,6 @@ class _MapScreenState extends State<MapScreen> {
       }
     }
 
-    // Default icons for other notification types
     switch (type) {
       case 'report':
         return const Icon(Icons.report, color: Colors.orange, size: 18);
@@ -19529,6 +19880,9 @@ class _MapScreenState extends State<MapScreen> {
       // Send notification to admins
       await _sendVerificationNotificationToAdmins(hotspotId, verified: true);
 
+      // ✅ NEW: Send notification to the reporter
+      await _sendVerificationNotificationToReporter(hotspotId);
+
       await _loadHotspots();
       if (mounted) {
         Navigator.pop(context);
@@ -19542,14 +19896,61 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // REJECT VERIFICATION (Officer only) - Fully rejects the report
+  // Send notification to reporter when officer verifies their report
+  Future<void> _sendVerificationNotificationToReporter(int hotspotId) async {
+    try {
+      final hotspotResponse = await Supabase.instance.client
+          .from('hotspot')
+          .select('''
+          reported_by,
+          created_by,
+          crime_type:type_id(name)
+        ''')
+          .eq('id', hotspotId)
+          .single();
+
+      final reporterId =
+          hotspotResponse['reported_by'] ?? hotspotResponse['created_by'];
+      final verifyingOfficerId = _userProfile?['id'];
+
+      // ✅ Only send to reporter if they're not the one who verified (edge case)
+      if (reporterId != null && reporterId != verifyingOfficerId) {
+        final crimeName =
+            hotspotResponse['crime_type']?['name'] ?? 'Unknown crime';
+
+        final officerName =
+            _userProfile?['full_name'] ??
+            '${_userProfile?['first_name']} ${_userProfile?['last_name']}' ??
+            'An officer';
+
+        final notificationData = {
+          'user_id': reporterId,
+          'title': 'Report Verified',
+          'message':
+              'Your report about $crimeName has been verified by $officerName and is awaiting admin approval',
+          'type': 'verified',
+          'hotspot_id': hotspotId,
+          'is_read': false,
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+        };
+
+        await Supabase.instance.client
+            .from('notifications')
+            .insert(notificationData);
+      }
+    } catch (e) {
+      print('Error sending verification notification to reporter: $e');
+    }
+  }
+
+  // REJECT VERIFICATION (Officer only)
   Future<void> _rejectVerification(int hotspotId, String? reason) async {
     try {
       await Supabase.instance.client
           .from('hotspot')
           .update({
-            'status': 'rejected', // ← CHANGED: Fully reject the report
-            'active_status': 'inactive', // ← CHANGED: Set to inactive
+            'status': 'rejected',
+            'active_status': 'inactive',
             'verification_status': 'rejected_verification',
             'rejection_reason': reason,
             'rejected_by': _userProfile?['id'],
@@ -19561,6 +19962,9 @@ class _MapScreenState extends State<MapScreen> {
       // Notify user their report was rejected
       await _sendRejectionNotificationToUser(hotspotId, reason);
 
+      // ✅ NEW: Update existing notifications for admins/officers
+      await _updateNotificationsOnRejection(hotspotId);
+
       await _loadHotspots();
       if (mounted) {
         Navigator.pop(context);
@@ -19571,6 +19975,66 @@ class _MapScreenState extends State<MapScreen> {
       if (mounted) {
         _showSnackBar('Error rejecting report: $e');
       }
+    }
+  }
+
+  // Update notifications when officer rejects verification
+  Future<void> _updateNotificationsOnRejection(int hotspotId) async {
+    try {
+      final rejectingOfficerId = _userProfile?['id'];
+      final officerName =
+          _userProfile?['full_name'] ??
+          '${_userProfile?['first_name']} ${_userProfile?['last_name']}' ??
+          'An officer';
+
+      // ✅ FIX 1: Get all admins/officers EXCEPT the one who rejected
+      final adminsAndOfficers = await Supabase.instance.client
+          .from('users')
+          .select('id')
+          .or('role.eq.admin,role.eq.officer')
+          .neq('id', rejectingOfficerId);
+
+      if (adminsAndOfficers.isNotEmpty) {
+        final otherUserIds = adminsAndOfficers.map((u) => u['id']).toList();
+
+        // ✅ FIX 2: Delete "New Crime Report" for OTHER officers/admins
+        await Supabase.instance.client
+            .from('notifications')
+            .delete()
+            .eq('hotspot_id', hotspotId)
+            .eq('type', 'report')
+            .inFilter('user_id', otherUserIds);
+
+        // ✅ FIX 3: Send rejection notification to OTHER officers/admins
+        final notifications = adminsAndOfficers
+            .map(
+              (user) => {
+                'user_id': user['id'],
+                'title': 'Report Rejected During Verification',
+                'message':
+                    'A crime report was rejected during verification by $officerName',
+                'type': 'rejection',
+                'hotspot_id': hotspotId,
+                'is_read': false,
+                'created_at': DateTime.now().toUtc().toIso8601String(),
+              },
+            )
+            .toList();
+
+        await Supabase.instance.client
+            .from('notifications')
+            .insert(notifications);
+      }
+
+      // ✅ FIX 4: Delete the rejecting officer's own "New Crime Report" notification
+      await Supabase.instance.client
+          .from('notifications')
+          .delete()
+          .eq('hotspot_id', hotspotId)
+          .eq('type', 'report')
+          .eq('user_id', rejectingOfficerId);
+    } catch (e) {
+      print('Error updating notifications on rejection: $e');
     }
   }
 
@@ -19605,7 +20069,7 @@ class _MapScreenState extends State<MapScreen> {
               'Your report about $crimeName was rejected. Reason: ${reason ?? "No reason provided"}',
           'type': 'rejection',
           'hotspot_id': hotspotId,
-          'created_at': DateTime.now().toIso8601String(),
+          'created_at': DateTime.now().toUtc().toIso8601String(),
         };
 
         await Supabase.instance.client
@@ -19617,37 +20081,72 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Send notification to admins when officer verifies/rejects
   Future<void> _sendVerificationNotificationToAdmins(
     int hotspotId, {
     required bool verified,
   }) async {
-    if (!verified) return;
-
     try {
-      final admins = await Supabase.instance.client
-          .from('users')
-          .select('id')
-          .eq('role', 'admin');
+      final verifyingOfficerId = _userProfile?['id'];
+      final officerName =
+          _userProfile?['full_name'] ??
+          '${_userProfile?['first_name']} ${_userProfile?['last_name']}' ??
+          'An officer';
 
-      if (admins.isNotEmpty) {
-        final notifications = admins
-            .map(
-              (admin) => {
-                'user_id': admin['id'],
-                'title': 'Report Verified',
-                'message':
-                    'A crime report has been verified by an officer and is awaiting your approval',
-                'type': 'verified',
-                'hotspot_id': hotspotId,
-                'created_at': DateTime.now().toIso8601String(),
-                // ❌ REMOVED: 'unique_key': 'verify_${hotspotId}_${admin['id']}_${DateTime.now().millisecondsSinceEpoch}',
-              },
-            )
-            .toList();
+      if (verified) {
+        // ✅ FIX 1: Get all admins and officers EXCEPT the one who verified
+        final adminsAndOfficers = await Supabase.instance.client
+            .from('users')
+            .select('id')
+            .or('role.eq.admin,role.eq.officer')
+            .neq('id', verifyingOfficerId); // ✅ Exclude the verifying officer
 
+        if (adminsAndOfficers.isNotEmpty) {
+          // ✅ FIX 2: Delete "New Crime Report" notifications for OTHER officers/admins
+          final otherUserIds = adminsAndOfficers.map((u) => u['id']).toList();
+
+          await Supabase.instance.client
+              .from('notifications')
+              .delete()
+              .eq('hotspot_id', hotspotId)
+              .eq('type', 'report')
+              .inFilter(
+                'user_id',
+                otherUserIds,
+              ); // ✅ Only delete for OTHER users
+
+          // ✅ FIX 3: Send "Report Verified" notification to OTHER officers/admins
+          final notifications = adminsAndOfficers
+              .map(
+                (user) => {
+                  'user_id': user['id'],
+                  'title': 'Report Verified',
+                  'message':
+                      'A crime report has been verified by $officerName and is awaiting approval',
+                  'type': 'verified',
+                  'hotspot_id': hotspotId,
+                  'is_read': false,
+                  'created_at': DateTime.now().toUtc().toIso8601String(),
+                },
+              )
+              .toList();
+
+          await Supabase.instance.client
+              .from('notifications')
+              .insert(notifications);
+        }
+
+        // ✅ FIX 4: Update the verifying officer's OWN notification to add verified status
+        // Don't delete it, just update it so they can still see it with a badge
         await Supabase.instance.client
             .from('notifications')
-            .insert(notifications); // ✅ Changed from upsert to insert
+            .update({
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+              // You could add a custom field here if you want, like 'verified_by_me': true
+            })
+            .eq('hotspot_id', hotspotId)
+            .eq('type', 'report')
+            .eq('user_id', verifyingOfficerId);
       }
     } catch (e) {
       print('Error sending verification notification: $e');
