@@ -358,7 +358,6 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
-  // Updated hotspot filtering logic
   bool shouldShowHotspot(Map<String, dynamic> hotspot) {
     final status = hotspot['status'] ?? 'approved';
     final activeStatus = hotspot['active_status'] ?? 'active';
@@ -385,8 +384,12 @@ class HotspotFilterService with ChangeNotifier {
           }
         }
       }
+
+      // ✅ When date filter is active: Let the _visibleHotspots and Consumer
+      // handle the zoom-based and cluster-based filtering
+      // Here we only filter by date range and category/severity
     } else {
-      // ✅ NEW: If no custom date range, apply 30-day filter for approved crimes
+      // ✅ NO custom date range: Apply strict 30-day filter for approved crimes
       if (status == 'approved' && !isRecent) {
         return false; // Don't show approved crimes older than 30 days
       }
@@ -405,9 +408,6 @@ class HotspotFilterService with ChangeNotifier {
 
     // For approved hotspots, check active/inactive filters
     if (status == 'approved' || status == null) {
-      // ✅ Both active and inactive approved hotspots are now visible to public
-      // (as long as they're within 30 days or custom date range is set)
-
       if (activeStatus == 'active' && !_showActive) return false;
       if (activeStatus == 'inactive' && !_showInactive) return false;
     }

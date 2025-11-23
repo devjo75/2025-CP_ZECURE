@@ -956,6 +956,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       Map<String, int> genderCounts = {};
       Map<String, int> roleCounts = {};
       int officerCount = 0;
+      int tanodCount = 0; // NEW
 
       for (var user in response) {
         String gender = user['gender'] ?? 'Not specified';
@@ -967,10 +968,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         if (role == 'officer') {
           officerCount++;
         }
+
+        if (role == 'tanod') {
+          // NEW
+          tanodCount++;
+        }
       }
 
       print('Role counts: $roleCounts'); // Debug print
       print('Officer count: $officerCount'); // Debug print
+      print('Tanod count: $tanodCount'); // Debug print
 
       setState(() {
         _userStats = {
@@ -978,9 +985,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           'role': roleCounts,
           'total': response.length,
           'officers': officerCount,
+          'tanods': tanodCount, // NEW
         };
-        // Removed setting _availableRoles and _availableGenders here to avoid potential overwrites from concurrent loads.
-        // These are now only set in _loadUsersData for consistency.
       });
 
       _filterUsers();
@@ -2745,7 +2751,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   void _showChangeRoleDialog(Map<String, dynamic> user) {
     String selectedRole = user['role'] ?? 'user';
-    final availableRoles = ['user', 'admin', 'officer'];
+    final availableRoles = ['user', 'admin', 'officer', 'tanod']; // ADDED tanod
     final currentRole = user['role'] ?? 'user';
     final hasPoliceData =
         user['police_rank_id'] != null || user['police_station_id'] != null;
@@ -2758,8 +2764,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final willLosePoliceData =
-                currentRole == 'officer' &&
+                (currentRole == 'officer' ||
+                    currentRole == 'tanod') && // UPDATED
                 selectedRole != 'officer' &&
+                selectedRole != 'tanod' && // UPDATED
                 hasPoliceData;
 
             return AlertDialog(
@@ -2831,6 +2839,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                       ? Icons.admin_panel_settings
                                       : role == 'officer'
                                       ? Icons.local_police
+                                      : role ==
+                                            'tanod' // NEW
+                                      ? Icons.security
                                       : Icons.person,
                                   size: 18,
                                   color: _getRoleColor(role),
@@ -2882,7 +2893,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    'This user\'s police rank and station assignments will be permanently removed when changing from Officer role.',
+                                    'This user\'s police rank and station assignments will be permanently removed when changing from Officer/Tanod role.',
                                     style: TextStyle(
                                       color: Colors.orange[700],
                                       fontSize: 12,
@@ -3034,8 +3045,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       // Build update data
       final updateData = <String, dynamic>{'role': newRole};
 
-      // If changing FROM officer to another role, clear police data
-      if (newRole != 'officer') {
+      // If changing FROM officer/tanod to another role (except officer/tanod), clear police data
+      if (newRole != 'officer' && newRole != 'tanod') {
+        // UPDATED
         updateData['police_rank_id'] = null;
         updateData['police_station_id'] = null;
       }
@@ -3046,7 +3058,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           .update(updateData)
           .eq('id', userId);
 
-      // If changing TO 'user' role, clear admin/officer notifications
+      // If changing TO 'user' role, clear admin/officer/tanod notifications
       if (newRole == 'user') {
         await _clearAdminOfficerNotifications(userId);
       }
@@ -10437,6 +10449,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 ? const Color(0xFF6366F1)
                                 : entry.key == 'officer'
                                 ? const Color.fromARGB(255, 60, 162, 245)
+                                : entry.key ==
+                                      'tanod' // ✅ ADD THIS LINE
+                                ? const Color(0xFFEF4444) // ✅ ADD THIS LINE
                                 : const Color(0xFF10B981),
                             width: 24,
                             borderRadius: const BorderRadius.vertical(
@@ -10452,6 +10467,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                   ? [
                                       const Color.fromARGB(255, 60, 162, 245),
                                       const Color.fromARGB(255, 48, 129, 223),
+                                    ]
+                                  : entry.key ==
+                                        'tanod' // ✅ ADD THIS LINE
+                                  ? [
+                                      const Color(0xFFEF4444),
+                                      const Color(0xFFDC2626),
                                     ]
                                   : [
                                       const Color(0xFF10B981),
@@ -11051,6 +11072,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 ? const Color(0xFF6366F1)
                                 : entry.key == 'officer'
                                 ? const Color.fromARGB(255, 60, 162, 245)
+                                : entry.key ==
+                                      'tanod' // ✅ ADD THIS LINE
+                                ? const Color(
+                                    0xFFEF4444,
+                                  ) // ✅ ADD THIS LINE (Red/Orange)
                                 : const Color(0xFF10B981),
                             width: 32,
                             borderRadius: const BorderRadius.vertical(
@@ -11067,6 +11093,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                       const Color.fromARGB(255, 60, 162, 245),
                                       Color.fromARGB(255, 49, 124, 211),
                                     ]
+                                  : entry.key ==
+                                        'tanod' // ✅ ADD THIS LINE
+                                  ? [
+                                      const Color(0xFFEF4444),
+                                      const Color(0xFFDC2626),
+                                    ] // ✅ ADD THIS LINE
                                   : [
                                       const Color(0xFF10B981),
                                       const Color(0xFF059669),
@@ -12939,6 +12971,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         return const Color(0xFFDC2626); // Red
       case 'officer':
         return Colors.indigo; // Indigo
+      case 'tanod':
+        return const Color(0xFF7C3AED); // Purple - for barangay official
+      // OR: return const Color(0xFFEA580C); // Orange
+      // OR: return const Color(0xFF0891B2); // Cyan
       case 'user':
       default:
         return const Color(0xFF059669); // Green

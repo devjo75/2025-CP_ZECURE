@@ -185,9 +185,16 @@ class _MapScreenState extends State<MapScreen> {
   Map<String, dynamic>? _userProfile;
   bool _isAdmin = false;
   bool _isOfficer = false;
+  bool _isTanod = false; // NEW
 
-  // Helper getter for admin or officer permissions (for general access)
+  // For System Dashboard, full admin features (excludes tanod)
   bool get _hasAdminPermissions => _isAdmin || _isOfficer;
+
+  // For viewing pending reports (includes tanod)
+  bool get _canViewPending => _isAdmin || _isOfficer || _isTanod;
+
+  // For accessing all reports in database query (includes tanod)
+  bool get _canAccessAllReports => _isAdmin || _isOfficer || _isTanod;
 
   // NEW: Specific getter for admin-only actions
   MainTab _currentTab = MainTab.map;
@@ -237,32 +244,32 @@ class _MapScreenState extends State<MapScreen> {
 
   Map<String, Map<String, double>> _severityRadiusConfig = {
     'critical': {
-      'base': 400.0,
-      'min': 500.0,
-      'max': 2500.0,
-      'countMultiplier': 30.0,
-      'intensityMultiplier': 80.0,
-    },
-    'high': {
-      'base': 300.0,
-      'min': 400.0,
-      'max': 1800.0,
-      'countMultiplier': 25.0,
-      'intensityMultiplier': 60.0,
-    },
-    'medium': {
-      'base': 250.0,
-      'min': 300.0,
-      'max': 1200.0,
-      'countMultiplier': 20.0,
-      'intensityMultiplier': 50.0,
-    },
-    'low': {
       'base': 200.0,
       'min': 250.0,
-      'max': 800.0,
+      'max': 1200.0,
       'countMultiplier': 15.0,
-      'intensityMultiplier': 40.0,
+      'intensityMultiplier': 50.0,
+    },
+    'high': {
+      'base': 150.0,
+      'min': 200.0,
+      'max': 900.0,
+      'countMultiplier': 10.0,
+      'intensityMultiplier': 30.0,
+    },
+    'medium': {
+      'base': 100.0,
+      'min': 150.0,
+      'max': 600.0,
+      'countMultiplier': 8.0,
+      'intensityMultiplier': 25.0,
+    },
+    'low': {
+      'base': 80.0,
+      'min': 100.0,
+      'max': 400.0,
+      'countMultiplier': 5.0,
+      'intensityMultiplier': 20.0,
     },
   };
 
@@ -306,20 +313,33 @@ class _MapScreenState extends State<MapScreen> {
   // NEW: Progressive marker loading based on zoom level
   List<Map<String, dynamic>> get _visibleHotspots {
     if (!_markersLoaded) return [];
-
     final currentUserId = _userProfile?['id'];
     final filterService = Provider.of<HotspotFilterService>(
       context,
       listen: false,
     );
 
-    // Check if user has set a custom date range
     final hasCustomDateRange =
         filterService.crimeStartDate != null ||
         filterService.crimeEndDate != null;
 
-    // Calculate 30-day cutoff date (for incident time, not report time)
     final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
+
+    Set<int>? clusterHotspotIds;
+    if (hasCustomDateRange && _persistentClusters.isNotEmpty) {
+      clusterHotspotIds = {};
+      for (final cluster in _persistentClusters) {
+        final crimes = cluster['crimes'] as List<dynamic>?;
+        if (crimes != null) {
+          for (final crime in crimes) {
+            final hotspotId = crime['id'];
+            if (hotspotId != null) {
+              clusterHotspotIds.add(hotspotId);
+            }
+          }
+        }
+      }
+    }
 
     if (_currentZoom < 8.0) {
       return _hotspots
@@ -327,10 +347,8 @@ class _MapScreenState extends State<MapScreen> {
             final status = h['status'] ?? 'approved';
             final activeStatus = h['active_status'] ?? 'active';
 
-            // Show only approved and active hotspots
             if (status != 'approved' || activeStatus != 'active') return false;
 
-            // Filter by 30-day rule unless custom date range is set
             if (!hasCustomDateRange) {
               final incidentTime = DateTime.tryParse(h['time'] ?? '');
               if (incidentTime == null ||
@@ -354,14 +372,11 @@ class _MapScreenState extends State<MapScreen> {
                 currentUserId != null &&
                 (currentUserId == createdBy || currentUserId == reportedBy);
 
-            // For pending: only show to admin/officer or owner
             if (status == 'pending') {
-              return _hasAdminPermissions || isOwnHotspot;
+              return _canViewPending || isOwnHotspot; // ✅ CHANGED
             }
 
-            // Show approved active hotspots
             if (status == 'approved' && activeStatus == 'active') {
-              // Filter by 30-day rule unless custom date range is set
               if (!hasCustomDateRange) {
                 final incidentTime = DateTime.tryParse(h['time'] ?? '');
                 if (incidentTime == null ||
@@ -390,25 +405,20 @@ class _MapScreenState extends State<MapScreen> {
             final isRecent =
                 incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
 
-            // Admin sees everything
-            if (_hasAdminPermissions) return true;
+            if (_canAccessAllReports) return true; // ✅ CHANGED
 
-            // For pending: only show to owner
             if (status == 'pending') {
               return isOwnHotspot;
             }
 
-            // For rejected: only show to owner
             if (status == 'rejected') {
               return isOwnHotspot;
             }
 
-            // For approved active: show to everyone if recent (or custom date range)
             if (status == 'approved' && activeStatus == 'active') {
               return hasCustomDateRange || isRecent;
             }
 
-            // For approved inactive: show to everyone IF within 30 days (or custom date range)
             if (status == 'approved' && activeStatus == 'inactive') {
               return hasCustomDateRange || isRecent;
             }
@@ -431,25 +441,20 @@ class _MapScreenState extends State<MapScreen> {
             final isRecent =
                 incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
 
-            // Admin sees everything
-            if (_hasAdminPermissions) return true;
+            if (_canAccessAllReports) return true; // ✅ CHANGED
 
-            // For pending: only show to owner
             if (status == 'pending') {
               return isOwnHotspot;
             }
 
-            // For rejected: only show to owner
             if (status == 'rejected') {
               return isOwnHotspot;
             }
 
-            // For approved active: show to everyone if recent (or custom date range)
             if (status == 'approved' && activeStatus == 'active') {
               return hasCustomDateRange || isRecent;
             }
 
-            // For approved inactive: show to everyone IF within 30 days (or custom date range)
             if (status == 'approved' && activeStatus == 'inactive') {
               return hasCustomDateRange || isRecent;
             }
@@ -459,7 +464,7 @@ class _MapScreenState extends State<MapScreen> {
           .take(_maxMarkersToShow)
           .toList();
     } else {
-      // ✅ Zoom 16+: Show ALL including rejected, inactive, and OLD crimes
+      // ✅ Zoom 15.5+ logic - FIXED: Always show pending hotspots
       return _hotspots.where((h) {
         final status = h['status'] ?? 'approved';
         final activeStatus = h['active_status'] ?? 'active';
@@ -468,41 +473,76 @@ class _MapScreenState extends State<MapScreen> {
         final isOwnHotspot =
             currentUserId != null &&
             (currentUserId == createdBy || currentUserId == reportedBy);
-        final createdAt = DateTime.tryParse(h['created_at'] ?? '');
-        final isRecent = createdAt != null && createdAt.isAfter(thirtyDaysAgo);
+        final incidentTime = DateTime.tryParse(h['time'] ?? '');
+        final isRecent =
+            incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
+        final hotspotId = h['id'];
 
-        // ✅ CRITICAL: If date filter is active, include ALL approved crimes (active or inactive)
-        if (hasCustomDateRange && status == 'approved') {
-          return true;
+        if (hasCustomDateRange) {
+          // Exception 1: Always show pending
+          if (status == 'pending') {
+            return _canViewPending || isOwnHotspot; // ✅ CHANGED
+          }
+
+          // Exception 2: Always show rejected to owner
+          if (status == 'rejected') {
+            return isOwnHotspot;
+          }
+
+          // Exception 3: Show recent active crimes (within 30 days)
+          if (status == 'approved' && activeStatus == 'active' && isRecent) {
+            return true;
+          }
+
+          // Exception 4: Show recent inactive crimes (within 30 days)
+          if (status == 'approved' && activeStatus == 'inactive' && isRecent) {
+            return true;
+          }
+
+          // ✅ MAIN RULE: For older crimes (beyond 30 days)
+          if (status == 'approved' && !isRecent) {
+            // ✅ Below zoom 17.0: HIDE all old crimes
+            if (_currentZoom < 17.0) {
+              return false;
+            }
+
+            // ✅ At zoom 17.0+: SHOW crimes that are in clusters
+            if (clusterHotspotIds != null) {
+              return clusterHotspotIds.contains(hotspotId);
+            }
+
+            return false;
+          }
+
+          return false;
         }
 
-        // Admin sees everything
-        if (_hasAdminPermissions) {
-          return true;
-        }
-
-        // For pending: only show to owner
+        // NO DATE FILTER: Original 30-day logic
+        // ✅ FIX: Always show pending to admins/officers/tanod regardless of date
         if (status == 'pending') {
-          return isOwnHotspot;
+          return _canViewPending || isOwnHotspot; // ✅ CHANGED
         }
 
-        // For rejected: only show to owner
+        // ✅ FIX: Always show rejected to owner regardless of date
         if (status == 'rejected') {
           return isOwnHotspot;
         }
 
-        // For approved active: show to everyone if recent (or custom date range)
-        if (status == 'approved' && activeStatus == 'active') {
-          return hasCustomDateRange || isRecent;
+        if (_canAccessAllReports) {
+          // ✅ CHANGED
+          return isRecent;
         }
 
-        // For approved inactive: show to everyone IF within 30 days (or custom date range)
+        if (status == 'approved' && activeStatus == 'active') {
+          return isRecent;
+        }
+
         if (status == 'approved' && activeStatus == 'inactive') {
-          return hasCustomDateRange || isRecent;
+          return isRecent;
         }
 
         return false;
-      }).toList(); // ✅ REMOVED .take() - No limit on markers
+      }).toList();
     }
   }
 
@@ -652,16 +692,13 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
-
-    // Only critical startup operations
     _initializeEssentials();
 
-    // Defer heavy operations to avoid blocking UI
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _deferredInitialization();
     });
 
-    // ✅ Setup filter listeners (including date filter for heatmap)
+    // ✅ Single consolidated filter listener
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         final filterService = Provider.of<HotspotFilterService>(
@@ -669,30 +706,16 @@ class _MapScreenState extends State<MapScreen> {
           listen: false,
         );
 
-        // General filter listener (existing)
-        filterService.addListener(_onFilterChanged);
-
-        // ✅ NEW: Date filter listener specifically for heatmap
-        filterService.addListener(_onDateFilterChanged);
+        // Use ONLY ONE listener
+        filterService.addListener(_onFiltersChanged);
       }
     });
   }
 
-  // EXISTING: Handle general filter changes
-  void _onFilterChanged() {
+  // ✅ CONSOLIDATED: Handle ALL filter changes
+  void _onFiltersChanged() async {
     if (!mounted) return;
 
-    print('🔄 Filter changed - reloading heatmap data...');
-
-    _loadHeatmapData().then((_) {
-      if (mounted) {
-        _calculateHeatmap();
-      }
-    });
-  }
-
-  // ✅ NEW: Handle date filter changes specifically
-  void _onDateFilterChanged() async {
     final filterService = Provider.of<HotspotFilterService>(
       context,
       listen: false,
@@ -702,14 +725,31 @@ class _MapScreenState extends State<MapScreen> {
         filterService.crimeStartDate != null ||
         filterService.crimeEndDate != null;
 
-    print('📅 Date filter changed. Custom range: $hasCustomDateRange');
+    print('🔄 Filters changed. Date range: $hasCustomDateRange');
 
-    // Reload everything when date filter changes
-    await _loadHeatmapData();
-    await _loadPersistentClusters();
-    await _calculateHeatmap();
+    // ✅ Prevent concurrent reloads
+    if (_isReloadingData) {
+      print('⚠️ Already reloading, skipping...');
+      return;
+    }
+
+    setState(() => _isReloadingData = true);
+
+    try {
+      // Reload in sequence
+      await _loadHeatmapData();
+      await _loadPersistentClusters();
+      await _calculateHeatmap();
+    } catch (e) {
+      print('❌ Error reloading data: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isReloadingData = false);
+      }
+    }
   }
 
+  bool _isReloadingData = false;
   bool _authListenerSetup = false; // Prevent duplicate listeners
   bool _isLoadingProfile = false; // Prevent duplicate profile loads
 
@@ -868,7 +908,11 @@ class _MapScreenState extends State<MapScreen> {
         context,
         listen: false,
       );
-      filterService.removeListener(_onFilterChanged);
+
+      // ✅ Use the NEW consolidated listener name
+      filterService.removeListener(_onFiltersChanged);
+
+      print('Removed filter listener');
     } catch (e) {
       print('Error removing filter listener: $e');
     }
@@ -1130,7 +1174,7 @@ class _MapScreenState extends State<MapScreen> {
     _timeUpdateTimer?.cancel();
     _settingsUpdateDebouncer?.cancel();
 
-    // ⭐ EXISTING: Remove heatmap settings listener
+    // Remove heatmap settings listener
     try {
       _heatmapSettings.removeListener(_onHeatmapSettingsChanged);
       print('Removed heatmap settings listener');
@@ -1138,22 +1182,20 @@ class _MapScreenState extends State<MapScreen> {
       print('Error removing heatmap settings listener in dispose: $e');
     }
 
-    // ✅ UPDATED: Remove both filter listeners
+    // ✅ FIXED: Remove the consolidated filter listener
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
         listen: false,
       );
 
-      // Remove general filter listener
-      filterService.removeListener(_onFilterChanged);
+      filterService.removeListener(
+        _onFiltersChanged,
+      ); // Changed from _onFilterChanged
 
-      // ✅ NEW: Remove date filter listener
-      filterService.removeListener(_onDateFilterChanged);
-
-      print('Removed filter listeners');
+      print('Removed filter listener');
     } catch (e) {
-      print('Error removing filter listeners in dispose: $e');
+      print('Error removing filter listener in dispose: $e');
     }
 
     super.dispose();
@@ -1866,13 +1908,31 @@ class _MapScreenState extends State<MapScreen> {
   // NEW: Check proximity to heatmap clusters
   // ============================================
   void _checkProximityToHeatmaps() {
-    if (_currentPosition == null || !mounted || _heatmapClusters.isEmpty) {
-      // ⭐ ADD THIS: Clear alerts if no clusters
+    if (_currentPosition == null || !mounted) {
       if (_showHeatmapProximityAlert) {
         setState(() {
           _nearbyHeatmapClusters.clear();
           _showHeatmapProximityAlert = false;
-          _updateAlertType(); // Helper method (see below)
+          _updateAlertType();
+        });
+      }
+      return;
+    }
+
+    // ✅ EFFICIENT: Create a map of active cluster centers for quick lookup
+    final activeClusterCenters = <LatLng>{};
+    for (final pc in _persistentClusters) {
+      if (pc['status'] == 'active') {
+        activeClusterCenters.add(LatLng(pc['center_lat'], pc['center_lng']));
+      }
+    }
+
+    if (activeClusterCenters.isEmpty) {
+      if (_showHeatmapProximityAlert) {
+        setState(() {
+          _nearbyHeatmapClusters.clear();
+          _showHeatmapProximityAlert = false;
+          _updateAlertType();
         });
       }
       return;
@@ -1881,16 +1941,13 @@ class _MapScreenState extends State<MapScreen> {
     final nearbyHeatmaps = <Map<String, dynamic>>[];
 
     for (final cluster in _heatmapClusters) {
-      // ⭐ ADD THIS: Verify cluster still exists in persistent list
-      final stillExists = _persistentClusters.any((pc) {
-        final pcCenter = LatLng(pc['center_lat'], pc['center_lng']);
-        return _calculateDistance(cluster.center, pcCenter) <
-            10.0; // Within 10m
+      // ✅ Quick check: Is this cluster active?
+      final isActive = activeClusterCenters.any((center) {
+        return _calculateDistance(cluster.center, center) < 10.0;
       });
 
-      if (!stillExists) {
-        print('⚠️ Skipping stale cluster that no longer exists');
-        continue;
+      if (!isActive) {
+        continue; // Skip inactive/expired clusters
       }
 
       final distanceToCenter = _calculateDistance(
@@ -1913,17 +1970,16 @@ class _MapScreenState extends State<MapScreen> {
 
         if (isInside) {
           print(
-            '🚨 INSIDE heatmap zone! ${distanceToCenter.toStringAsFixed(1)}m from center (radius: ${cluster.radius.toStringAsFixed(0)}m)',
+            '🚨 INSIDE active heatmap zone! ${distanceToCenter.toStringAsFixed(1)}m from center',
           );
         } else {
           print(
-            '⚠️ Approaching heatmap zone! ${distanceToEdge.toStringAsFixed(1)}m from edge',
+            '⚠️ Approaching active heatmap zone! ${distanceToEdge.toStringAsFixed(1)}m from edge',
           );
         }
       }
     }
 
-    // Sort by priority: inside zones first, then by distance to edge
     nearbyHeatmaps.sort((a, b) {
       if (a['isInside'] && !b['isInside']) return -1;
       if (!a['isInside'] && b['isInside']) return 1;
@@ -1940,29 +1996,17 @@ class _MapScreenState extends State<MapScreen> {
             .map((h) => h['cluster'] as HeatmapCluster)
             .toList();
         _showHeatmapProximityAlert = nearbyHeatmaps.isNotEmpty;
-
-        // Determine alert type priority: both > heatmap > hotspot
-        if (_showProximityAlert && _showHeatmapProximityAlert) {
-          _proximityAlertType = 'both';
-        } else if (_showHeatmapProximityAlert) {
-          _proximityAlertType = 'heatmap';
-        } else if (_showProximityAlert) {
-          _proximityAlertType = 'hotspot';
-        } else {
-          _proximityAlertType = 'none';
-        }
+        _updateAlertType();
       });
 
-      // Haptic feedback for new heatmap alerts
       if (_showHeatmapProximityAlert && !previousHeatmapAlertState) {
         final isInside = nearbyHeatmaps.first['isInside'] as bool;
-
         if (isInside) {
-          HapticFeedback.mediumImpact(); // Stronger feedback when inside
-          print('🚨 HEATMAP ALERT ACTIVATED: Inside danger zone');
+          HapticFeedback.mediumImpact();
+          print('🚨 HEATMAP ALERT ACTIVATED: Inside active danger zone');
         } else {
           HapticFeedback.lightImpact();
-          print('⚠️ HEATMAP ALERT ACTIVATED: Approaching danger zone');
+          print('⚠️ HEATMAP ALERT ACTIVATED: Approaching active danger zone');
         }
       }
     }
@@ -2415,6 +2459,7 @@ class _MapScreenState extends State<MapScreen> {
             _userProfile = response;
             _isAdmin = response['role'] == 'admin';
             _isOfficer = response['role'] == 'officer';
+            _isTanod = response['role'] == 'tanod'; // NEW
             _profileScreen = ProfileScreen(
               _authService,
               _userProfile,
@@ -2459,25 +2504,62 @@ class _MapScreenState extends State<MapScreen> {
             event: PostgresChangeEvent.insert,
             schema: 'public',
             table: 'heatmap_clusters',
-            callback: _handleClusterInsert,
+            callback: (payload) {
+              // ✅ Check historical mode before processing
+              if (_isInHistoricalMode()) {
+                print('📅 Ignoring cluster insert (historical mode)');
+                return;
+              }
+              _handleClusterInsert(payload);
+            },
           )
           .onPostgresChanges(
             event: PostgresChangeEvent.update,
             schema: 'public',
             table: 'heatmap_clusters',
-            callback: _handleClusterUpdate,
+            callback: (payload) {
+              // ✅ Check historical mode before processing
+              if (_isInHistoricalMode()) {
+                print('📅 Ignoring cluster update (historical mode)');
+                return;
+              }
+              _handleClusterUpdate(payload);
+            },
           )
           .onPostgresChanges(
             event: PostgresChangeEvent.delete,
             schema: 'public',
             table: 'heatmap_clusters',
-            callback: _handleClusterDelete,
+            callback: (payload) {
+              // ✅ Check historical mode before processing
+              if (_isInHistoricalMode()) {
+                print('📅 Ignoring cluster delete (historical mode)');
+                return;
+              }
+              _handleClusterDelete(payload);
+            },
           )
           .subscribe();
 
       print('✅ Clusters real-time subscription active');
     } catch (e) {
       print('Error setting up clusters real-time: $e');
+    }
+  }
+
+  // ✅ HELPER: Check if currently in historical mode
+  bool _isInHistoricalMode() {
+    try {
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
+
+      return filterService.crimeStartDate != null ||
+          filterService.crimeEndDate != null;
+    } catch (e) {
+      print('Error checking historical mode: $e');
+      return false;
     }
   }
 
@@ -2500,12 +2582,27 @@ class _MapScreenState extends State<MapScreen> {
         await _loadPersistentClusters();
 
         if (mounted) {
+          // ✅ Respect filter mode
+          final filterService = Provider.of<HotspotFilterService>(
+            context,
+            listen: false,
+          );
+
+          final hasCustomDateRange =
+              filterService.crimeStartDate != null ||
+              filterService.crimeEndDate != null;
+
           setState(() {
-            // Convert to display clusters
-            _heatmapClusters = _persistentClusters
-                .where((pc) => pc['status'] == 'active')
-                .map((pc) => _convertPersistentToDisplayCluster(pc))
-                .toList();
+            if (hasCustomDateRange) {
+              _heatmapClusters = _persistentClusters
+                  .map((pc) => _convertPersistentToDisplayCluster(pc))
+                  .toList();
+            } else {
+              _heatmapClusters = _persistentClusters
+                  .where((pc) => pc['status'] == 'active')
+                  .map((pc) => _convertPersistentToDisplayCluster(pc))
+                  .toList();
+            }
           });
         }
       },
@@ -2528,11 +2625,27 @@ class _MapScreenState extends State<MapScreen> {
         await _loadPersistentClusters();
 
         if (mounted) {
+          // ✅ Respect filter mode
+          final filterService = Provider.of<HotspotFilterService>(
+            context,
+            listen: false,
+          );
+
+          final hasCustomDateRange =
+              filterService.crimeStartDate != null ||
+              filterService.crimeEndDate != null;
+
           setState(() {
-            _heatmapClusters = _persistentClusters
-                .where((pc) => pc['status'] == 'active')
-                .map((pc) => _convertPersistentToDisplayCluster(pc))
-                .toList();
+            if (hasCustomDateRange) {
+              _heatmapClusters = _persistentClusters
+                  .map((pc) => _convertPersistentToDisplayCluster(pc))
+                  .toList();
+            } else {
+              _heatmapClusters = _persistentClusters
+                  .where((pc) => pc['status'] == 'active')
+                  .map((pc) => _convertPersistentToDisplayCluster(pc))
+                  .toList();
+            }
           });
         }
       },
@@ -3052,6 +3165,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // HOTSPOT DELETE
+  // HOTSPOT DELETE - FIXED: Respect historical mode
   void _handleHotspotDelete(PostgresChangePayload payload) async {
     if (!mounted) return;
 
@@ -3087,21 +3201,46 @@ class _MapScreenState extends State<MapScreen> {
     await _loadPersistentClusters();
 
     if (mounted) {
+      // ✅ FIXED: Respect current filter mode when displaying clusters
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
+
+      final hasCustomDateRange =
+          filterService.crimeStartDate != null ||
+          filterService.crimeEndDate != null;
+
       setState(() {
-        _heatmapClusters = _persistentClusters
-            .where((pc) => pc['status'] == 'active')
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
+        if (hasCustomDateRange) {
+          // 📅 Historical mode: Show all clusters (active + inactive)
+          _heatmapClusters = _persistentClusters
+              .map((pc) => _convertPersistentToDisplayCluster(pc))
+              .toList();
+          print(
+            '📅 Showing ${_heatmapClusters.length} clusters (historical mode)',
+          );
+        } else {
+          // 🔴 Live mode: Show only active clusters
+          _heatmapClusters = _persistentClusters
+              .where((pc) => pc['status'] == 'active')
+              .map((pc) => _convertPersistentToDisplayCluster(pc))
+              .toList();
+          print(
+            '🔴 Showing ${_heatmapClusters.length} active clusters (live mode)',
+          );
+        }
+
         _checkProximityToHeatmaps();
       });
     }
 
     print('✅ Crime deletion and cluster cleanup completed');
-    print('   Active clusters: ${_heatmapClusters.length}');
+    print('   Displayed clusters: ${_heatmapClusters.length}');
   }
 
   // ============================================
-  // NEW: Cleanup clusters after crime deletion
+  // IMPROVED: Cleanup clusters after crime deletion with dynamic updates
   // ============================================
   Future<void> _cleanupClusterAfterCrimeDeletion(int deletedCrimeId) async {
     try {
@@ -3116,7 +3255,7 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
 
-      // Remove the crime from junction table
+      // Remove the crime from junction table FIRST
       await Supabase.instance.client
           .from('heatmap_cluster_crimes')
           .delete()
@@ -3129,76 +3268,103 @@ class _MapScreenState extends State<MapScreen> {
         final clusterId = link['cluster_id'];
 
         // Count remaining crimes in this cluster
-        final remainingCrimes = await Supabase.instance.client
+        final remainingCrimeLinks = await Supabase.instance.client
             .from('heatmap_cluster_crimes')
             .select('hotspot_id, is_still_active')
             .eq('cluster_id', clusterId);
 
-        final crimeCount = (remainingCrimes as List).length;
-        final activeCrimeCount = remainingCrimes
-            .where((c) => c['is_still_active'] == true)
+        final crimeCount = (remainingCrimeLinks as List).length;
+
+        print('🔍 Cluster $clusterId has $crimeCount remaining crimes');
+
+        // ⭐ If no crimes left, delete cluster immediately
+        if (crimeCount == 0) {
+          await Supabase.instance.client
+              .from('heatmap_clusters')
+              .delete()
+              .eq('id', clusterId);
+
+          print('🗑️ Deleted cluster $clusterId (no crimes remaining)');
+
+          // Remove from local state
+          setState(() {
+            _persistentClusters.removeWhere((c) => c['id'] == clusterId);
+          });
+
+          continue; // Move to next cluster
+        }
+
+        // ⭐ Check if cluster still meets minimum requirements
+        final hotspotIds = remainingCrimeLinks
+            .map((c) => c['hotspot_id'])
+            .toList();
+
+        final remainingCrimesData = await Supabase.instance.client
+            .from('hotspot')
+            .select('''
+            id,
+            type_id,
+            location,
+            time,
+            status,
+            active_status,
+            created_by,
+            reported_by,
+            created_at,
+            crime_type: type_id (id, name, level, category, description)
+          ''')
+            .inFilter('id', hotspotIds);
+
+        final allCrimes = (remainingCrimesData as List)
+            .map((c) => _formatCrimeForHeatmap(c))
+            .toList();
+
+        // Count by severity
+        final criticalCount = allCrimes
+            .where((c) => c['crime_type']['level'] == 'critical')
+            .length;
+        final highCount = allCrimes
+            .where((c) => c['crime_type']['level'] == 'high')
             .length;
 
-        // Check if cluster should be deleted based on minimum crime requirements
-        if (crimeCount == 0 || crimeCount < _minCrimesForCluster) {
-          // Not enough crimes to maintain cluster - check special cases
-          bool shouldDelete = true;
+        // ⭐ Check if cluster should be deleted based on minimum requirements
+        bool shouldDeleteCluster = false;
 
-          if (crimeCount > 0) {
-            // Fetch the remaining crimes to check severity
-            final remainingCrimesData = await Supabase.instance.client
-                .from('hotspot')
-                .select('''
-          id,
-          type_id,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-                .inFilter(
-                  'id',
-                  remainingCrimes.map((c) => c['hotspot_id']).toList(),
-                );
-
-            final criticalCount = (remainingCrimesData as List)
-                .where((c) => c['crime_type']?['level'] == 'critical')
-                .length;
-            final highCount = remainingCrimesData
-                .where((c) => c['crime_type']?['level'] == 'high')
-                .length;
-
-            // Check if remaining crimes meet minimum cluster requirements
-            if (criticalCount >= 1 && crimeCount >= 2) {
-              shouldDelete = false; // 1 critical + 1 other crime is enough
-            } else if (highCount >= 2) {
-              shouldDelete = false; // 2 high severity crimes is enough
-            }
-          }
-
-          if (shouldDelete) {
-            // Delete the cluster
-            await Supabase.instance.client
-                .from('heatmap_clusters')
-                .delete()
-                .eq('id', clusterId);
-
-            print(
-              '🗑️ Deleted cluster $clusterId (only $crimeCount crime(s) remaining - below minimum)',
-            );
-
-            // Remove from local state
-            setState(() {
-              _persistentClusters.removeWhere((c) => c['id'] == clusterId);
-              _heatmapClusters = _persistentClusters
-                  .where((pc) => pc['status'] == 'active')
-                  .map((pc) => _convertPersistentToDisplayCluster(pc))
-                  .toList();
-            });
-
-            return; // Exit early since cluster is deleted
+        if (crimeCount < _minCrimesForCluster) {
+          // Less than minimum - check special cases
+          if (criticalCount >= 1 && crimeCount >= 2) {
+            shouldDeleteCluster = false; // Keep: 1 critical + 1 other
+          } else if (highCount >= 2) {
+            shouldDeleteCluster = false; // Keep: 2+ high severity
+          } else {
+            shouldDeleteCluster = true; // Delete: doesn't meet any criteria
           }
         }
 
+        if (shouldDeleteCluster) {
+          await Supabase.instance.client
+              .from('heatmap_clusters')
+              .delete()
+              .eq('id', clusterId);
+
+          print(
+            '🗑️ Deleted cluster $clusterId (only $crimeCount crime(s) - below minimum)',
+          );
+
+          setState(() {
+            _persistentClusters.removeWhere((c) => c['id'] == clusterId);
+          });
+
+          continue;
+        }
+
+        // ⭐ Cluster survives - check if it should be active or inactive
+        final activeCrimeCount = remainingCrimeLinks
+            .where((c) => c['is_still_active'] == true)
+            .length;
+
         if (activeCrimeCount == 0) {
-          // No active crimes left - deactivate cluster
+          // No active crimes - deactivate cluster
           await Supabase.instance.client
               .from('heatmap_clusters')
               .update({
@@ -3209,60 +3375,44 @@ class _MapScreenState extends State<MapScreen> {
               })
               .eq('id', clusterId);
 
-          print('⏸️ Deactivated cluster $clusterId (no active crimes)');
+          print('⏸️ Deactivated cluster $clusterId (no active crimes left)');
         } else {
-          // Still has crimes - recalculate cluster properties
-          await _recalculateClusterAfterDeletion(clusterId);
+          // ⭐ CRITICAL: Recalculate cluster properties with remaining crimes
+          print(
+            '♻️ Recalculating cluster $clusterId with $crimeCount remaining crimes...',
+          );
+          await _recalculateClusterAfterDeletion(clusterId, allCrimes);
         }
       }
     } catch (e) {
-      print('Error cleaning up cluster after crime deletion: $e');
+      print('❌ Error cleaning up cluster after crime deletion: $e');
     }
   }
 
   // ============================================
-  // NEW: Recalculate cluster after crime deletion
+  // FIXED: Recalculate cluster after crime deletion
   // ============================================
-  Future<void> _recalculateClusterAfterDeletion(String clusterId) async {
+  Future<void> _recalculateClusterAfterDeletion(
+    String clusterId,
+    List<Map<String, dynamic>> allCrimes,
+  ) async {
     try {
-      // Fetch remaining crimes
-      final crimeLinks = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id, is_still_active')
-          .eq('cluster_id', clusterId);
+      if (allCrimes.isEmpty) {
+        print('⚠️ No crimes to recalculate cluster $clusterId');
+        return;
+      }
 
-      final hotspotIds = (crimeLinks as List)
-          .map((link) => link['hotspot_id'])
-          .toList();
-
-      if (hotspotIds.isEmpty) return;
-
-      final crimesResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('''
-          id,
-          type_id,
-          location,
-          time,
-          status,
-          active_status,
-          created_by,
-          reported_by,
-          created_at,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-          .inFilter('id', hotspotIds);
-
-      final allCrimes = (crimesResponse as List)
-          .map((c) => _formatCrimeForHeatmap(c))
-          .toList();
-
+      // ⭐ Separate active crimes from all crimes
       final activeCrimes = allCrimes
           .where((c) => _isWithinHeatmapTimeWindow(c))
           .toList();
 
+      print(
+        '📊 Cluster $clusterId: ${activeCrimes.length} active / ${allCrimes.length} total crimes',
+      );
+
       if (activeCrimes.isEmpty) {
-        // Deactivate cluster
+        // No active crimes - deactivate
         await Supabase.instance.client
             .from('heatmap_clusters')
             .update({
@@ -3272,18 +3422,23 @@ class _MapScreenState extends State<MapScreen> {
               'total_crime_count': allCrimes.length,
             })
             .eq('id', clusterId);
+
+        print('⏸️ Deactivated cluster $clusterId (all crimes expired)');
         return;
       }
 
-      // Recalculate properties with remaining crimes
+      // ⭐ Recalculate properties with active crimes only
       final clusterData = _calculateClusterProperties(activeCrimes);
 
+      // ⭐ Adjust radius based on crime reduction
       final reductionFactor = activeCrimes.length / allCrimes.length;
-      final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!, // ⭐ CHANGED
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!, // ⭐ CHANGED
+      final baseRadius = clusterData['radius'];
+      final adjustedRadius = (baseRadius * reductionFactor).clamp(
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!,
+        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!,
       );
 
+      // ⭐ Update database with new properties
       await Supabase.instance.client
           .from('heatmap_clusters')
           .update({
@@ -3294,16 +3449,20 @@ class _MapScreenState extends State<MapScreen> {
             'intensity': clusterData['intensity'],
             'active_crime_count': activeCrimes.length,
             'total_crime_count': allCrimes.length,
+            'status': 'active', // Ensure it stays active
             'last_recalculated_at': DateTime.now().toIso8601String(),
           })
           .eq('id', clusterId);
 
-      print('✅ Recalculated cluster $clusterId after deletion');
       print(
-        '   ${activeCrimes.length} active / ${allCrimes.length} total crimes',
+        '✅ Recalculated cluster $clusterId:\n'
+        '   Crimes: ${activeCrimes.length}/${allCrimes.length}\n'
+        '   Radius: ${baseRadius.toStringAsFixed(1)}m → ${adjustedRadius.toStringAsFixed(1)}m\n'
+        '   Severity: ${clusterData['dominantSeverity']}\n'
+        '   Intensity: ${clusterData['intensity'].toStringAsFixed(2)}',
       );
     } catch (e) {
-      print('Error recalculating cluster after deletion: $e');
+      print('❌ Error recalculating cluster after deletion: $e');
     }
   }
 
@@ -3636,9 +3795,22 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _performClusterMaintenance() async {
     if (_persistentClusters.isEmpty) return;
 
-    print('🔧 Running cluster maintenance...');
+    // ✅ CRITICAL FIX: Don't run maintenance when viewing historical data
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: false,
+    );
 
-    Provider.of<HotspotFilterService>(context, listen: false);
+    final hasCustomDateRange =
+        filterService.crimeStartDate != null ||
+        filterService.crimeEndDate != null;
+
+    if (hasCustomDateRange) {
+      print('⏸️ Skipping cluster maintenance - custom date range active');
+      return; // Don't modify cluster status when user is viewing historical data
+    }
+
+    print('🔧 Running cluster maintenance...');
 
     for (final cluster in _persistentClusters) {
       if (cluster['status'] != 'active') continue;
@@ -3687,7 +3859,6 @@ class _MapScreenState extends State<MapScreen> {
         // Check each crime's active status
         bool hasChanges = false;
         for (final crime in allCrimes) {
-          // ⭐ USE FILTER-AWARE CHECK
           final isActive = _isWithinHeatmapTimeWindow(crime);
           final currentLink = crimeLinks.firstWhere(
             (link) => link['hotspot_id'] == crime['id'],
@@ -4155,29 +4326,24 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _loadHotspots() async {
     try {
-      // Start building the query with proper crime type data
       final query = Supabase.instance.client.from('hotspot').select('''
-        *,
-        crime_type: type_id (id, name, level, category, description)
-      ''');
+      *,
+      crime_type: type_id (id, name, level, category, description)
+    ''');
 
-      // Apply filters based on admin/officer status
       PostgrestFilterBuilder filteredQuery;
-      if (!_hasAdminPermissions) {
-        print('Filtering hotspots for non-admin/officer user');
-        final currentUserId = _userProfile?['id'];
 
-        // Calculate 30 days ago (based on incident time, not report time)
+      // Use the specific permission getter
+      if (!_canAccessAllReports) {
+        // Changed to use _canAccessAllReports
+        print('Filtering hotspots for regular user');
+        final currentUserId = _userProfile?['id'];
         final thirtyDaysAgo = DateTime.now()
             .subtract(const Duration(days: 30))
             .toUtc()
             .toIso8601String();
 
         if (currentUserId != null) {
-          // For non-admins/officers, show:
-          // 1. All approved active hotspots
-          // 2. Approved inactive hotspots created within last 30 days
-          // 3. User's own reports (regardless of status and active_status)
           filteredQuery = query.or(
             'and(active_status.eq.active,status.eq.approved),'
             'and(active_status.eq.inactive,status.eq.approved,created_at.gte.$thirtyDaysAgo),'
@@ -4185,29 +4351,22 @@ class _MapScreenState extends State<MapScreen> {
             'reported_by.eq.$currentUserId',
           );
         } else {
-          // If user ID is null, show:
-          // 1. Approved active hotspots
-          // 2. Approved inactive hotspots within 30 days
           filteredQuery = query.or(
             'and(active_status.eq.active,status.eq.approved),'
             'and(active_status.eq.inactive,status.eq.approved,created_at.gte.$thirtyDaysAgo)',
           );
         }
       } else {
-        print('Admin/Officer user - loading all hotspots');
+        print('Admin/Officer/Tanod user - loading all hotspots');
         filteredQuery = query;
       }
 
-      // Add ordering after filtering
       final orderedQuery = filteredQuery.order('time', ascending: false);
-
-      // Execute the query
       final response = await orderedQuery;
 
       if (mounted) {
         setState(() {
           _hotspots = List<Map<String, dynamic>>.from(response).map((hotspot) {
-            // Ensure proper crime_type structure for each hotspot
             final crimeType = hotspot['crime_type'] ?? {};
             return {
               ...hotspot,
@@ -4222,19 +4381,6 @@ class _MapScreenState extends State<MapScreen> {
           }).toList();
 
           print('Loaded ${_hotspots.length} hotspots');
-          if (_hasAdminPermissions) {
-            final inactiveCount = _hotspots
-                .where((h) => h['active_status'] == 'inactive')
-                .length;
-            print('Inactive hotspots count: $inactiveCount');
-          } else {
-            final inactiveCount = _hotspots
-                .where((h) => h['active_status'] == 'inactive')
-                .length;
-            print(
-              'Approved inactive hotspots (within 30 days) visible to public: $inactiveCount',
-            );
-          }
         });
       }
     } catch (e) {
@@ -4283,44 +4429,44 @@ class _MapScreenState extends State<MapScreen> {
         // Radius configs
         _severityRadiusConfig = {
           'critical': {
-            'base': settings['radius_critical_base']?.toDouble() ?? 400.0,
-            'min': settings['radius_critical_min']?.toDouble() ?? 500.0,
-            'max': settings['radius_critical_max']?.toDouble() ?? 2500.0,
+            'base': settings['radius_critical_base']?.toDouble() ?? 200.0,
+            'min': settings['radius_critical_min']?.toDouble() ?? 250.0,
+            'max': settings['radius_critical_max']?.toDouble() ?? 1200.0,
             'countMultiplier':
                 settings['radius_critical_count_multiplier']?.toDouble() ??
-                30.0,
+                15.0,
             'intensityMultiplier':
                 settings['radius_critical_intensity_multiplier']?.toDouble() ??
-                80.0,
-          },
-          'high': {
-            'base': settings['radius_high_base']?.toDouble() ?? 300.0,
-            'min': settings['radius_high_min']?.toDouble() ?? 400.0,
-            'max': settings['radius_high_max']?.toDouble() ?? 1800.0,
-            'countMultiplier':
-                settings['radius_high_count_multiplier']?.toDouble() ?? 25.0,
-            'intensityMultiplier':
-                settings['radius_high_intensity_multiplier']?.toDouble() ??
-                60.0,
-          },
-          'medium': {
-            'base': settings['radius_medium_base']?.toDouble() ?? 250.0,
-            'min': settings['radius_medium_min']?.toDouble() ?? 300.0,
-            'max': settings['radius_medium_max']?.toDouble() ?? 1200.0,
-            'countMultiplier':
-                settings['radius_medium_count_multiplier']?.toDouble() ?? 20.0,
-            'intensityMultiplier':
-                settings['radius_medium_intensity_multiplier']?.toDouble() ??
                 50.0,
           },
-          'low': {
-            'base': settings['radius_low_base']?.toDouble() ?? 200.0,
-            'min': settings['radius_low_min']?.toDouble() ?? 250.0,
-            'max': settings['radius_low_max']?.toDouble() ?? 800.0,
+          'high': {
+            'base': settings['radius_high_base']?.toDouble() ?? 150.0,
+            'min': settings['radius_high_min']?.toDouble() ?? 200.0,
+            'max': settings['radius_high_max']?.toDouble() ?? 900.0,
             'countMultiplier':
-                settings['radius_low_count_multiplier']?.toDouble() ?? 15.0,
+                settings['radius_high_count_multiplier']?.toDouble() ?? 10.0,
             'intensityMultiplier':
-                settings['radius_low_intensity_multiplier']?.toDouble() ?? 40.0,
+                settings['radius_high_intensity_multiplier']?.toDouble() ??
+                30.0,
+          },
+          'medium': {
+            'base': settings['radius_medium_base']?.toDouble() ?? 100.0,
+            'min': settings['radius_medium_min']?.toDouble() ?? 150.0,
+            'max': settings['radius_medium_max']?.toDouble() ?? 600.0,
+            'countMultiplier':
+                settings['radius_medium_count_multiplier']?.toDouble() ?? 8.0,
+            'intensityMultiplier':
+                settings['radius_medium_intensity_multiplier']?.toDouble() ??
+                25.0,
+          },
+          'low': {
+            'base': settings['radius_low_base']?.toDouble() ?? 80.0,
+            'min': settings['radius_low_min']?.toDouble() ?? 100.0,
+            'max': settings['radius_low_max']?.toDouble() ?? 400.0,
+            'countMultiplier':
+                settings['radius_low_count_multiplier']?.toDouble() ?? 5.0,
+            'intensityMultiplier':
+                settings['radius_low_intensity_multiplier']?.toDouble() ?? 20.0,
           },
         };
       });
@@ -15024,10 +15170,30 @@ class _MapScreenState extends State<MapScreen> {
                       const Duration(days: 30),
                     );
 
+                    final hasCustomDateRange =
+                        filterService.crimeStartDate != null ||
+                        filterService.crimeEndDate != null;
+
+                    Set<int>? clusterHotspotIds;
+                    if (hasCustomDateRange && _persistentClusters.isNotEmpty) {
+                      clusterHotspotIds = {};
+                      for (final cluster in _persistentClusters) {
+                        final crimes = cluster['crimes'] as List<dynamic>?;
+                        if (crimes != null) {
+                          for (final crime in crimes) {
+                            final hotspotId = crime['id'];
+                            if (hotspotId != null) {
+                              clusterHotspotIds.add(hotspotId);
+                            }
+                          }
+                        }
+                      }
+                    }
+
                     final visibleHotspots = _visibleHotspots.where((hotspot) {
                       final currentUserId = _userProfile?['id'];
-                      final hasAdminPermissions = _hasAdminPermissions;
                       final status = hotspot['status'] ?? 'approved';
+                      final activeStatus = hotspot['active_status'] ?? 'active';
                       final createdBy = hotspot['created_by'];
                       final reportedBy = hotspot['reported_by'];
                       final isOwnHotspot =
@@ -15040,38 +15206,69 @@ class _MapScreenState extends State<MapScreen> {
                       final isRecent =
                           incidentTime != null &&
                           incidentTime.isAfter(thirtyDaysAgo);
+                      final hotspotId = hotspot['id'];
 
-                      // First check the filter service
+                      // First check the filter service (severity, category filters)
                       if (!filterService.shouldShowHotspot(hotspot)) {
                         return false;
                       }
 
-                      // Admin sees everything that passes filter service
-                      if (hasAdminPermissions) return true;
+                      // ✅ Special logic when date filter is active
+                      if (hasCustomDateRange) {
+                        // Exception 1: Always show pending
+                        if (status == 'pending') {
+                          return _canViewPending || isOwnHotspot; // ✅ CHANGED
+                        }
 
-                      // For pending: only show to owner
+                        // Exception 2: Always show rejected to owner
+                        if (status == 'rejected') {
+                          return isOwnHotspot;
+                        }
+
+                        // Exception 3: Always show recent active crimes (within 30 days)
+                        if (status == 'approved' &&
+                            activeStatus == 'active' &&
+                            isRecent) {
+                          return true;
+                        }
+
+                        // Exception 4: Always show recent inactive crimes (within 30 days)
+                        if (status == 'approved' &&
+                            activeStatus == 'inactive' &&
+                            isRecent) {
+                          return true;
+                        }
+
+                        // ✅ MAIN RULE: For older approved crimes (beyond 30 days)
+                        if (status == 'approved' && !isRecent) {
+                          // ✅ Below zoom 17.0: HIDE all old crimes
+                          if (_currentZoom < 17.0) {
+                            return false;
+                          }
+
+                          // ✅ At zoom 17.0+: SHOW crimes that are in clusters
+                          if (clusterHotspotIds != null) {
+                            return clusterHotspotIds.contains(hotspotId);
+                          }
+
+                          return false;
+                        }
+
+                        return false;
+                      }
+
+                      // ✅ NO DATE FILTER: Standard 30-day logic
+                      if (_canAccessAllReports) return true; // ✅ CHANGED
+
                       if (status == 'pending') {
                         return isOwnHotspot;
                       }
 
-                      // For rejected: only show to owner
                       if (status == 'rejected') {
                         return isOwnHotspot;
                       }
 
-                      // For approved hotspots (both active and inactive)
                       if (status == 'approved') {
-                        // Check if custom date range is set
-                        final hasCustomDateRange =
-                            filterService.crimeStartDate != null ||
-                            filterService.crimeEndDate != null;
-
-                        // If custom date range, show all approved (handled by filter service)
-                        if (hasCustomDateRange) {
-                          return true;
-                        }
-
-                        // Otherwise, show if within 30 days (both active and inactive)
                         return isRecent;
                       }
 
@@ -16408,6 +16605,69 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Future<void> _trackHotspotView(int hotspotId, String source) async {
+    try {
+      final userId = _userProfile?['id'];
+      if (userId == null) return;
+
+      // Check if user has already viewed this hotspot
+      final existingView = await Supabase.instance.client
+          .from('hotspot_views')
+          .select()
+          .eq('hotspot_id', hotspotId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+      if (existingView != null) {
+        // Update existing view
+        await Supabase.instance.client
+            .from('hotspot_views')
+            .update({
+              'viewed_at': DateTime.now().toUtc().toIso8601String(),
+              'view_source': source,
+            })
+            .eq('id', existingView['id']);
+      } else {
+        // Insert new view
+        await Supabase.instance.client.from('hotspot_views').insert({
+          'hotspot_id': hotspotId,
+          'user_id': userId,
+          'view_source': source,
+          'viewed_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      }
+    } catch (e) {
+      print('Error tracking hotspot view: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchHotspotViewLogs(
+    int hotspotId,
+  ) async {
+    try {
+      final response = await Supabase.instance.client
+          .from('hotspot_views')
+          .select('''
+          *,
+          viewer:user_id (
+            id,
+            first_name,
+            last_name,
+            role,
+            police_rank:police_rank_id (old_rank, new_rank),
+            police_station:police_station_id (name, station_number)
+          )
+        ''')
+          .eq('hotspot_id', hotspotId)
+          .order('viewed_at', ascending: false);
+
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      print('Error fetching view logs: $e');
+      return [];
+    }
+  }
+
   // HOTSPOT DETAILS
   void _showHotspotDetails(Map<String, dynamic> hotspot) async {
     final verificationStatus = hotspot['verification_status'] ?? 'unverified';
@@ -16423,6 +16683,10 @@ class _MapScreenState extends State<MapScreen> {
     if (coordinatesArray == null || coordinatesArray.length < 2) {
       _showSnackBar('Invalid hotspot location data');
       return;
+    }
+
+    if (_hasAdminPermissions || _isOfficer) {
+      await _trackHotspotView(hotspot['id'], 'map_marker'); // or detect source
     }
 
     // Extract lat/lng from the array
@@ -16490,7 +16754,7 @@ class _MapScreenState extends State<MapScreen> {
 
     // Fetch officer details
     Map<String, String> officerDetails = {};
-    Map<String, String?> contactNumbers = {}; // NEW: Store contact numbers
+    Map<String, String?> contactNumbers = {}; // Store contact numbers
     try {
       final response = await Supabase.instance.client
           .from('hotspot')
@@ -16500,11 +16764,13 @@ class _MapScreenState extends State<MapScreen> {
         last_updated_by,
         created_by,
         reported_by,
+        verified_by,
         approved_profile:approved_by (first_name, last_name),
         rejected_profile:rejected_by (first_name, last_name),
         updated_profile:last_updated_by (first_name, last_name),
         creator_profile:created_by (first_name, last_name, contact_number),
-        reporter_profile:reported_by (first_name, last_name, contact_number)
+        reporter_profile:reported_by (first_name, last_name, contact_number),
+        verifier_profile:verified_by (first_name, last_name)
       ''')
           .eq('id', hotspot['id'])
           .single();
@@ -16533,26 +16799,27 @@ class _MapScreenState extends State<MapScreen> {
                 .trim();
       }
 
-      // Process created_by - NEW: Include contact
+      // Process created_by - Include contact
       if (response['created_by'] != null &&
           response['creator_profile'] != null) {
         officerDetails['created_by'] =
             '${response['creator_profile']['first_name'] ?? ''} ${response['creator_profile']['last_name'] ?? ''}'
                 .trim();
         contactNumbers['creator'] =
-            response['creator_profile']['contact_number']; // NEW
+            response['creator_profile']['contact_number'];
       }
 
-      // Process reported_by - NEW: Include contact
+      // Process reported_by - Include contact
       if (response['reported_by'] != null &&
           response['reporter_profile'] != null) {
         officerDetails['reported_by'] =
             '${response['reporter_profile']['first_name'] ?? ''} ${response['reporter_profile']['last_name'] ?? ''}'
                 .trim();
         contactNumbers['reporter'] =
-            response['reporter_profile']['contact_number']; // NEW
+            response['reporter_profile']['contact_number'];
       }
 
+      // Process verified_by - ADD THIS BLOCK
       if (response['verified_by'] != null &&
           response['verifier_profile'] != null) {
         officerDetails['verified_by'] =
@@ -17191,6 +17458,46 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ),
 
+                                // NEW: Show verification note for verified but pending reports
+                                if (status == 'pending' &&
+                                    verificationStatus == 'verified' &&
+                                    !_hasAdminPermissions &&
+                                    isOwner)
+                                  Container(
+                                    margin: const EdgeInsets.only(
+                                      top: 16,
+                                      bottom: 16,
+                                    ),
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Colors.blue.shade200,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.verified,
+                                          color: Colors.blue.shade600,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Your report has been verified and is now waiting for admin approval.',
+                                            style: TextStyle(
+                                              color: Colors.blue.shade700,
+                                              fontSize: 14,
+                                              fontStyle: FontStyle.italic,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+
                                 // Action buttons
                                 // Officer details section - CLEANED
                                 if (_hasAdminPermissions || _isOfficer) ...[
@@ -17230,28 +17537,55 @@ class _MapScreenState extends State<MapScreen> {
                                       children: [
                                         // Review Status Header
                                         Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
                                           children: [
-                                            Icon(
-                                              Icons.person,
-                                              color:
-                                                  (officerDetails['approved_by']
-                                                          ?.isNotEmpty ??
-                                                      false)
-                                                  ? Colors.green.shade600
-                                                  : (officerDetails['rejected_by']
-                                                            ?.isNotEmpty ??
-                                                        false)
-                                                  ? Colors.red.shade600
-                                                  : Colors.blue.shade600,
-                                              size: 20,
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.person,
+                                                  color:
+                                                      (officerDetails['approved_by']
+                                                              ?.isNotEmpty ??
+                                                          false)
+                                                      ? Colors.green.shade600
+                                                      : (officerDetails['rejected_by']
+                                                                ?.isNotEmpty ??
+                                                            false)
+                                                      ? Colors.red.shade600
+                                                      : Colors.blue.shade600,
+                                                  size: 20,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                const Text(
+                                                  'Review Status',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                            const SizedBox(width: 8),
-                                            const Text(
-                                              'Review Status',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.black87,
+                                            // NEW: View Logs Button
+                                            TextButton.icon(
+                                              onPressed: () =>
+                                                  _showViewLogsModal(
+                                                    hotspot['id'],
+                                                  ),
+                                              icon: const Icon(
+                                                Icons.visibility,
+                                                size: 16,
+                                              ),
+                                              label: const Text('View Logs'),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor:
+                                                    Colors.blue.shade600,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
                                               ),
                                             ),
                                           ],
@@ -17419,33 +17753,27 @@ class _MapScreenState extends State<MapScreen> {
                                                       size: 18,
                                                     ),
                                                     const SizedBox(width: 8),
-                                                    Text(
-                                                      '✅ Verified',
-                                                      style: TextStyle(
-                                                        fontSize: 14,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors
-                                                            .green
-                                                            .shade700,
+                                                    Expanded(
+                                                      child: Text(
+                                                        officerDetails['verified_by']
+                                                                    ?.isNotEmpty ??
+                                                                false
+                                                            ? '✅ Verified by ${officerDetails['verified_by']}'
+                                                            : '✅ Verified',
+                                                        style: TextStyle(
+                                                          fontSize: 14,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          color: Colors
+                                                              .green
+                                                              .shade700,
+                                                        ),
                                                       ),
                                                     ),
                                                   ],
                                                 ),
-                                                if (officerDetails['verified_by']
-                                                        ?.isNotEmpty ??
-                                                    false) ...[
-                                                  const SizedBox(height: 4),
-                                                  Text(
-                                                    'By: ${officerDetails['verified_by']}',
-                                                    style: const TextStyle(
-                                                      fontSize: 13,
-                                                      color: Colors.black87,
-                                                    ),
-                                                  ),
-                                                ],
                                                 if (verifiedAt != null) ...[
-                                                  const SizedBox(height: 2),
+                                                  const SizedBox(height: 4),
                                                   Text(
                                                     'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(verifiedAt).toLocal())}',
                                                     style: TextStyle(
@@ -17536,24 +17864,58 @@ class _MapScreenState extends State<MapScreen> {
                                         if (officerDetails['approved_by']
                                                 ?.isNotEmpty ??
                                             false) ...[
-                                          Text(
-                                            '✅ Approved by: ${officerDetails['approved_by']}',
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.black87,
-                                            ),
+                                          Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                '✅ Approved by: ${officerDetails['approved_by']}',
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                              if (hotspot['updated_at'] !=
+                                                  null) ...[
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(hotspot['updated_at']).toLocal())}',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.grey[600],
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
                                           ),
                                           const SizedBox(height: 4),
                                         ],
                                         if (officerDetails['rejected_by']
                                                 ?.isNotEmpty ??
                                             false) ...[
-                                          Text(
-                                            '❌ Rejected by: ${officerDetails['rejected_by']}',
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.black87,
-                                            ),
+                                          Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                '❌ Rejected by: ${officerDetails['rejected_by']}',
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                              if (hotspot['updated_at'] !=
+                                                  null) ...[
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(hotspot['updated_at']).toLocal())}',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.grey[600],
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
                                           ),
                                           const SizedBox(height: 4),
                                         ],
@@ -18161,6 +18523,44 @@ class _MapScreenState extends State<MapScreen> {
                             ),
                           ),
 
+                        // NEW: Show verification note for verified but pending reports
+                        if (status == 'pending' &&
+                            verificationStatus == 'verified' &&
+                            !_hasAdminPermissions &&
+                            isOwner)
+                          Container(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.verified,
+                                  color: Colors.blue.shade600,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Your report has been verified and is now waiting for admin approval.',
+                                    style: TextStyle(
+                                      color: Colors.blue.shade700,
+                                      fontSize: 14,
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
                         // Officer details section with contact numbers
                         if (_hasAdminPermissions || _isOfficer) ...[
                           Container(
@@ -18198,28 +18598,54 @@ class _MapScreenState extends State<MapScreen> {
                               children: [
                                 // Review Status Header
                                 Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Icon(
-                                      Icons.person,
-                                      color:
-                                          (officerDetails['approved_by']
-                                                  ?.isNotEmpty ??
-                                              false)
-                                          ? Colors.green.shade600
-                                          : (officerDetails['rejected_by']
-                                                    ?.isNotEmpty ??
-                                                false)
-                                          ? Colors.red.shade600
-                                          : Colors.blue.shade600,
-                                      size: 20,
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.person,
+                                          color:
+                                              (officerDetails['approved_by']
+                                                      ?.isNotEmpty ??
+                                                  false)
+                                              ? Colors.green.shade600
+                                              : (officerDetails['rejected_by']
+                                                        ?.isNotEmpty ??
+                                                    false)
+                                              ? Colors.red.shade600
+                                              : Colors.blue.shade600,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        const Text(
+                                          'Review Status',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 8),
-                                    const Text(
-                                      'Review Status',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black87,
+                                    // NEW: View Logs Button
+                                    TextButton.icon(
+                                      onPressed: () =>
+                                          _showViewLogsModal(hotspot['id']),
+                                      icon: const Icon(
+                                        Icons.visibility,
+                                        size: 16,
+                                      ),
+                                      label: const Text('Logs'),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.blue.shade600,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        minimumSize: const Size(0, 0),
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
                                       ),
                                     ),
                                   ],
@@ -18383,30 +18809,24 @@ class _MapScreenState extends State<MapScreen> {
                                               size: 18,
                                             ),
                                             const SizedBox(width: 8),
-                                            Text(
-                                              '✅ Verified',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.green.shade700,
+                                            Expanded(
+                                              child: Text(
+                                                officerDetails['verified_by']
+                                                            ?.isNotEmpty ??
+                                                        false
+                                                    ? '✅ Verified by ${officerDetails['verified_by']}'
+                                                    : '✅ Verified',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.green.shade700,
+                                                ),
                                               ),
                                             ),
                                           ],
                                         ),
-                                        if (officerDetails['verified_by']
-                                                ?.isNotEmpty ??
-                                            false) ...[
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'By: ${officerDetails['verified_by']}',
-                                            style: const TextStyle(
-                                              fontSize: 13,
-                                              color: Colors.black87,
-                                            ),
-                                          ),
-                                        ],
                                         if (verifiedAt != null) ...[
-                                          const SizedBox(height: 2),
+                                          const SizedBox(height: 4),
                                           Text(
                                             'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(verifiedAt).toLocal())}',
                                             style: TextStyle(
@@ -18488,23 +18908,55 @@ class _MapScreenState extends State<MapScreen> {
                                 // Show approval / rejection
                                 if (officerDetails['approved_by']?.isNotEmpty ??
                                     false) ...[
-                                  Text(
-                                    '✅ Approved by: ${officerDetails['approved_by']}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '✅ Approved by: ${officerDetails['approved_by']}',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                      if (hotspot['updated_at'] != null) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(hotspot['updated_at']).toLocal())}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey[600],
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                   const SizedBox(height: 4),
                                 ],
                                 if (officerDetails['rejected_by']?.isNotEmpty ??
                                     false) ...[
-                                  Text(
-                                    '❌ Rejected by: ${officerDetails['rejected_by']}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '❌ Rejected by: ${officerDetails['rejected_by']}',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                      if (hotspot['updated_at'] != null) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'On: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.parse(hotspot['updated_at']).toLocal())}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey[600],
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                   const SizedBox(height: 4),
                                 ],
@@ -18598,48 +19050,138 @@ class _MapScreenState extends State<MapScreen> {
 
                         // Mobile action buttons
 
-                        // OFFICER BUTTONS - Verify/Reject Verification
-                        if (_isOfficer && !_isAdmin && status == 'pending') ...[
-                          if (verificationStatus == 'unverified')
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 16.0,
-                              ),
-                              child: Column(
-                                children: [
-                                  Row(
+                        // OFFICER/TANOD BUTTONS - Verify/Reject Verification
+                        if ((_isOfficer || _isTanod) &&
+                            !_isAdmin &&
+                            status == 'pending') ...[
+                          if (verificationStatus == 'unverified') ...[
+                            // Check if can verify
+                            Builder(
+                              builder: (context) {
+                                final canVerify = _canVerifyHotspot(hotspot);
+                                final restrictionMessage =
+                                    _getVerificationRestrictionMessage(hotspot);
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 16.0,
+                                  ),
+                                  child: Column(
                                     children: [
-                                      Expanded(
-                                        child: ElevatedButton.icon(
-                                          onPressed: () =>
-                                              _verifyHotspot(hotspot['id']),
-                                          icon: const Icon(
-                                            Icons.verified,
-                                            size: 16,
+                                      // Show restriction message if applicable
+                                      if (!canVerify &&
+                                          restrictionMessage.isNotEmpty)
+                                        Container(
+                                          margin: const EdgeInsets.only(
+                                            bottom: 12,
                                           ),
-                                          label: const Text('Verify'),
-                                          style: ElevatedButton.styleFrom(
-                                            foregroundColor: Colors.green,
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(6),
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: Colors.orange.shade50,
+                                            borderRadius: BorderRadius.circular(
+                                              8,
                                             ),
-                                            padding: const EdgeInsets.symmetric(
-                                              vertical: 12,
+                                            border: Border.all(
+                                              color: Colors.orange.shade200,
                                             ),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.warning,
+                                                color: Colors.orange.shade700,
+                                                size: 20,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  restrictionMessage,
+                                                  style: TextStyle(
+                                                    color:
+                                                        Colors.orange.shade700,
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: ElevatedButton(
-                                          onPressed: () =>
-                                              _showRejectVerificationDialog(
-                                                hotspot['id'],
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              onPressed: canVerify
+                                                  ? () => _verifyHotspot(
+                                                      hotspot['id'],
+                                                    )
+                                                  : null,
+                                              icon: Icon(
+                                                Icons.verified,
+                                                size: 16,
+                                                color: canVerify
+                                                    ? null
+                                                    : Colors.grey,
                                               ),
+                                              label: Text(
+                                                'Verify',
+                                                style: TextStyle(
+                                                  color: canVerify
+                                                      ? null
+                                                      : Colors.grey,
+                                                ),
+                                              ),
+                                              style: ElevatedButton.styleFrom(
+                                                foregroundColor: Colors.green,
+                                                disabledForegroundColor:
+                                                    Colors.grey,
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                    ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: ElevatedButton(
+                                              onPressed: () =>
+                                                  _showRejectVerificationDialog(
+                                                    hotspot['id'],
+                                                  ),
+                                              style: ElevatedButton.styleFrom(
+                                                foregroundColor: Colors.orange,
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                    ),
+                                              ),
+                                              child: const Text('Reject'),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: ElevatedButton.icon(
+                                          onPressed: () =>
+                                              _deleteHotspot(hotspot['id']),
+                                          icon: const Icon(
+                                            Icons.delete,
+                                            size: 16,
+                                          ),
+                                          label: const Text('Delete'),
                                           style: ElevatedButton.styleFrom(
-                                            foregroundColor: Colors.orange,
+                                            foregroundColor: Colors.red,
                                             shape: RoundedRectangleBorder(
                                               borderRadius:
                                                   BorderRadius.circular(6),
@@ -18648,36 +19190,14 @@ class _MapScreenState extends State<MapScreen> {
                                               vertical: 12,
                                             ),
                                           ),
-                                          child: const Text('Reject'),
                                         ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 8),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: ElevatedButton.icon(
-                                      onPressed: () =>
-                                          _deleteHotspot(hotspot['id']),
-                                      icon: const Icon(Icons.delete, size: 16),
-                                      label: const Text('Delete'),
-                                      style: ElevatedButton.styleFrom(
-                                        foregroundColor: Colors.red,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            6,
-                                          ),
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          vertical: 12,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          else
+                                );
+                              },
+                            ),
+                          ] else
                             Padding(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 8,
@@ -18792,7 +19312,9 @@ class _MapScreenState extends State<MapScreen> {
                         if (!_hasAdminPermissions &&
                             !_isOfficer &&
                             status == 'pending' &&
-                            isOwner)
+                            isOwner &&
+                            verificationStatus ==
+                                'unverified') // ADD THIS CHECK
                           Padding(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 8,
@@ -18842,6 +19364,48 @@ class _MapScreenState extends State<MapScreen> {
                                   ),
                                 ),
                               ],
+                            ),
+                          ),
+
+                        // ADD THIS: Show info message when verified
+                        if (!_hasAdminPermissions &&
+                            !_isOfficer &&
+                            status == 'pending' &&
+                            isOwner &&
+                            verificationStatus == 'verified')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8.0,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.blueGrey.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Colors.blueGrey.shade200,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.lock,
+                                    color: Colors.blueGrey.shade700,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Report is locked after verification. Contact admin if changes are needed.',
+                                      style: TextStyle(
+                                        color: Colors.blueGrey.shade700,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
 
@@ -19104,30 +19668,54 @@ class _MapScreenState extends State<MapScreen> {
     final verificationStatus = hotspot['verification_status'] ?? 'unverified';
     final buttons = <Widget>[];
 
-    // OFFICER BUTTONS - Verify/Reject Verification (Officers only, not admins)
-    if (_isOfficer && !_isAdmin && status == 'pending') {
+    // OFFICER/TANOD BUTTONS - Verify/Reject Verification
+    if ((_isOfficer || _isTanod) && !_isAdmin && status == 'pending') {
       if (verificationStatus == 'unverified') {
+        final canVerify = _canVerifyHotspot(hotspot);
+        final restrictionMessage = _getVerificationRestrictionMessage(hotspot);
+
         buttons.addAll([
           Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () => _verifyHotspot(hotspot['id']),
-              icon: const Icon(Icons.verified, size: 18),
-              label: const Text(
-                'Verify',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.grey.shade100,
-                foregroundColor: Colors.green.shade700,
-                elevation: 0,
-                shadowColor: Colors.transparent,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: Colors.grey.shade300, width: 1),
+            child: Tooltip(
+              message: canVerify ? 'Verify this report' : restrictionMessage,
+              child: ElevatedButton.icon(
+                onPressed: canVerify
+                    ? () => _verifyHotspot(hotspot['id'])
+                    : null,
+                icon: Icon(
+                  Icons.verified,
+                  size: 18,
+                  color: canVerify ? null : Colors.grey,
                 ),
-                padding: const EdgeInsets.symmetric(
-                  vertical: 16,
-                  horizontal: 20,
+                label: Text(
+                  'Verify',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: canVerify ? null : Colors.grey,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: canVerify
+                      ? Colors.grey.shade100
+                      : Colors.grey.shade200,
+                  foregroundColor: canVerify
+                      ? Colors.green.shade700
+                      : Colors.grey.shade400,
+                  elevation: 0,
+                  shadowColor: Colors.transparent,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                      color: canVerify
+                          ? Colors.grey.shade300
+                          : Colors.grey.shade400,
+                      width: 1,
+                    ),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 16,
+                    horizontal: 20,
+                  ),
                 ),
               ),
             ),
@@ -19183,8 +19771,49 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
         ]);
+
+        // Show restriction message if can't verify
+        if (!canVerify && restrictionMessage.isNotEmpty) {
+          return Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning,
+                      color: Colors.orange.shade700,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        restrictionMessage,
+                        style: TextStyle(
+                          color: Colors.orange.shade700,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: buttons,
+              ),
+            ],
+          );
+        }
       } else {
-        // Officer has already verified or rejected - show info message
+        // Already verified or rejected
         return Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -19289,7 +19918,9 @@ class _MapScreenState extends State<MapScreen> {
     else if (!_hasAdminPermissions &&
         !_isOfficer &&
         status == 'pending' &&
-        isOwner) {
+        isOwner &&
+        verificationStatus == 'unverified') {
+      // ADD THIS CHECK
       buttons.addAll([
         Expanded(
           child: ElevatedButton.icon(
@@ -19338,6 +19969,39 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
       ]);
+    }
+    // ADD THIS: Show info message when verified
+    else if (!_hasAdminPermissions &&
+        !_isOfficer &&
+        status == 'pending' &&
+        isOwner &&
+        verificationStatus == 'verified') {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.blueGrey.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.blueGrey.shade200),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.lock, color: Colors.blueGrey.shade700, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Report is locked after verification. Contact admin if changes are needed.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.blueGrey.shade700,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
     }
     // REJECTED STATUS
     else if (status == 'rejected') {
@@ -22248,19 +22912,17 @@ class _MapScreenState extends State<MapScreen> {
   // ============================================
   // LOAD PERSISTENT CLUSTERS FROM DATABASE
   // ============================================
-  Future<void> _loadPersistentClusters() async {
+  Future<void> _loadPersistentClusters({int retryCount = 0}) async {
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
         listen: false,
       );
 
-      // Check if custom date range is set
       final hasCustomDateRange =
           filterService.crimeStartDate != null ||
           filterService.crimeEndDate != null;
 
-      // Build base query
       var query = Supabase.instance.client.from('heatmap_clusters').select('''
           *,
           heatmap_cluster_crimes!inner(
@@ -22272,31 +22934,23 @@ class _MapScreenState extends State<MapScreen> {
         ''');
 
       if (hasCustomDateRange) {
-        // ✅ SHOW HISTORICAL CLUSTERS: Include both active AND inactive clusters
-        // Filter clusters that overlap with the selected date range
-
         if (filterService.crimeStartDate != null) {
-          // Show clusters that were created before or during the date range
           query = query.or(
             'status.eq.active,'
             'and(status.eq.inactive,created_at.lte.${filterService.crimeEndDate?.toIso8601String() ?? DateTime.now().toIso8601String()})',
           );
         }
-
-        print(
-          '📅 Loading historical clusters for date range: '
-          '${filterService.crimeStartDate} to ${filterService.crimeEndDate}',
-        );
       } else {
-        // ✅ DEFAULT: Show only active clusters (current heatmap)
         query = query.eq('status', 'active');
-        print('🔴 Loading only active clusters (no date filter)');
       }
 
-      final clustersResponse = await query;
-      final clusters = clustersResponse as List;
+      // ✅ Add timeout
+      final clustersResponse = await query.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException('Cluster load timeout'),
+      );
 
-      // For each cluster, fetch full crime details
+      final clusters = clustersResponse as List;
       final processedClusters = <Map<String, dynamic>>[];
 
       for (final clusterData in clusters) {
@@ -22307,7 +22961,6 @@ class _MapScreenState extends State<MapScreen> {
 
         if (hotspotIds.isEmpty) continue;
 
-        // Fetch complete crime data
         var crimeQuery = Supabase.instance.client
             .from('hotspot')
             .select('''
@@ -22324,7 +22977,6 @@ class _MapScreenState extends State<MapScreen> {
           ''')
             .inFilter('id', hotspotIds);
 
-        // ✅ Filter crimes by date range if custom dates are set
         if (hasCustomDateRange) {
           if (filterService.crimeStartDate != null) {
             crimeQuery = crimeQuery.gte(
@@ -22340,16 +22992,16 @@ class _MapScreenState extends State<MapScreen> {
           }
         }
 
-        final crimesResponse = await crimeQuery;
+        final crimesResponse = await crimeQuery.timeout(
+          const Duration(seconds: 10),
+        );
 
         final crimes = (crimesResponse as List)
             .map((crime) => _formatCrimeForHeatmap(crime))
             .toList();
 
-        // Skip clusters with no crimes in the date range
         if (crimes.isEmpty) continue;
 
-        // Merge is_still_active status from junction table
         for (final crime in crimes) {
           final link = crimeLinks.firstWhere(
             (l) => l['hotspot_id'] == crime['id'],
@@ -22362,16 +23014,37 @@ class _MapScreenState extends State<MapScreen> {
         processedClusters.add({...clusterData, 'crimes': crimes});
       }
 
-      setState(() {
-        _persistentClusters = processedClusters;
-      });
+      // ✅ Only update if we got valid data
+      if (processedClusters.isNotEmpty || clusters.isEmpty) {
+        setState(() {
+          _persistentClusters = processedClusters;
+        });
 
-      print(
-        '✅ Loaded ${_persistentClusters.length} clusters '
-        '${hasCustomDateRange ? "(historical + active)" : "(active only)"}',
-      );
+        print(
+          '✅ Loaded ${_persistentClusters.length} clusters '
+          '${hasCustomDateRange ? "(historical + active)" : "(active only)"}',
+        );
+      } else {
+        print(
+          '⚠️ Got empty response but expected data - keeping existing clusters',
+        );
+      }
+    } on TimeoutException catch (e) {
+      print('⏱️ Timeout loading clusters: $e');
+
+      // ✅ Retry once on timeout
+      if (retryCount < 1 && mounted) {
+        print('🔄 Retrying cluster load...');
+        await Future.delayed(const Duration(seconds: 2));
+        return _loadPersistentClusters(retryCount: retryCount + 1);
+      }
     } catch (e) {
-      print('Error loading persistent clusters: $e');
+      print('❌ Error loading persistent clusters: $e');
+
+      // ✅ Don't clear existing data on error
+      if (_persistentClusters.isNotEmpty) {
+        print('ℹ️ Keeping existing ${_persistentClusters.length} clusters');
+      }
     }
   }
   // ============================================
@@ -22379,6 +23052,21 @@ class _MapScreenState extends State<MapScreen> {
   // ============================================
 
   void _cleanupExpiredHeatmapCrimes() async {
+    // ✅ CRITICAL FIX: Don't cleanup when user has custom date filter active
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: false,
+    );
+
+    final hasCustomDateRange =
+        filterService.crimeStartDate != null ||
+        filterService.crimeEndDate != null;
+
+    if (hasCustomDateRange) {
+      print('⏸️ Skipping crime cleanup - custom date range active');
+      return; // Early exit - preserve historical data
+    }
+
     final beforeCount = _heatmapCrimes.length;
 
     // Don't remove crimes that are in persistent clusters
@@ -22483,10 +23171,6 @@ class _MapScreenState extends State<MapScreen> {
   // ============================================
   // PROCESS CRIMES AGAINST PERSISTENT CLUSTERS
   // ============================================
-
-  // ============================================
-  // IMPROVED: Process crimes against persistent clusters (works with historical data)
-  // ============================================
   Future<void> _processCrimesAgainstPersistentClusters(
     List<Map<String, dynamic>> crimes,
   ) async {
@@ -22506,19 +23190,16 @@ class _MapScreenState extends State<MapScreen> {
       print('Error fetching existing cluster crimes: $e');
     }
 
-    // Only process NEW crimes that aren't in any cluster yet
     final newCrimes = crimes
         .where((c) => !existingCrimeIds.contains(c['id']))
         .toList();
 
     if (newCrimes.isEmpty) {
-      print('✅ No new crimes to process, skipping cluster assignment');
+      print('✅ No new crimes to process');
       return;
     }
 
-    print(
-      '🔄 Processing ${newCrimes.length} new crimes against ${_persistentClusters.length} clusters',
-    );
+    print('🔄 Processing ${newCrimes.length} new crimes');
 
     for (final crime in newCrimes) {
       final crimePoint = LatLng(
@@ -22526,49 +23207,248 @@ class _MapScreenState extends State<MapScreen> {
         crime['location']['coordinates'][0].toDouble(),
       );
 
+      // ⭐ Check if we're in historical mode (date filter active)
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
+      final hasCustomDateRange =
+          filterService.crimeStartDate != null ||
+          filterService.crimeEndDate != null;
+
+      // ⭐ Only validate time window in LIVE mode
+      if (!hasCustomDateRange) {
+        final crimeTime = parseStoredDateTime(crime['time']);
+        final level = crime['crime_type']['level'] ?? 'low';
+        final daysWindow = _severityTimeWindows[level] ?? 30;
+        final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
+
+        final isCrimeValid = crimeTime.isAfter(cutoffDate);
+
+        if (!isCrimeValid) {
+          print(
+            '⚠️ Crime ${crime['id']} outside time window (${crime['time']}), skipping cluster assignment',
+          );
+          continue; // Skip this crime entirely in live mode
+        }
+      }
+
       bool foundCluster = false;
 
-      // ✅ CHANGED: Check against BOTH active AND inactive clusters
-      // This allows historical crimes to be added to inactive clusters
-      for (final cluster in _persistentClusters) {
+      // ⭐ ONLY check against ACTIVE clusters
+      final activeClusters = _persistentClusters
+          .where((c) => c['status'] == 'active')
+          .toList();
+
+      print(
+        '📍 Crime location: ${crimePoint.latitude}, ${crimePoint.longitude}',
+      );
+      print('🔍 Checking against ${activeClusters.length} active clusters...');
+
+      for (final cluster in activeClusters) {
         final clusterCenter = LatLng(
           cluster['center_lat'],
           cluster['center_lng'],
         );
         final distance = _calculateDistance(clusterCenter, crimePoint);
 
+        print(
+          '   Active Cluster ${cluster['id']}: ${distance.toStringAsFixed(2)}m away',
+        );
+
         if (distance <= _clusterMergeDistance) {
           await _addCrimeToExistingCluster(cluster['id'], crime);
           foundCluster = true;
-
-          // ✅ If adding to an inactive cluster, check if it should be reactivated
-          if (cluster['status'] == 'inactive') {
-            final isActive = _isWithinHeatmapTimeWindow(crime);
-            if (isActive) {
-              // Reactivate the cluster
-              await Supabase.instance.client
-                  .from('heatmap_clusters')
-                  .update({'status': 'active', 'deactivated_at': null})
-                  .eq('id', cluster['id']);
-
-              print(
-                '✅ Reactivated cluster ${cluster['id']} with new active crime',
-              );
-            }
-          }
-
+          print('✅ Added valid crime to active cluster ${cluster['id']}');
           break;
         }
       }
 
-      // Create new cluster only if NOT found in any existing cluster
+      // ⭐ NEW LOGIC: Check if we're in an expired cluster's territory
       if (!foundCluster) {
-        await _checkAndCreateNewCluster(crime, crimes);
+        final expiredClusters = _persistentClusters
+            .where((c) => c['status'] == 'inactive')
+            .toList();
+
+        bool isInExpiredClusterZone = false;
+
+        for (final expiredCluster in expiredClusters) {
+          final clusterCenter = LatLng(
+            expiredCluster['center_lat'],
+            expiredCluster['center_lng'],
+          );
+          final distance = _calculateDistance(clusterCenter, crimePoint);
+
+          if (distance <= _clusterMergeDistance) {
+            isInExpiredClusterZone = true;
+            print(
+              '🚫 Crime is within expired cluster ${expiredCluster['id']} territory (${distance.toStringAsFixed(2)}m)',
+            );
+            print(
+              '   Cannot create new cluster without sufficient nearby crimes',
+            );
+            break;
+          }
+        }
+
+        if (isInExpiredClusterZone) {
+          // ⭐ In expired cluster zone - need MORE crimes to justify new cluster
+          print(
+            '🔍 Checking if enough NEW crimes exist to override expired cluster zone...',
+          );
+          await _checkAndCreateNewClusterNearExpired(crime, crimes);
+        } else {
+          // ⭐ Not in any cluster zone - normal cluster creation rules
+          print(
+            '🆕 No nearby clusters (active or expired), attempting normal cluster creation...',
+          );
+          await _checkAndCreateNewCluster(crime, crimes);
+        }
       }
     }
 
-    // Update only affected clusters (not all)
     await _updateAffectedClusters(newCrimes);
+  }
+
+  // ============================================
+  // NEW: Create cluster near expired cluster - stricter rules
+  // ============================================
+  Future<void> _checkAndCreateNewClusterNearExpired(
+    Map<String, dynamic> primaryCrime,
+    List<Map<String, dynamic>> allCrimes,
+  ) async {
+    try {
+      final primaryPoint = LatLng(
+        primaryCrime['location']['coordinates'][1].toDouble(),
+        primaryCrime['location']['coordinates'][0].toDouble(),
+      );
+
+      // Find nearby NEW crimes within merge distance
+      final nearbyCrimes = allCrimes.where((crime) {
+        if (crime['id'] == primaryCrime['id']) return true;
+
+        final crimePoint = LatLng(
+          crime['location']['coordinates'][1].toDouble(),
+          crime['location']['coordinates'][0].toDouble(),
+        );
+
+        final distance = _calculateDistance(primaryPoint, crimePoint);
+        return distance <= _clusterMergeDistance;
+      }).toList();
+
+      // ⭐ Filter: Only crimes with overlapping time windows
+      final validCrimes = _getCrimesWithOverlappingTimeWindows(nearbyCrimes);
+
+      // ⭐ Filter: Exclude crimes that are already in OTHER clusters
+      final existingLinks = await Supabase.instance.client
+          .from('heatmap_cluster_crimes')
+          .select('hotspot_id')
+          .inFilter('hotspot_id', validCrimes.map((c) => c['id']).toList());
+
+      final crimesInClusters = (existingLinks as List)
+          .map((link) => link['hotspot_id'])
+          .toSet();
+
+      final availableCrimes = validCrimes
+          .where((c) => !crimesInClusters.contains(c['id']))
+          .toList();
+
+      if (availableCrimes.isEmpty) {
+        print('🚫 No available crimes near expired cluster');
+        return;
+      }
+
+      // ⭐ STRICTER RULES: Need MORE crimes to create cluster in expired zone
+      final criticalCount = availableCrimes
+          .where((c) => c['crime_type']['level'] == 'critical')
+          .length;
+      final highCount = availableCrimes
+          .where((c) => c['crime_type']['level'] == 'high')
+          .length;
+
+      bool canFormCluster = false;
+
+      // Rule 1: 1 critical + at least 1 other crime
+      if (criticalCount >= 1 && availableCrimes.length >= 2) {
+        canFormCluster = true;
+        print(
+          '✅ Cluster formation allowed: 1 critical + ${availableCrimes.length - criticalCount} other crime(s)',
+        );
+      }
+      // Rule 2: 2+ high-level crimes
+      else if (highCount >= 2) {
+        canFormCluster = true;
+        print('✅ Cluster formation allowed: $highCount high-level crimes');
+      }
+      // Rule 3: 3+ crimes of any level
+      else if (availableCrimes.length >= 3) {
+        canFormCluster = true;
+        print(
+          '✅ Cluster formation allowed: ${availableCrimes.length} crimes (minimum 3)',
+        );
+      }
+
+      if (!canFormCluster) {
+        print(
+          '🚫 NOT enough crimes to override expired cluster zone:\n'
+          '   Found: ${availableCrimes.length} crime(s), $criticalCount critical, $highCount high\n'
+          '   Need: 1 critical+1 other, OR 2 high, OR 3+ any level',
+        );
+        return;
+      }
+
+      // ✅ Create new cluster with stricter requirements met
+      final clusterData = _calculateClusterProperties(availableCrimes);
+
+      final clusterResponse = await Supabase.instance.client
+          .from('heatmap_clusters')
+          .insert({
+            'center_lat': clusterData['center'].latitude,
+            'center_lng': clusterData['center'].longitude,
+            'current_radius': clusterData['radius'],
+            'dominant_severity': clusterData['dominantSeverity'],
+            'intensity': clusterData['intensity'],
+            'active_crime_count': availableCrimes.length,
+            'total_crime_count': availableCrimes.length,
+            'status': 'active',
+            'first_crime_at': availableCrimes
+                .map((c) => DateTime.parse(c['time']))
+                .reduce((a, b) => a.isBefore(b) ? a : b)
+                .toIso8601String(),
+            'last_crime_at': availableCrimes
+                .map((c) => DateTime.parse(c['time']))
+                .reduce((a, b) => a.isAfter(b) ? a : b)
+                .toIso8601String(),
+            'deactivated_at': null,
+          })
+          .select()
+          .single();
+
+      final clusterId = clusterResponse['id'];
+
+      // Link all crimes
+      final crimeLinks = availableCrimes
+          .map(
+            (crime) => {
+              'cluster_id': clusterId,
+              'hotspot_id': crime['id'],
+              'is_still_active': true,
+              'was_renewal_trigger': false,
+            },
+          )
+          .toList();
+
+      await Supabase.instance.client
+          .from('heatmap_cluster_crimes')
+          .insert(crimeLinks);
+
+      print(
+        '✅ Created NEW cluster $clusterId NEAR expired cluster with ${availableCrimes.length} valid crimes\n'
+        '   (Override rules met)',
+      );
+    } catch (e) {
+      print('Error creating cluster near expired zone: $e');
+    }
   }
 
   // ============================================
@@ -22860,26 +23740,31 @@ class _MapScreenState extends State<MapScreen> {
         );
 
         final distance = _calculateDistance(primaryPoint, crimePoint);
-        return distance <= _clusterMergeDistance; // ⭐ CHANGED
+        return distance <= _clusterMergeDistance;
       }).toList();
 
-      final activeCrimes = nearbyCrimes
-          .where((c) => _isWithinHeatmapTimeWindow(c))
-          .toList();
+      // ⭐ NEW LOGIC: Check time window overlap
+      // Crimes must have OVERLAPPING time windows to form a cluster
+      final validCrimes = _getCrimesWithOverlappingTimeWindows(nearbyCrimes);
 
-      final criticalCount = nearbyCrimes
+      if (validCrimes.isEmpty) {
+        print('⚠️ No crimes with overlapping time windows');
+        return;
+      }
+
+      // ⭐ Count only VALID crimes for cluster formation rules
+      final criticalCount = validCrimes
           .where((c) => c['crime_type']['level'] == 'critical')
           .length;
-      final highCount = nearbyCrimes
+      final highCount = validCrimes
           .where((c) => c['crime_type']['level'] == 'high')
           .length;
 
       bool canFormCluster = false;
 
-      if (nearbyCrimes.length >= _minCrimesForCluster) {
-        // ⭐ CHANGED
+      if (validCrimes.length >= _minCrimesForCluster) {
         canFormCluster = true;
-      } else if (criticalCount >= 1 && nearbyCrimes.length >= 2) {
+      } else if (criticalCount >= 1 && validCrimes.length >= 2) {
         canFormCluster = true;
       } else if (highCount >= 2) {
         canFormCluster = true;
@@ -22887,34 +23772,50 @@ class _MapScreenState extends State<MapScreen> {
 
       if (!canFormCluster) {
         print(
-          '⚠️ Not enough crimes to form cluster (${nearbyCrimes.length} crimes found)',
+          '⚠️ Not enough crimes to form cluster (${validCrimes.length} crimes with overlapping windows)',
         );
-        return; // Not enough crimes to form cluster
+        return;
       }
 
       // Check if these crimes already belong to another cluster
-      final crimeIds = nearbyCrimes.map((c) => c['id']).toList();
+      final crimeIds = validCrimes.map((c) => c['id']).toList();
       final existingLinks = await Supabase.instance.client
           .from('heatmap_cluster_crimes')
           .select('cluster_id')
           .inFilter('hotspot_id', crimeIds);
 
       if ((existingLinks as List).isNotEmpty) {
-        print(
-          '⚠️ Crimes already belong to existing clusters, skipping new cluster creation',
-        );
+        print('⚠️ Crimes already belong to existing clusters, skipping');
         return;
       }
 
-      // ⭐ CHANGED: Calculate cluster properties with ALL crimes
-      // but track which ones are currently active
-      final clusterData = _calculateClusterProperties(nearbyCrimes);
+      // Calculate cluster properties with valid crimes
+      final clusterData = _calculateClusterProperties(validCrimes);
 
-      // ⭐ NEW: Determine cluster status based on active crime count
-      final clusterStatus = activeCrimes.isEmpty ? 'inactive' : 'active';
+      // ⭐ FIXED: Properly determine if crimes are currently active
+      // Check if ANY crime in the cluster is still within its time window FROM NOW
+      int activeCrimeCount = 0;
       final now = DateTime.now();
 
-      // Create new persistent cluster in database
+      for (final crime in validCrimes) {
+        final crimeTime = parseStoredDateTime(crime['time']);
+        final level = crime['crime_type']['level'] ?? 'low';
+        final daysWindow = _severityTimeWindows[level] ?? 30;
+        final expirationDate = crimeTime.add(Duration(days: daysWindow));
+
+        // Check if crime is still valid TODAY
+        if (now.isBefore(expirationDate)) {
+          activeCrimeCount++;
+        }
+      }
+
+      final clusterStatus = activeCrimeCount > 0 ? 'active' : 'inactive';
+
+      print(
+        '📊 Cluster status check: $activeCrimeCount/${validCrimes.length} crimes still active TODAY',
+      );
+
+      // Create new persistent cluster
       final clusterResponse = await Supabase.instance.client
           .from('heatmap_clusters')
           .insert({
@@ -22923,50 +23824,137 @@ class _MapScreenState extends State<MapScreen> {
             'current_radius': clusterData['radius'],
             'dominant_severity': clusterData['dominantSeverity'],
             'intensity': clusterData['intensity'],
-            'active_crime_count': activeCrimes.length,
-            'total_crime_count': nearbyCrimes.length,
-            'status': clusterStatus, // ⭐ Set initial status
-            'first_crime_at': nearbyCrimes
+            'active_crime_count': activeCrimeCount,
+            'total_crime_count': validCrimes.length,
+            'status': clusterStatus,
+            'first_crime_at': validCrimes
                 .map((c) => DateTime.parse(c['time']))
                 .reduce((a, b) => a.isBefore(b) ? a : b)
                 .toIso8601String(),
-            'last_crime_at': nearbyCrimes
+            'last_crime_at': validCrimes
                 .map((c) => DateTime.parse(c['time']))
                 .reduce((a, b) => a.isAfter(b) ? a : b)
                 .toIso8601String(),
             'deactivated_at': clusterStatus == 'inactive'
                 ? now.toIso8601String()
-                : null, // ⭐ Set if inactive
+                : null,
           })
           .select()
           .single();
 
       final clusterId = clusterResponse['id'];
 
-      // ⭐ CHANGED: Link all crimes with proper is_still_active status
-      final crimeLinks = nearbyCrimes
-          .map(
-            (crime) => {
-              'cluster_id': clusterId,
-              'hotspot_id': crime['id'],
-              'is_still_active': _isWithinHeatmapTimeWindow(
-                crime,
-              ), // ⭐ Mark historical crimes as inactive
-              'was_renewal_trigger': false,
-            },
-          )
-          .toList();
+      // Link all valid crimes with proper active status
+      final crimeLinks = validCrimes.map((crime) {
+        final crimeTime = parseStoredDateTime(crime['time']);
+        final level = crime['crime_type']['level'] ?? 'low';
+        final daysWindow = _severityTimeWindows[level] ?? 30;
+        final expirationDate = crimeTime.add(Duration(days: daysWindow));
+        final isStillActive = now.isBefore(expirationDate);
+
+        return {
+          'cluster_id': clusterId,
+          'hotspot_id': crime['id'],
+          'is_still_active': isStillActive,
+          'was_renewal_trigger': false,
+        };
+      }).toList();
 
       await Supabase.instance.client
           .from('heatmap_cluster_crimes')
           .insert(crimeLinks);
 
       print(
-        '✅ Created $clusterStatus cluster $clusterId with ${nearbyCrimes.length} crimes (${activeCrimes.length} active)',
+        '✅ Created $clusterStatus cluster $clusterId with ${validCrimes.length} crimes '
+        '($activeCrimeCount active) - overlapping time windows verified',
       );
     } catch (e) {
       print('Error creating new cluster: $e');
     }
+  }
+
+  // ============================================
+  // NEW: Get crimes that have overlapping time windows
+  // ============================================
+  List<Map<String, dynamic>> _getCrimesWithOverlappingTimeWindows(
+    List<Map<String, dynamic>> crimes,
+  ) {
+    if (crimes.isEmpty) return [];
+
+    // Calculate time window for each crime (start time -> end of validity)
+    final crimeWindows = crimes.map((crime) {
+      final crimeTime = parseStoredDateTime(crime['time']);
+      final level = crime['crime_type']['level'] ?? 'low';
+      final daysWindow = _severityTimeWindows[level] ?? 30;
+
+      return {
+        'crime': crime,
+        'startTime': crimeTime,
+        'endTime': crimeTime.add(Duration(days: daysWindow)),
+      };
+    }).toList();
+
+    // Sort by start time
+    crimeWindows.sort(
+      (a, b) =>
+          (a['startTime'] as DateTime).compareTo(b['startTime'] as DateTime),
+    );
+
+    // Find the largest group of crimes with overlapping windows
+    final groups = <List<Map<String, dynamic>>>[];
+
+    for (var i = 0; i < crimeWindows.length; i++) {
+      final currentCrime = crimeWindows[i];
+      final currentStart = currentCrime['startTime'] as DateTime;
+      final currentEnd = currentCrime['endTime'] as DateTime;
+
+      // Start a new group with this crime
+      final group = [currentCrime['crime'] as Map<String, dynamic>];
+
+      // Find all crimes that overlap with this crime's window
+      for (var j = 0; j < crimeWindows.length; j++) {
+        if (i == j) continue;
+
+        final otherCrime = crimeWindows[j];
+        final otherStart = otherCrime['startTime'] as DateTime;
+        final otherEnd = otherCrime['endTime'] as DateTime;
+
+        // Check if windows overlap
+        // Two windows overlap if: start1 < end2 AND start2 < end1
+        final overlaps =
+            currentStart.isBefore(otherEnd) && otherStart.isBefore(currentEnd);
+
+        if (overlaps && !group.contains(otherCrime['crime'])) {
+          group.add(otherCrime['crime'] as Map<String, dynamic>);
+        }
+      }
+
+      groups.add(group);
+    }
+
+    // Return the largest group (most crimes with overlapping windows)
+    if (groups.isEmpty) return [];
+
+    groups.sort((a, b) => b.length.compareTo(a.length));
+    final largestGroup = groups.first;
+
+    print(
+      '🔍 Time window analysis: ${largestGroup.length}/${crimes.length} crimes have overlapping windows',
+    );
+
+    // Log the time windows for debugging
+    for (final crime in largestGroup) {
+      final crimeTime = parseStoredDateTime(crime['time']);
+      final level = crime['crime_type']['level'] ?? 'low';
+      final daysWindow = _severityTimeWindows[level] ?? 30;
+      final endTime = crimeTime.add(Duration(days: daysWindow));
+
+      print(
+        '   Crime ${crime['id']} ($level): ${crimeTime.toString().split('.')[0]} -> ${endTime.toString().split('.')[0]}',
+      );
+    }
+
+    return largestGroup;
   }
 
   // ============================================
@@ -23098,32 +24086,32 @@ class _MapScreenState extends State<MapScreen> {
   // ============================================
   static const Map<String, Map<String, double>> SEVERITY_RADIUS_CONFIG = {
     'critical': {
-      'base': 400.0, // Larger base for serious crimes
-      'min': 500.0, // 500m minimum danger zone
-      'max': 2500.0, // 2.5km maximum (terrorism, kidnapping zones)
-      'countMultiplier': 30.0,
-      'intensityMultiplier': 80.0,
-    },
-    'high': {
-      'base': 300.0,
-      'min': 400.0, // 400m minimum
-      'max': 1800.0, // 1.8km maximum (gang territories, robbery zones)
-      'countMultiplier': 25.0,
-      'intensityMultiplier': 60.0,
-    },
-    'medium': {
-      'base': 250.0,
-      'min': 300.0, // 300m minimum
-      'max': 1200.0, // 1.2km maximum (theft, burglary areas)
-      'countMultiplier': 20.0,
+      'base': 200.0,
+      'min': 250.0,
+      'max': 1200.0,
+      'countMultiplier': 15.0,
       'intensityMultiplier': 50.0,
     },
+    'high': {
+      'base': 150.0,
+      'min': 200.0,
+      'max': 900.0,
+      'countMultiplier': 10.0,
+      'intensityMultiplier': 30.0,
+    },
+    'medium': {
+      'base': 100.0,
+      'min': 150.0,
+      'max': 600.0,
+      'countMultiplier': 8.0,
+      'intensityMultiplier': 25.0,
+    },
     'low': {
-      'base': 200.0,
-      'min': 250.0, // 250m minimum
-      'max': 800.0, // 800m maximum (disturbances, minor crimes)
-      'countMultiplier': 15.0,
-      'intensityMultiplier': 40.0,
+      'base': 80.0,
+      'min': 100.0,
+      'max': 400.0,
+      'countMultiplier': 5.0,
+      'intensityMultiplier': 20.0,
     },
   };
 
@@ -23160,12 +24148,14 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // ============================================
+  // IMPROVED: Heatmap visualization with better visibility for expired clusters
+  // ============================================
   Widget _buildHeatmapLayer() {
     if (!_showHeatmap || _heatmapClusters.isEmpty) {
       return const SizedBox.shrink();
     }
 
-    // ⭐ UPDATED: Even more conservative scaling across ALL zoom levels
     double fillOpacity;
     double borderOpacity;
     double radiusMultiplier;
@@ -23173,53 +24163,53 @@ class _MapScreenState extends State<MapScreen> {
     bool useTripleLayer = false;
 
     if (_currentZoom < 8.0) {
-      // Very far zoom: REDUCED from 4.0 to 3.0
       fillOpacity = 0.55;
       borderOpacity = 0.75;
-      radiusMultiplier = 3.0; // Was 4.0, now 3x
+      radiusMultiplier = 3.0;
       borderWidth = 4;
       useTripleLayer = true;
     } else if (_currentZoom < 10.0) {
-      // Far zoom: REDUCED from 3.0 to 2.2
       fillOpacity = 0.5;
       borderOpacity = 0.7;
-      radiusMultiplier = 2.2; // Was 3.0, now 2.2x
+      radiusMultiplier = 2.2;
       borderWidth = 3.5;
       useTripleLayer = true;
     } else if (_currentZoom < 12.5) {
-      // Medium zoom: REDUCED from 1.8 to 1.4
       fillOpacity = 0.45;
       borderOpacity = 0.65;
-      radiusMultiplier = 1.4; // Was 1.8, now 1.4x
+      radiusMultiplier = 1.4;
       borderWidth = 3;
     } else if (_currentZoom < 13.0) {
-      // Very close zoom: REDUCED from 1.0 to 0.85
       fillOpacity = 0.35;
       borderOpacity = 0.55;
-      radiusMultiplier = 0.85; // Was 1.0, now 0.85x (15% smaller)
+      radiusMultiplier = 0.85;
       borderWidth = 2;
     } else {
-      // Super close zoom: NEW - even smaller
       fillOpacity = 0.3;
       borderOpacity = 0.5;
-      radiusMultiplier = 0.7; // 30% smaller than base
+      radiusMultiplier = 0.7;
       borderWidth = 2;
     }
 
     return Stack(
       children: [
-        // Outer glow layer - FURTHER REDUCED
+        // Outer glow layer
         if (useTripleLayer)
           CircleLayer(
             circles: _heatmapClusters.map((cluster) {
-              final color = _getHeatmapColor(cluster.intensity);
+              final isExpired = _isClusterExpired(cluster);
+              final color = isExpired
+                  ? Colors
+                        .blueGrey
+                        .shade400 // ⭐ Alternative: Blue-grey for historical
+                  : _getHeatmapColor(cluster.intensity);
+
               return CircleMarker(
                 point: cluster.center,
-                radius:
-                    cluster.radius * radiusMultiplier * 1.3, // Was 1.5, now 1.3
+                radius: cluster.radius * radiusMultiplier * 1.3,
                 color: color.withOpacity(
-                  fillOpacity * 0.2,
-                ), // Was 0.25, now 0.2
+                  fillOpacity * (isExpired ? 0.28 : 0.2),
+                ),
                 borderColor: Colors.transparent,
                 borderStrokeWidth: 0,
                 useRadiusInMeter: true,
@@ -23227,20 +24217,21 @@ class _MapScreenState extends State<MapScreen> {
             }).toList(),
           ),
 
-        // Middle glow layer - FURTHER REDUCED
+        // Middle glow layer
         if (useTripleLayer)
           CircleLayer(
             circles: _heatmapClusters.map((cluster) {
-              final color = _getHeatmapColor(cluster.intensity);
+              final isExpired = _isClusterExpired(cluster);
+              final color = isExpired
+                  ? Colors.blueGrey.shade500
+                  : _getHeatmapColor(cluster.intensity);
+
               return CircleMarker(
                 point: cluster.center,
-                radius:
-                    cluster.radius *
-                    radiusMultiplier *
-                    1.15, // Was 1.25, now 1.15
+                radius: cluster.radius * radiusMultiplier * 1.15,
                 color: color.withOpacity(
-                  fillOpacity * 0.35,
-                ), // Was 0.4, now 0.35
+                  fillOpacity * (isExpired ? 0.38 : 0.35),
+                ),
                 borderColor: Colors.transparent,
                 borderStrokeWidth: 0,
                 useRadiusInMeter: true,
@@ -23251,14 +24242,21 @@ class _MapScreenState extends State<MapScreen> {
         // Main heatmap layer
         CircleLayer(
           circles: _heatmapClusters.map((cluster) {
-            final color = _getHeatmapColor(cluster.intensity);
+            final isExpired = _isClusterExpired(cluster);
+            final color = isExpired
+                ? Colors
+                      .blueGrey
+                      .shade600 // ⭐ Blue-grey main layer
+                : _getHeatmapColor(cluster.intensity);
 
             return CircleMarker(
               point: cluster.center,
               radius: cluster.radius * radiusMultiplier,
-              color: color.withOpacity(fillOpacity),
-              borderColor: color.withOpacity(borderOpacity),
-              borderStrokeWidth: borderWidth,
+              color: color.withOpacity(fillOpacity * (isExpired ? 0.5 : 1.0)),
+              borderColor: color.withOpacity(
+                borderOpacity * (isExpired ? 0.65 : 1.0),
+              ),
+              borderStrokeWidth: isExpired ? borderWidth * 0.75 : borderWidth,
               useRadiusInMeter: true,
             );
           }).toList(),
@@ -23267,7 +24265,20 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // Build heatmap markers (for interaction)
+  // ============================================
+  // NEW: Check if cluster is expired (all crimes outside time windows)
+  // ============================================
+  bool _isClusterExpired(HeatmapCluster cluster) {
+    // Find corresponding persistent cluster
+    for (final pc in _persistentClusters) {
+      final pcCenter = LatLng(pc['center_lat'], pc['center_lng']);
+      if (_calculateDistance(cluster.center, pcCenter) < 10.0) {
+        return pc['status'] == 'inactive';
+      }
+    }
+    return false;
+  }
+
   Widget _buildHeatmapMarkers() {
     if (!_showHeatmap || _heatmapClusters.isEmpty || _currentZoom < 13.0) {
       return const SizedBox.shrink();
@@ -23275,7 +24286,12 @@ class _MapScreenState extends State<MapScreen> {
 
     return MarkerLayer(
       markers: _heatmapClusters.map((cluster) {
-        final color = _getHeatmapColor(cluster.intensity);
+        final isExpired = _isClusterExpired(cluster);
+        final color = isExpired
+            ? Colors
+                  .blueGrey
+                  .shade700 // ⭐ Blue-grey for markers
+            : _getHeatmapColor(cluster.intensity);
 
         return Marker(
           point: cluster.center,
@@ -23286,17 +24302,30 @@ class _MapScreenState extends State<MapScreen> {
             child: Container(
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: color.withOpacity(0.1),
+                color: color.withOpacity(isExpired ? 0.15 : 0.1),
                 border: Border.all(color: color, width: 2),
               ),
               child: Center(
-                child: Text(
-                  '${cluster.crimeCount}',
-                  style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '${cluster.crimeCount}',
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: isExpired
+                            ? FontWeight.w600
+                            : FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    if (isExpired)
+                      Icon(
+                        Icons.history,
+                        size: 12,
+                        color: color.withOpacity(0.8),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -23307,194 +24336,273 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // ============================================
-  // FIXED: Heatmap details with proper parsing
-  // ============================================
-
-  // ============================================
-  // MODIFIED: Heatmap details with historical crimes
+  // FIXED: Responsive Heatmap details with proper parsing
   // ============================================
 
   void _showHeatmapDetails(HeatmapCluster cluster) {
-    // Find the corresponding persistent cluster
+    // Find corresponding persistent cluster
     Map<String, dynamic>? persistentCluster;
-
     for (final pc in _persistentClusters) {
       final pcCenter = LatLng(pc['center_lat'], pc['center_lng']);
       if (_calculateDistance(cluster.center, pcCenter) < 10.0) {
-        // Within 10m
         persistentCluster = pc;
         break;
       }
     }
 
-    final activeCrimeCount =
-        persistentCluster?['active_crime_count'] ?? cluster.crimeCount;
-    final totalCrimeCount =
-        persistentCluster?['total_crime_count'] ?? cluster.crimeCount;
+    final isExpiredCluster = persistentCluster?['status'] == 'inactive';
 
-    // Separate active and historical crimes
-    final activeCrimes = cluster.crimes
-        .where(
-          (c) =>
-              c['is_still_active_in_cluster'] == true ||
-              _isWithinHeatmapTimeWindow(c),
-        )
-        .toList();
+    // ⭐ FIXED: Categorize crimes based on individual time windows
+    final activeCrimes = <Map<String, dynamic>>[];
+    final historicalCrimes = <Map<String, dynamic>>[];
 
-    final historicalCrimes = cluster.crimes
-        .where(
-          (c) =>
-              c['is_still_active_in_cluster'] == false &&
-              !_isWithinHeatmapTimeWindow(c),
-        )
-        .toList();
+    for (final crime in cluster.crimes) {
+      final crimeTime = parseStoredDateTime(crime['time']);
+      final level = crime['crime_type']['level'] ?? 'low';
+      final daysWindow = _severityTimeWindows[level] ?? 30;
+      final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
+
+      if (crimeTime.isAfter(cutoffDate) && !isExpiredCluster) {
+        activeCrimes.add(crime);
+      } else {
+        historicalCrimes.add(crime);
+      }
+    }
 
     showDialog(
       context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          width: 340,
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.8,
+      builder: (context) {
+        // Get screen size
+        final screenWidth = MediaQuery.of(context).size.width;
+        final screenHeight = MediaQuery.of(context).size.height;
+        final isMobile = screenWidth < 600;
+
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(isMobile ? 20 : 16),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Fixed Header
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
+          insetPadding: isMobile
+              ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
+              : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+          child: Container(
+            width: isMobile ? double.infinity : 400,
+            constraints: BoxConstraints(
+              maxHeight: isMobile ? screenHeight * 0.85 : screenHeight * 0.8,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding: EdgeInsets.all(isMobile ? 16 : 20),
+                  decoration: BoxDecoration(
+                    color: isExpiredCluster
+                        ? Colors.grey.shade100
+                        : Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(isMobile ? 20 : 16),
+                      topRight: Radius.circular(isMobile ? 20 : 16),
+                    ),
                   ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.whatshot,
-                      color: _getHeatmapColor(cluster.intensity),
-                    ),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Crime Hotspot',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              // Scrollable Content
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      // Active vs Total crimes
-                      Text(
-                        '$activeCrimeCount active crime${activeCrimeCount != 1 ? 's' : ''}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
+                      Icon(
+                        isExpiredCluster ? Icons.history : Icons.whatshot,
+                        size: isMobile ? 28 : 24,
+                        color: isExpiredCluster
+                            ? Colors.grey.shade600
+                            : _getHeatmapColor(cluster.intensity),
                       ),
-                      if (historicalCrimes.isNotEmpty)
-                        Text(
-                          '$totalCrimeCount total (${historicalCrimes.length} historical)',
+                      SizedBox(width: isMobile ? 12 : 8),
+                      Expanded(
+                        child: Text(
+                          isExpiredCluster
+                              ? 'Historical Heatmap'
+                              : 'Crime Heatmap',
                           style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 12,
+                            fontSize: isMobile ? 22 : 20,
+                            fontWeight: FontWeight.bold,
+                            color: isExpiredCluster
+                                ? Colors.grey.shade700
+                                : null,
                           ),
                         ),
-                      Text(
-                        'Within ${cluster.radius.round()}m radius',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
                       ),
-                      const SizedBox(height: 16),
-
-                      // Crime Severity Breakdown
-                      const Text(
-                        'Crime Severity Breakdown:',
-                        style: TextStyle(fontWeight: FontWeight.w600),
+                      IconButton(
+                        icon: Icon(Icons.close, size: isMobile ? 28 : 24),
+                        onPressed: () => Navigator.pop(context),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
                       ),
-                      const SizedBox(height: 8),
-                      ...cluster.crimeBreakdown.entries
-                          .where((e) => e.value > 0)
-                          .map((entry) {
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 3),
-                              child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text('${entry.key.toUpperCase()}:'),
-                                  Text(
-                                    '${entry.value}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          }),
-
-                      // Active Crimes Section
-                      if (activeCrimes.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Recent Crimes:',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: Colors.red,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        ..._buildCrimeList(activeCrimes, isActive: true),
-                      ],
-
-                      // Historical Crimes Section
-                      if (historicalCrimes.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            const Text(
-                              'Past Incidents:',
-                              style: TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              Icons.history,
-                              size: 16,
-                              color: Colors.grey[600],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        ..._buildCrimeList(historicalCrimes, isActive: false),
-                      ],
                     ],
                   ),
                 ),
-              ),
-            ],
+                const Divider(height: 1),
+
+                // Content
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.all(isMobile ? 16 : 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Status indicator
+                        if (isExpiredCluster)
+                          Container(
+                            width: double.infinity,
+                            padding: EdgeInsets.symmetric(
+                              horizontal: isMobile ? 14 : 12,
+                              vertical: isMobile ? 10 : 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(
+                                isMobile ? 10 : 8,
+                              ),
+                              border: Border.all(color: Colors.grey.shade400),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  size: isMobile ? 18 : 16,
+                                  color: Colors.grey.shade700,
+                                ),
+                                SizedBox(width: isMobile ? 8 : 6),
+                                Expanded(
+                                  child: Text(
+                                    'All crimes expired - Historical data only',
+                                    style: TextStyle(
+                                      fontSize: isMobile ? 13 : 12,
+                                      color: Colors.grey.shade700,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                        SizedBox(height: isMobile ? 16 : 12),
+
+                        Text(
+                          '${cluster.crimeCount} total crime${cluster.crimeCount != 1 ? 's' : ''}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: isMobile ? 18 : 16,
+                          ),
+                        ),
+                        if (activeCrimes.isNotEmpty && !isExpiredCluster)
+                          Text(
+                            '${activeCrimes.length} active, ${historicalCrimes.length} historical',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: isMobile ? 13 : 12,
+                            ),
+                          ),
+                        Text(
+                          'Within ${cluster.radius.round()}m radius',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: isMobile ? 13 : 12,
+                          ),
+                        ),
+                        SizedBox(height: isMobile ? 20 : 16),
+
+                        // Crime breakdown
+                        Text(
+                          'Crime Severity Breakdown:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: isMobile ? 16 : 14,
+                          ),
+                        ),
+                        SizedBox(height: isMobile ? 12 : 8),
+                        ...cluster.crimeBreakdown.entries
+                            .where((e) => e.value > 0)
+                            .map((entry) {
+                              return Padding(
+                                padding: EdgeInsets.symmetric(
+                                  vertical: isMobile ? 6 : 3,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      '${entry.key.toUpperCase()}:',
+                                      style: TextStyle(
+                                        fontSize: isMobile ? 15 : 14,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${entry.value}',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: isMobile ? 15 : 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+
+                        // Active crimes (only if not expired cluster)
+                        if (activeCrimes.isNotEmpty && !isExpiredCluster) ...[
+                          SizedBox(height: isMobile ? 20 : 16),
+                          Text(
+                            'Recent Crimes:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: Colors.red,
+                              fontSize: isMobile ? 16 : 14,
+                            ),
+                          ),
+                          SizedBox(height: isMobile ? 12 : 8),
+                          ..._buildCrimeList(
+                            activeCrimes,
+                            isActive: true,
+                            isMobile: isMobile,
+                          ),
+                        ],
+
+                        // Historical crimes
+                        if (historicalCrimes.isNotEmpty) ...[
+                          SizedBox(height: isMobile ? 20 : 16),
+                          Row(
+                            children: [
+                              Text(
+                                'Past Incidents:',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: isMobile ? 16 : 14,
+                                ),
+                              ),
+                              SizedBox(width: isMobile ? 6 : 4),
+                              Icon(
+                                Icons.history,
+                                size: isMobile ? 18 : 16,
+                                color: Colors.grey[600],
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: isMobile ? 12 : 8),
+                          ..._buildCrimeList(
+                            historicalCrimes,
+                            isActive: false,
+                            isMobile: isMobile,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -23505,6 +24613,7 @@ class _MapScreenState extends State<MapScreen> {
   List<Widget> _buildCrimeList(
     List<Map<String, dynamic>> crimes, {
     required bool isActive,
+    required bool isMobile,
   }) {
     // Group by crime type
     final groupedCrimes = <String, List<Map<String, dynamic>>>{};
@@ -23545,17 +24654,21 @@ class _MapScreenState extends State<MapScreen> {
       );
 
       return Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        margin: EdgeInsets.only(bottom: isMobile ? 10 : 6),
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 14 : 12,
+          vertical: isMobile ? 12 : 8,
+        ),
         decoration: BoxDecoration(
           color: isActive ? Colors.red.shade50 : Colors.grey[100],
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(isMobile ? 10 : 8),
           border: wasRenewalTrigger
-              ? Border.all(color: Colors.orange, width: 2)
+              ? Border.all(color: Colors.orange, width: isMobile ? 2.5 : 2)
               : null,
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
               child: Column(
@@ -23563,27 +24676,33 @@ class _MapScreenState extends State<MapScreen> {
                 children: [
                   Row(
                     children: [
-                      Text(
-                        '• $crimeType${count > 1 ? ' ($count)' : ''}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: isActive
-                              ? Colors.red.shade900
-                              : Colors.grey[700],
+                      Expanded(
+                        child: Text(
+                          '• $crimeType${count > 1 ? ' ($count)' : ''}',
+                          style: TextStyle(
+                            fontSize: isMobile ? 15 : 14,
+                            fontWeight: FontWeight.w500,
+                            color: isActive
+                                ? Colors.red.shade900
+                                : Colors.grey[700],
+                          ),
                         ),
                       ),
                       if (wasRenewalTrigger) ...[
-                        const SizedBox(width: 4),
-                        Icon(Icons.refresh, size: 14, color: Colors.orange),
+                        SizedBox(width: isMobile ? 6 : 4),
+                        Icon(
+                          Icons.refresh,
+                          size: isMobile ? 16 : 14,
+                          color: Colors.orange,
+                        ),
                       ],
                     ],
                   ),
-                  const SizedBox(height: 2),
+                  SizedBox(height: isMobile ? 4 : 2),
                   Text(
                     '($levelCapitalized)',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: isMobile ? 12 : 11,
                       color: isActive ? Colors.red.shade700 : Colors.grey[600],
                       fontStyle: FontStyle.italic,
                     ),
@@ -23591,10 +24710,11 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             ),
+            SizedBox(width: isMobile ? 12 : 8),
             Text(
               timeAgo,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: isMobile ? 13 : 12,
                 color: isActive ? Colors.red.shade700 : Colors.grey[700],
                 fontWeight: FontWeight.w500,
               ),
@@ -24000,50 +25120,49 @@ class _MapScreenState extends State<MapScreen> {
 
           _severityRadiusConfig = {
             'critical': {
-              'base': newSettings['radius_critical_base']?.toDouble() ?? 400.0,
-              'min': newSettings['radius_critical_min']?.toDouble() ?? 500.0,
-              'max': newSettings['radius_critical_max']?.toDouble() ?? 2500.0,
+              'base': newSettings['radius_critical_base']?.toDouble() ?? 200.0,
+              'min': newSettings['radius_critical_min']?.toDouble() ?? 250.0,
+              'max': newSettings['radius_critical_max']?.toDouble() ?? 1200.0,
               'countMultiplier':
                   newSettings['radius_critical_count_multiplier']?.toDouble() ??
-                  30.0,
+                  15.0,
               'intensityMultiplier':
                   newSettings['radius_critical_intensity_multiplier']
                       ?.toDouble() ??
-                  80.0,
+                  50.0,
             },
             'high': {
-              'base': newSettings['radius_high_base']?.toDouble() ?? 300.0,
-              'min': newSettings['radius_high_min']?.toDouble() ?? 400.0,
-              'max': newSettings['radius_high_max']?.toDouble() ?? 1800.0,
+              'base': newSettings['radius_high_base']?.toDouble() ?? 150.0,
+              'min': newSettings['radius_high_min']?.toDouble() ?? 200.0,
+              'max': newSettings['radius_high_max']?.toDouble() ?? 900.0,
               'countMultiplier':
                   newSettings['radius_high_count_multiplier']?.toDouble() ??
-                  25.0,
+                  10.0,
               'intensityMultiplier':
                   newSettings['radius_high_intensity_multiplier']?.toDouble() ??
-                  60.0,
+                  30.0,
             },
             'medium': {
-              'base': newSettings['radius_medium_base']?.toDouble() ?? 250.0,
-              'min': newSettings['radius_medium_min']?.toDouble() ?? 300.0,
-              'max': newSettings['radius_medium_max']?.toDouble() ?? 1200.0,
+              'base': newSettings['radius_medium_base']?.toDouble() ?? 100.0,
+              'min': newSettings['radius_medium_min']?.toDouble() ?? 150.0,
+              'max': newSettings['radius_medium_max']?.toDouble() ?? 600.0,
               'countMultiplier':
                   newSettings['radius_medium_count_multiplier']?.toDouble() ??
-                  20.0,
+                  8.0,
               'intensityMultiplier':
                   newSettings['radius_medium_intensity_multiplier']
                       ?.toDouble() ??
-                  50.0,
+                  25.0,
             },
             'low': {
-              'base': newSettings['radius_low_base']?.toDouble() ?? 200.0,
-              'min': newSettings['radius_low_min']?.toDouble() ?? 250.0,
-              'max': newSettings['radius_low_max']?.toDouble() ?? 800.0,
+              'base': newSettings['radius_low_base']?.toDouble() ?? 80.0,
+              'min': newSettings['radius_low_min']?.toDouble() ?? 100.0,
+              'max': newSettings['radius_low_max']?.toDouble() ?? 400.0,
               'countMultiplier':
-                  newSettings['radius_low_count_multiplier']?.toDouble() ??
-                  15.0,
+                  newSettings['radius_low_count_multiplier']?.toDouble() ?? 5.0,
               'intensityMultiplier':
                   newSettings['radius_low_intensity_multiplier']?.toDouble() ??
-                  40.0,
+                  20.0,
             },
           };
         });
@@ -24116,6 +25235,187 @@ class _MapScreenState extends State<MapScreen> {
         _showSnackBar('Error updating status: $e');
       }
     }
+  }
+
+  void _showViewLogsModal(int hotspotId) async {
+    final logs = await _fetchHotspotViewLogs(hotspotId);
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 500,
+            maxHeight: MediaQuery.of(context).size.height * 0.7,
+          ),
+          child: Column(
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(12),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'View History',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              // Logs List
+              Expanded(
+                child: logs.isEmpty
+                    ? const Center(child: Text('No views yet'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: logs.length,
+                        itemBuilder: (context, index) {
+                          final log = logs[index];
+                          final viewer = log['viewer'];
+                          final viewedAt = DateTime.parse(
+                            log['viewed_at'],
+                          ).toLocal();
+
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: Colors.blue.shade100,
+                                child: Text(
+                                  '${viewer['first_name'][0]}${viewer['last_name'][0]}',
+                                  style: TextStyle(color: Colors.blue.shade700),
+                                ),
+                              ),
+                              title: Text(
+                                '${viewer['first_name']} ${viewer['last_name']}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Role: ${viewer['role']}'),
+                                  if (viewer['police_rank'] != null)
+                                    Text(
+                                      'Rank: ${viewer['police_rank']['new_rank']}',
+                                    ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Last seen: ${DateFormat('MMM dd, yyyy - hh:mm a').format(viewedAt)}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[600],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  if (log['view_source'] != null)
+                                    Text(
+                                      'Source: ${log['view_source']}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey[500],
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Check if user can verify this specific hotspot
+  bool _canVerifyHotspot(Map<String, dynamic> hotspot) {
+    // Admin can verify anything (no proximity needed)
+    if (_isAdmin) return true;
+
+    // Check crime level restriction for tanod
+    final crimeType = hotspot['crime_type'] ?? {};
+    final crimeLevel = crimeType['level'] ?? 'unknown';
+
+    if (!_canTanodVerifyLevel(crimeLevel)) {
+      return false;
+    }
+
+    // Officers can verify from anywhere (no proximity check)
+    if (_isOfficer) return true;
+
+    // Tanod must be within 20 meters
+    if (_isTanod) {
+      return _isWithinVerificationRange(hotspot);
+    }
+
+    return false;
+  }
+
+  bool _isWithinVerificationRange(Map<String, dynamic> hotspot) {
+    if (_currentPosition == null) return false;
+
+    final coords = hotspot['location']['coordinates'];
+    final hotspotLat = coords[1].toDouble();
+    final hotspotLng = coords[0].toDouble();
+
+    final distance = _calculateDistance(
+      _currentPosition!,
+      LatLng(hotspotLat, hotspotLng),
+    );
+
+    return distance <= 20; // 20 meters
+  }
+
+  bool _canTanodVerifyLevel(String crimeLevel) {
+    if (!_isTanod) return true; // Officers and admins can verify all levels
+
+    // Tanod can only verify medium and low level crimes
+    return crimeLevel == 'medium' || crimeLevel == 'low';
+  }
+
+  String _getVerificationRestrictionMessage(Map<String, dynamic> hotspot) {
+    final crimeType = hotspot['crime_type'] ?? {};
+    final crimeLevel = crimeType['level'] ?? 'unknown';
+
+    // Check level restriction for tanod
+    if (_isTanod && !_canTanodVerifyLevel(crimeLevel)) {
+      return 'Tanod can only verify medium and low level crimes. This is a $crimeLevel level crime.';
+    }
+
+    // Check proximity ONLY for tanod (officers don't need this check)
+    if (_isTanod && !_isWithinVerificationRange(hotspot)) {
+      if (_currentPosition == null) {
+        return 'Location permission required. Please enable GPS.';
+      }
+
+      final coords = hotspot['location']['coordinates'];
+      final distance = _calculateDistance(
+        _currentPosition!,
+        LatLng(coords[1].toDouble(), coords[0].toDouble()),
+      ).round();
+
+      return 'You must be within 20 meters to verify. Current distance: ${distance}m';
+    }
+
+    return '';
   }
 }
 
