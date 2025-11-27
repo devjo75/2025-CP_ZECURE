@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -16,11 +18,11 @@ bool isLoggingOut = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // For web builds, use dart-define values directly
   const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
   const supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
-  
+
   // Fallback to .env for development
   if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
     await dotenv.load(fileName: ".env");
@@ -31,7 +33,7 @@ Future<void> main() async {
     try {
       await Firebase.initializeApp();
       print('✅ Firebase initialized successfully');
-      
+
       // ✅ Initialize Firebase Service (notifications) - mobile only
       await FirebaseService().initialize();
       print('✅ Firebase Service initialized successfully');
@@ -45,7 +47,9 @@ Future<void> main() async {
   // Initialize Supabase
   await Supabase.initialize(
     url: supabaseUrl.isNotEmpty ? supabaseUrl : dotenv.env['SUPABASE_URL']!,
-    anonKey: supabaseAnonKey.isNotEmpty ? supabaseAnonKey : dotenv.env['SUPABASE_ANON_KEY']!,
+    anonKey: supabaseAnonKey.isNotEmpty
+        ? supabaseAnonKey
+        : dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
   runApp(const ZecureApp());
@@ -85,9 +89,13 @@ class ZecureApp extends StatelessWidget {
       case '/map':
         return MaterialPageRoute(builder: (_) => const MapScreen());
       case '/confirm':
-        return MaterialPageRoute(builder: (_) => const EmailConfirmationScreen());
+        return MaterialPageRoute(
+          builder: (_) => const EmailConfirmationScreen(),
+        );
       case '/landing':
-        return MaterialPageRoute(builder: (_) => const ResponsiveLandingScreen());
+        return MaterialPageRoute(
+          builder: (_) => const ResponsiveLandingScreen(),
+        );
       default:
         return MaterialPageRoute(builder: (_) => const AuthWrapper());
     }
@@ -124,7 +132,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   void initState() {
     super.initState();
     _initializeUrlHandling();
-    
+
     // ✅ Only setup auth listener on mobile (Firebase not available on web)
     if (!kIsWeb) {
       _setupAuthListener();
@@ -134,7 +142,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _initializeUrlHandling() async {
     // Temporarily disabled URL handling for mobile compatibility
     // await UrlHandler.handleUrlOnAppStart();
-    
+
     setState(() {
       _isInitialized = true;
     });
@@ -144,7 +152,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   void _setupAuthListener() {
     Supabase.instance.client.auth.onAuthStateChange.listen((event) {
       final session = event.session;
-      
+
       if (session != null) {
         // User logged in - save FCM token
         _saveFCMToken();
@@ -158,7 +166,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   // ✅ Save FCM token when user logs in (mobile only)
   Future<void> _saveFCMToken() async {
     if (kIsWeb) return; // Skip on web
-    
+
     try {
       final token = FirebaseService().fcmToken;
       if (token != null) {
@@ -171,7 +179,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 'updated_at': DateTime.now().toIso8601String(),
               })
               .eq('email', user.email!);
-          
+
           print('✅ FCM token saved for user: ${user.email}');
         }
       }
@@ -183,7 +191,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   // ✅ Clear FCM token when user logs out (mobile only)
   Future<void> _clearFCMToken() async {
     if (kIsWeb) return; // Skip on web
-    
+
     try {
       await FirebaseService().clearToken();
       print('✅ FCM token cleared on logout');
@@ -195,11 +203,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized) {
-      return const Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     final supabase = Supabase.instance.client;
@@ -231,7 +235,8 @@ class EmailConfirmationScreen extends StatefulWidget {
   const EmailConfirmationScreen({super.key});
 
   @override
-  State<EmailConfirmationScreen> createState() => _EmailConfirmationScreenState();
+  State<EmailConfirmationScreen> createState() =>
+      _EmailConfirmationScreenState();
 }
 
 class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
@@ -249,10 +254,10 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
     try {
       // Give time for auth state to update
       await Future.delayed(const Duration(seconds: 2));
-      
+
       // Try to refresh the session to pick up any auth changes
       await Supabase.instance.client.auth.refreshSession();
-      
+
       final user = Supabase.instance.client.auth.currentUser;
       if (user != null && user.emailConfirmedAt != null) {
         setState(() {
@@ -260,7 +265,7 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
           _message = 'Email confirmed successfully! Welcome to Zecure!';
           _isProcessing = false;
         });
-        
+
         // Show success message then redirect to map
         Future.delayed(const Duration(seconds: 3), () {
           if (mounted) {
@@ -339,14 +344,14 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  
+
                   if (_isProcessing) ...[
                     const CircularProgressIndicator(),
                     const SizedBox(height: 24),
                     const Text(
                       'Confirming your email...',
                       style: TextStyle(
-                        fontSize: 18, 
+                        fontSize: 18,
                         fontWeight: FontWeight.w600,
                         color: Colors.black87,
                       ),
@@ -363,9 +368,13 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
                     ),
                   ] else ...[
                     Icon(
-                      _isSuccess ? Icons.check_circle_rounded : Icons.error_rounded,
+                      _isSuccess
+                          ? Icons.check_circle_rounded
+                          : Icons.error_rounded,
                       size: 80,
-                      color: _isSuccess ? Colors.green.shade600 : Colors.red.shade600,
+                      color: _isSuccess
+                          ? Colors.green.shade600
+                          : Colors.red.shade600,
                     ),
                     const SizedBox(height: 24),
                     Text(
@@ -373,7 +382,9 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
-                        color: _isSuccess ? Colors.green.shade700 : Colors.red.shade700,
+                        color: _isSuccess
+                            ? Colors.green.shade700
+                            : Colors.red.shade700,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -386,7 +397,7 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
                       ),
                       textAlign: TextAlign.center,
                     ),
-                    
+
                     if (!_isSuccess) ...[
                       const SizedBox(height: 32),
                       SizedBox(
@@ -394,7 +405,9 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
                         child: ElevatedButton(
                           onPressed: () {
                             Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(builder: (_) => const LoginScreen()),
+                              MaterialPageRoute(
+                                builder: (_) => const LoginScreen(),
+                              ),
                             );
                           },
                           style: ElevatedButton.styleFrom(
@@ -418,7 +431,9 @@ class _EmailConfirmationScreenState extends State<EmailConfirmationScreen> {
                       TextButton(
                         onPressed: () {
                           Navigator.of(context).pushReplacement(
-                            MaterialPageRoute(builder: (_) => const LandingScreen()),
+                            MaterialPageRoute(
+                              builder: (_) => const LandingScreen(),
+                            ),
                           );
                         },
                         child: Text(

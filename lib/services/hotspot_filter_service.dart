@@ -358,6 +358,18 @@ class HotspotFilterService with ChangeNotifier {
     notifyListeners();
   }
 
+  // Set year preset (Jan 1 - Dec 31 of selected year)
+  void setYearPreset(int year) {
+    if (_isShowingCrimes) {
+      _crimeStartDate = DateTime(year, 1, 1);
+      _crimeEndDate = DateTime(year, 12, 31);
+    } else {
+      _safeSpotStartDate = DateTime(year, 1, 1);
+      _safeSpotEndDate = DateTime(year, 12, 31);
+    }
+    notifyListeners();
+  }
+
   bool shouldShowHotspot(Map<String, dynamic> hotspot) {
     final status = hotspot['status'] ?? 'approved';
     final activeStatus = hotspot['active_status'] ?? 'active';
@@ -375,12 +387,36 @@ class HotspotFilterService with ChangeNotifier {
       if (hotspotDateStr != null) {
         final hotspotDate = DateTime.tryParse(hotspotDateStr);
         if (hotspotDate != null) {
-          if (_crimeStartDate != null &&
-              hotspotDate.isBefore(_crimeStartDate!)) {
-            return false;
+          // Compare dates only (ignore time)
+          final hotspotDateOnly = DateTime(
+            hotspotDate.year,
+            hotspotDate.month,
+            hotspotDate.day,
+          );
+
+          if (_crimeStartDate != null) {
+            final startDateOnly = DateTime(
+              _crimeStartDate!.year,
+              _crimeStartDate!.month,
+              _crimeStartDate!.day,
+            );
+            if (hotspotDateOnly.isBefore(startDateOnly)) {
+              return false;
+            }
           }
-          if (_crimeEndDate != null && hotspotDate.isAfter(_crimeEndDate!)) {
-            return false;
+
+          if (_crimeEndDate != null) {
+            final endDateOnly = DateTime(
+              _crimeEndDate!.year,
+              _crimeEndDate!.month,
+              _crimeEndDate!.day,
+            );
+            // Use isAfter with end of day (23:59:59)
+            final endOfDay = endDateOnly.add(const Duration(days: 1));
+            if (hotspotDateOnly.isAfter(endOfDay) ||
+                hotspotDateOnly.isAtSameMomentAs(endOfDay)) {
+              return false;
+            }
           }
         }
       }
@@ -460,13 +496,35 @@ class HotspotFilterService with ChangeNotifier {
       if (safeSpotDateStr != null) {
         final safeSpotDate = DateTime.tryParse(safeSpotDateStr);
         if (safeSpotDate != null) {
-          if (_safeSpotStartDate != null &&
-              safeSpotDate.isBefore(_safeSpotStartDate!)) {
-            return false;
+          // Compare dates only (ignore time)
+          final safeSpotDateOnly = DateTime(
+            safeSpotDate.year,
+            safeSpotDate.month,
+            safeSpotDate.day,
+          );
+
+          if (_safeSpotStartDate != null) {
+            final startDateOnly = DateTime(
+              _safeSpotStartDate!.year,
+              _safeSpotStartDate!.month,
+              _safeSpotStartDate!.day,
+            );
+            if (safeSpotDateOnly.isBefore(startDateOnly)) {
+              return false;
+            }
           }
-          if (_safeSpotEndDate != null &&
-              safeSpotDate.isAfter(_safeSpotEndDate!)) {
-            return false;
+
+          if (_safeSpotEndDate != null) {
+            final endDateOnly = DateTime(
+              _safeSpotEndDate!.year,
+              _safeSpotEndDate!.month,
+              _safeSpotEndDate!.day,
+            );
+            final endOfDay = endDateOnly.add(const Duration(days: 1));
+            if (safeSpotDateOnly.isAfter(endOfDay) ||
+                safeSpotDateOnly.isAtSameMomentAs(endOfDay)) {
+              return false;
+            }
           }
         }
       }

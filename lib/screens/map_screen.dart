@@ -1,4 +1,4 @@
-// ignore_for_file: prefer_final_fields, constant_identifier_names, avoid_print, unrelated_type_equality_checks, prefer_is_not_operator, use_build_context_synchronously, deprecated_member_use
+// ignore_for_file: prefer_final_fields, constant_identifier_names, avoid_print, unrelated_type_equality_checks, prefer_is_not_operator, use_build_context_synchronously, deprecated_member_use, unused_field
 
 import 'dart:async';
 import 'dart:io';
@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
@@ -44,6 +45,7 @@ import 'package:zecure/desktop/desktop_sidebar.dart';
 import 'package:zecure/desktop/save_point_desktop.dart';
 import 'package:zecure/services/firebase_service.dart';
 import 'package:zecure/services/heatmap_settings_service.dart';
+import 'package:zecure/services/hotspot_support_service.dart';
 import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
 import 'package:zecure/services/hotspot_filter_service.dart';
@@ -212,6 +214,10 @@ class _MapScreenState extends State<MapScreen> {
 
   final Set<int> _processedHotspotIds = {};
 
+  //SUPPORT REPORT
+  bool _isCheckingNearbySupports = false;
+  Map<String, dynamic>? _nearbyHotspotForSupport;
+
   //HEATMAP
   List<HeatmapCluster> _heatmapClusters = [];
   List<Map<String, dynamic>> _heatmapCrimes = [];
@@ -311,6 +317,32 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _timeUpdateTimer;
 
   // NEW: Progressive marker loading based on zoom level
+  // Helper method - Add this near your other helper methods
+  bool _canUserSeeHotspot(Map<String, dynamic> hotspot) {
+    final currentUserId = _userProfile?['id'];
+    final status = hotspot['status'] ?? 'approved';
+    final createdBy = hotspot['created_by'];
+    final reportedBy = hotspot['reported_by'];
+    final userHasSupported = hotspot['user_has_supported'] ?? false;
+
+    final isOwnHotspot =
+        currentUserId != null &&
+        (currentUserId == createdBy || currentUserId == reportedBy);
+
+    // ✅ User can see pending hotspots they've supported
+    if (status == 'pending') {
+      return _canViewPending || isOwnHotspot || userHasSupported;
+    }
+
+    // Rejected only visible to owner
+    if (status == 'rejected') {
+      return isOwnHotspot;
+    }
+
+    return true; // Approved hotspots are visible to all
+  }
+
+  // NEW: Progressive marker loading based on zoom level
   List<Map<String, dynamic>> get _visibleHotspots {
     if (!_markersLoaded) return [];
     final currentUserId = _userProfile?['id'];
@@ -366,14 +398,10 @@ class _MapScreenState extends State<MapScreen> {
           .where((h) {
             final status = h['status'] ?? 'approved';
             final activeStatus = h['active_status'] ?? 'active';
-            final createdBy = h['created_by'];
-            final reportedBy = h['reported_by'];
-            final isOwnHotspot =
-                currentUserId != null &&
-                (currentUserId == createdBy || currentUserId == reportedBy);
 
+            // ✅ UPDATED: Use helper method for pending visibility
             if (status == 'pending') {
-              return _canViewPending || isOwnHotspot; // ✅ CHANGED
+              return _canUserSeeHotspot(h);
             }
 
             if (status == 'approved' && activeStatus == 'active') {
@@ -405,10 +433,11 @@ class _MapScreenState extends State<MapScreen> {
             final isRecent =
                 incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
 
-            if (_canAccessAllReports) return true; // ✅ CHANGED
+            if (_canAccessAllReports) return true;
 
+            // ✅ UPDATED: Use helper method for pending visibility
             if (status == 'pending') {
-              return isOwnHotspot;
+              return _canUserSeeHotspot(h);
             }
 
             if (status == 'rejected') {
@@ -441,10 +470,11 @@ class _MapScreenState extends State<MapScreen> {
             final isRecent =
                 incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
 
-            if (_canAccessAllReports) return true; // ✅ CHANGED
+            if (_canAccessAllReports) return true;
 
+            // ✅ UPDATED: Use helper method for pending visibility
             if (status == 'pending') {
-              return isOwnHotspot;
+              return _canUserSeeHotspot(h);
             }
 
             if (status == 'rejected') {
@@ -464,7 +494,7 @@ class _MapScreenState extends State<MapScreen> {
           .take(_maxMarkersToShow)
           .toList();
     } else {
-      // ✅ Zoom 15.5+ logic - FIXED: Always show pending hotspots
+      // ✅ Zoom 15.5+ logic - FIXED: Always show pending hotspots user can see
       return _hotspots.where((h) {
         final status = h['status'] ?? 'approved';
         final activeStatus = h['active_status'] ?? 'active';
@@ -479,9 +509,9 @@ class _MapScreenState extends State<MapScreen> {
         final hotspotId = h['id'];
 
         if (hasCustomDateRange) {
-          // Exception 1: Always show pending
+          // ✅ UPDATED: Use helper method for pending visibility
           if (status == 'pending') {
-            return _canViewPending || isOwnHotspot; // ✅ CHANGED
+            return _canUserSeeHotspot(h);
           }
 
           // Exception 2: Always show rejected to owner
@@ -518,9 +548,9 @@ class _MapScreenState extends State<MapScreen> {
         }
 
         // NO DATE FILTER: Original 30-day logic
-        // ✅ FIX: Always show pending to admins/officers/tanod regardless of date
+        // ✅ UPDATED: Use helper method for pending visibility
         if (status == 'pending') {
-          return _canViewPending || isOwnHotspot; // ✅ CHANGED
+          return _canUserSeeHotspot(h);
         }
 
         // ✅ FIX: Always show rejected to owner regardless of date
@@ -529,7 +559,6 @@ class _MapScreenState extends State<MapScreen> {
         }
 
         if (_canAccessAllReports) {
-          // ✅ CHANGED
           return isRecent;
         }
 
@@ -3165,7 +3194,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // HOTSPOT DELETE
-  // HOTSPOT DELETE - FIXED: Respect historical mode
+
   void _handleHotspotDelete(PostgresChangePayload payload) async {
     if (!mounted) return;
 
@@ -4269,17 +4298,29 @@ class _MapScreenState extends State<MapScreen> {
     final activeStatus = hotspot['active_status'] ?? 'active';
     final createdBy = hotspot['created_by'];
     final reportedBy = hotspot['reported_by'];
+    final userHasSupported = hotspot['user_has_supported'] ?? false;
 
     // User's own hotspots (always visible to them)
     final isOwnHotspot =
         currentUserId != null &&
         (currentUserId == createdBy || currentUserId == reportedBy);
 
+    // ✅ FIX: Handle pending status - show to owners AND supporters
+    if (status == 'pending') {
+      return isOwnHotspot || userHasSupported;
+    }
+
+    // ✅ Handle rejected - only show to owners
+    if (status == 'rejected') {
+      return isOwnHotspot;
+    }
+
+    // For other statuses, owners can always see their own
     if (isOwnHotspot) {
       return true;
     }
 
-    // Only show approved hotspots to public
+    // Only show approved hotspots to public (if not owner/supporter)
     if (status != 'approved') {
       return false;
     }
@@ -4326,6 +4367,30 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _loadHotspots() async {
     try {
+      final currentUserId = _userProfile?['id'];
+
+      // Step 1: Get IDs of hotspots the user has supported (if not admin)
+      Set<int> supportedHotspotIds = {};
+      if (!_canAccessAllReports && currentUserId != null) {
+        try {
+          final supportsResponse = await Supabase.instance.client
+              .from('hotspot_supports')
+              .select('hotspot_id')
+              .eq('supporter_id', currentUserId);
+
+          for (var item in supportsResponse) {
+            if (item['hotspot_id'] != null) {
+              supportedHotspotIds.add(item['hotspot_id'] as int);
+            }
+          }
+
+          print('User has supported ${supportedHotspotIds.length} hotspots');
+        } catch (e) {
+          print('Error fetching supported hotspots: $e');
+        }
+      }
+
+      // Step 2: Build the main query
       final query = Supabase.instance.client.from('hotspot').select('''
       *,
       crime_type: type_id (id, name, level, category, description)
@@ -4333,23 +4398,28 @@ class _MapScreenState extends State<MapScreen> {
 
       PostgrestFilterBuilder filteredQuery;
 
-      // Use the specific permission getter
       if (!_canAccessAllReports) {
-        // Changed to use _canAccessAllReports
         print('Filtering hotspots for regular user');
-        final currentUserId = _userProfile?['id'];
         final thirtyDaysAgo = DateTime.now()
             .subtract(const Duration(days: 30))
             .toUtc()
             .toIso8601String();
 
         if (currentUserId != null) {
-          filteredQuery = query.or(
-            'and(active_status.eq.active,status.eq.approved),'
-            'and(active_status.eq.inactive,status.eq.approved,created_at.gte.$thirtyDaysAgo),'
-            'created_by.eq.$currentUserId,'
+          // Build OR conditions for regular users
+          List<String> orConditions = [
+            'and(active_status.eq.active,status.eq.approved)',
+            'and(active_status.eq.inactive,status.eq.approved,created_at.gte.$thirtyDaysAgo)',
+            'created_by.eq.$currentUserId',
             'reported_by.eq.$currentUserId',
-          );
+          ];
+
+          // Add condition for each supported hotspot
+          for (final hotspotId in supportedHotspotIds) {
+            orConditions.add('id.eq.$hotspotId');
+          }
+
+          filteredQuery = query.or(orConditions.join(','));
         } else {
           filteredQuery = query.or(
             'and(active_status.eq.active,status.eq.approved),'
@@ -4364,11 +4434,53 @@ class _MapScreenState extends State<MapScreen> {
       final orderedQuery = filteredQuery.order('time', ascending: false);
       final response = await orderedQuery;
 
+      // Step 3: Fetch support counts for all hotspots
+      List<int> hotspotIds = [];
+      for (var h in response) {
+        if (h['id'] != null) {
+          hotspotIds.add(h['id'] as int);
+        }
+      }
+
+      Map<int, int> supportCounts = {};
+      Map<int, bool> userSupportStatus = {};
+
+      if (hotspotIds.isNotEmpty) {
+        try {
+          // Get support counts
+          final supportsResponse = await Supabase.instance.client
+              .from('hotspot_supports')
+              .select('hotspot_id, supporter_id')
+              .inFilter('hotspot_id', hotspotIds);
+
+          // Count supports per hotspot
+          for (var support in supportsResponse) {
+            final hotspotId = support['hotspot_id'] as int;
+            supportCounts[hotspotId] = (supportCounts[hotspotId] ?? 0) + 1;
+
+            // Check if current user has supported
+            if (currentUserId != null &&
+                support['supporter_id'] == currentUserId) {
+              userSupportStatus[hotspotId] = true;
+            }
+          }
+
+          print('Fetched support data for ${hotspotIds.length} hotspots');
+        } catch (e) {
+          print('Error fetching support counts: $e');
+        }
+      }
+
       if (mounted) {
         setState(() {
-          _hotspots = List<Map<String, dynamic>>.from(response).map((hotspot) {
+          _hotspots = [];
+          for (var hotspot in response) {
             final crimeType = hotspot['crime_type'] ?? {};
-            return {
+            final hotspotId = hotspot['id'] as int;
+            final supportCount = supportCounts[hotspotId] ?? 0;
+            final userHasSupported = userSupportStatus[hotspotId] ?? false;
+
+            _hotspots.add({
               ...hotspot,
               'crime_type': {
                 'id': crimeType['id'] ?? hotspot['type_id'],
@@ -4377,10 +4489,12 @@ class _MapScreenState extends State<MapScreen> {
                 'category': crimeType['category'] ?? 'General',
                 'description': crimeType['description'],
               },
-            };
-          }).toList();
+              'support_count': supportCount,
+              'user_has_supported': userHasSupported,
+            });
+          }
 
-          print('Loaded ${_hotspots.length} hotspots');
+          print('Loaded ${_hotspots.length} hotspots with support data');
         });
       }
     } catch (e) {
@@ -5275,6 +5389,162 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ],
                                 ],
+                              ),
+
+                              // Year preset buttons
+                              const SizedBox(height: 12),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8.0,
+                                ),
+                                child: Row(
+                                  children: [
+                                    for (
+                                      int year = 2020;
+                                      year <= 2025;
+                                      year++
+                                    ) ...[
+                                      Expanded(
+                                        child: GestureDetector(
+                                          onTap: () {
+                                            setModalState(() {
+                                              filterService.setYearPreset(year);
+                                            });
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 4,
+                                              vertical: 8,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  (filterService
+                                                              .startDate
+                                                              ?.year ==
+                                                          year &&
+                                                      filterService
+                                                              .startDate
+                                                              ?.month ==
+                                                          1 &&
+                                                      filterService
+                                                              .startDate
+                                                              ?.day ==
+                                                          1 &&
+                                                      filterService
+                                                              .endDate
+                                                              ?.year ==
+                                                          year &&
+                                                      filterService
+                                                              .endDate
+                                                              ?.month ==
+                                                          12 &&
+                                                      filterService
+                                                              .endDate
+                                                              ?.day ==
+                                                          31)
+                                                  ? Colors.blue.shade600
+                                                  : Colors.grey.shade200,
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              border: Border.all(
+                                                color:
+                                                    (filterService
+                                                                .startDate
+                                                                ?.year ==
+                                                            year &&
+                                                        filterService
+                                                                .startDate
+                                                                ?.month ==
+                                                            1 &&
+                                                        filterService
+                                                                .startDate
+                                                                ?.day ==
+                                                            1 &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.year ==
+                                                            year &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.month ==
+                                                            12 &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.day ==
+                                                            31)
+                                                    ? Colors.blue.shade700
+                                                    : Colors.grey.shade300,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              year.toString(),
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight:
+                                                    (filterService
+                                                                .startDate
+                                                                ?.year ==
+                                                            year &&
+                                                        filterService
+                                                                .startDate
+                                                                ?.month ==
+                                                            1 &&
+                                                        filterService
+                                                                .startDate
+                                                                ?.day ==
+                                                            1 &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.year ==
+                                                            year &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.month ==
+                                                            12 &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.day ==
+                                                            31)
+                                                    ? FontWeight.w600
+                                                    : FontWeight.normal,
+                                                color:
+                                                    (filterService
+                                                                .startDate
+                                                                ?.year ==
+                                                            year &&
+                                                        filterService
+                                                                .startDate
+                                                                ?.month ==
+                                                            1 &&
+                                                        filterService
+                                                                .startDate
+                                                                ?.day ==
+                                                            1 &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.year ==
+                                                            year &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.month ==
+                                                            12 &&
+                                                        filterService
+                                                                .endDate
+                                                                ?.day ==
+                                                            31)
+                                                    ? Colors.white
+                                                    : Colors.grey.shade700,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      if (year != 2025)
+                                        const SizedBox(width: 6),
+                                    ],
+                                  ],
+                                ),
                               ),
 
                               const SizedBox(height: 16),
@@ -7742,9 +8012,10 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // ADD HOTSPOT
-  // UPDATED: _showAddHotspotForm with OPTIONAL duration selection
-  void _showAddHotspotForm(LatLng position) async {
+  void _showAddHotspotForm(
+    LatLng position, {
+    bool skipNearbyCheck = false,
+  }) async {
     final isDesktop = _isDesktopScreen();
     setState(() {
       _tempPinnedLocation = null;
@@ -7850,6 +8121,7 @@ class _MapScreenState extends State<MapScreen> {
             // Calculate expiration only if active AND has duration
             updateExpirationTime();
 
+            // ✅ PASS skipNearbyCheck to _saveHotspot
             final hotspotId = await _saveHotspot(
               selectedCrimeId.toString(),
               descriptionController.text,
@@ -7859,6 +8131,7 @@ class _MapScreenState extends State<MapScreen> {
               expirationTime: (isActiveStatus && hasDuration)
                   ? expirationTime
                   : null,
+              skipNearbyCheck: skipNearbyCheck, // ✅ NEW: Pass the parameter
             );
 
             if (selectedPhoto != null && hotspotId != null) {
@@ -10729,7 +11002,7 @@ class _MapScreenState extends State<MapScreen> {
         return false;
       }
 
-      // ✅ CRITICAL FIX: Clear temp pin IMMEDIATELY before any async operations
+      // Clear temp pin IMMEDIATELY before any async operations
       if (mounted) {
         setState(() {
           _tempPinnedLocation = null;
@@ -10755,31 +11028,8 @@ class _MapScreenState extends State<MapScreen> {
         return false;
       }
 
-      // Check for nearby reports (within 50 meters)
-      final nearbyDistance = 50;
-      final nearbyReportsResponse = await Supabase.instance.client.rpc(
-        'get_nearby_hotspots',
-        params: {
-          'lat': position.latitude,
-          'lng': position.longitude,
-          'distance_meters': nearbyDistance,
-        },
-      );
-
-      final oneDayAgo = DateTime.now().subtract(const Duration(hours: 24));
-      final recentNearbyReports = (nearbyReportsResponse as List).where((
-        report,
-      ) {
-        final createdAt = DateTime.parse(report['created_at']);
-        return createdAt.isAfter(oneDayAgo);
-      }).toList();
-
-      if (recentNearbyReports.isNotEmpty) {
-        _showSnackBar(
-          'A recent report already exists near this location. Please check existing reports or try a different location.',
-        );
-        return false;
-      }
+      // ✅ REMOVED: Duplicate check - now handled earlier in the flow
+      // Users explicitly chose "File New Report" so we honor their decision
 
       // Proceed with report submission
       final insertData = {
@@ -10805,21 +11055,20 @@ class _MapScreenState extends State<MapScreen> {
       print('✅ Hotspot inserted successfully: ${response['id']}');
       final hotspotId = response['id'] as int;
 
-      // ✅ CRITICAL FIX: Mark as processed to prevent _handleHotspotInsert from adding it again
+      // Mark as processed to prevent _handleHotspotInsert from adding it again
       _processedHotspotIds.add(hotspotId);
 
-      // ✅ Manually fetch and add the hotspot for the current user
-      // This ensures they see their own report immediately without waiting for realtime
+      // Manually fetch and add the hotspot for the current user
       try {
         final newHotspot = await Supabase.instance.client
             .from('hotspot')
             .select('''
-              *,
-              crime_type: type_id (id, name, level, category, description),
-              created_by_profile: created_by (id, username, email),
-              reported_by_profile: reported_by (id, username, email),
-              verifier_profile: verified_by (first_name, last_name)
-            ''')
+            *,
+            crime_type: type_id (id, name, level, category, description),
+            created_by_profile: created_by (id, username, email),
+            reported_by_profile: reported_by (id, username, email),
+            verifier_profile: verified_by (first_name, last_name)
+          ''')
             .eq('id', hotspotId)
             .single();
 
@@ -10850,12 +11099,10 @@ class _MapScreenState extends State<MapScreen> {
             });
           });
 
-          // Update heatmap with the new hotspot
           _updateHeatmapOnInsert(newHotspot);
         }
       } catch (fetchError) {
         print('Error fetching newly created hotspot: $fetchError');
-        // Fallback to reload if fetch fails
         if (mounted) await _loadHotspots();
       }
 
@@ -10964,6 +11211,7 @@ class _MapScreenState extends State<MapScreen> {
     DateTime dateTime,
     String activeStatus, {
     DateTime? expirationTime,
+    bool skipNearbyCheck = false, // ✅ NEW PARAMETER
   }) async {
     try {
       final currentUserId = _userProfile?['id'];
@@ -10972,34 +11220,37 @@ class _MapScreenState extends State<MapScreen> {
         return null;
       }
 
-      final nearbyDistance = 50;
-      final nearbyHotspotsResponse = await Supabase.instance.client.rpc(
-        'get_nearby_hotspots',
-        params: {
-          'lat': position.latitude,
-          'lng': position.longitude,
-          'distance_meters': nearbyDistance,
-        },
-      );
-
-      final thirtyMinutesAgo = DateTime.now().subtract(
-        const Duration(minutes: 30),
-      );
-      final recentNearbyHotspots = (nearbyHotspotsResponse as List).where((
-        hotspot,
-      ) {
-        final createdAt = DateTime.parse(hotspot['created_at']);
-        return createdAt.isAfter(thirtyMinutesAgo);
-      }).toList();
-
-      if (recentNearbyHotspots.isNotEmpty) {
-        final shouldProceed = await _showNearbyHotspotConfirmation(
-          position,
-          recentNearbyHotspots,
+      // ✅ Only check for nearby hotspots if NOT already checked
+      if (!skipNearbyCheck) {
+        final nearbyDistance = 50;
+        final nearbyHotspotsResponse = await Supabase.instance.client.rpc(
+          'get_nearby_hotspots',
+          params: {
+            'lat': position.latitude,
+            'lng': position.longitude,
+            'distance_meters': nearbyDistance,
+          },
         );
 
-        if (!shouldProceed) {
-          return null;
+        final thirtyMinutesAgo = DateTime.now().subtract(
+          const Duration(minutes: 30),
+        );
+        final recentNearbyHotspots = (nearbyHotspotsResponse as List).where((
+          hotspot,
+        ) {
+          final createdAt = parseStoredDateTime(hotspot['created_at']);
+          return createdAt.isAfter(thirtyMinutesAgo);
+        }).toList();
+
+        if (recentNearbyHotspots.isNotEmpty) {
+          final shouldProceed = await _showNearbyHotspotConfirmation(
+            position,
+            recentNearbyHotspots,
+          );
+
+          if (!shouldProceed) {
+            return null;
+          }
         }
       }
 
@@ -11013,9 +11264,9 @@ class _MapScreenState extends State<MapScreen> {
         'created_by': currentUserId,
         'status': 'approved',
         'active_status': activeStatus,
-        'verification_status': 'verified', // ← NEW
-        'verified_by': currentUserId, // ← NEW
-        'verified_at': DateTime.now().toIso8601String(), // ← NEW
+        'verification_status': 'verified',
+        'verified_by': currentUserId,
+        'verified_at': DateTime.now().toIso8601String(),
         if (expirationTime != null)
           'expires_at': expirationTime.toUtc().toIso8601String(),
       };
@@ -11100,7 +11351,8 @@ class _MapScreenState extends State<MapScreen> {
                       child: SingleChildScrollView(
                         child: Column(
                           children: nearbyHotspots.take(3).map((hotspot) {
-                            final createdAt = DateTime.parse(
+                            // ✅ CHANGED: Use parseStoredDateTime instead of DateTime.parse
+                            final createdAt = parseStoredDateTime(
                               hotspot['created_at'],
                             );
                             final timeAgo = _getTimeAgo(createdAt);
@@ -11237,7 +11489,8 @@ class _MapScreenState extends State<MapScreen> {
                     child: SingleChildScrollView(
                       child: Column(
                         children: nearbyHotspots.take(3).map((hotspot) {
-                          final createdAt = DateTime.parse(
+                          // ✅ CHANGED: Use parseStoredDateTime instead of DateTime.parse
+                          final createdAt = parseStoredDateTime(
                             hotspot['created_at'],
                           );
                           final timeAgo = _getTimeAgo(createdAt);
@@ -12251,7 +12504,9 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  //  QUICK REPORT FUNCTION
+  // ============================================
+  // QUICK REPORT FUNCTION - ENTRY POINT
+  // ============================================
   void _quickReportCrime() async {
     // Show loading indicator
     showDialog(
@@ -12272,11 +12527,15 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
 
-      // FIXED: Use consistent screen size check instead of admin status
-      if (_hasAdminPermissions) {
-        _showAddHotspotForm(_currentPosition!);
+      // ✅ Check if user is regular reporter (not admin/officer/tanod)
+      final isRegularUser = !_canAccessAllReports;
+
+      if (isRegularUser) {
+        // For regular users: Check for nearby hotspots to support
+        await _checkAndShowNearbyHotspotsForSupport(_currentPosition!);
       } else {
-        _showReportHotspotForm(_currentPosition!);
+        // ✅ For admin/officer/tanod: Check nearby with duplicate prevention
+        await _checkAndShowNearbyHotspotsForAdmin(_currentPosition!);
       }
 
       // Optionally switch to map tab to show the location
@@ -12290,6 +12549,986 @@ class _MapScreenState extends State<MapScreen> {
       }
       _showSnackBar('Error getting location: ${e.toString()}');
     }
+  }
+
+  // ============================================
+  // FIXED: Use the SAME RPC function as regular users
+  // ============================================
+  Future<List<Map<String, dynamic>>> _getNearbyHotspotsSimple({
+    required double latitude,
+    required double longitude,
+    required double distanceMeters,
+  }) async {
+    try {
+      print('🔍 Admin checking for nearby hotspots at ($latitude, $longitude)');
+
+      final currentUserId = _userProfile?['id'];
+
+      // ✅ Use the SAME function as HotspotSupportService
+      final response = await Supabase.instance.client.rpc(
+        'get_nearby_hotspots_with_support', // ✅ Changed from 'get_nearby_hotspots'
+        params: {
+          'p_lat': latitude,
+          'p_lng': longitude,
+          'p_distance_meters': distanceMeters.toInt(),
+          'p_user_id': currentUserId,
+        },
+      );
+
+      print('📍 Raw response: $response');
+
+      if (response == null || response is! List || response.isEmpty) {
+        print('✅ No nearby hotspots found');
+        return [];
+      }
+
+      // Process the response
+      final List<Map<String, dynamic>> hotspots = [];
+
+      for (var item in response) {
+        if (item == null) continue;
+
+        try {
+          // The function already returns all the data we need
+          final hotspot = Map<String, dynamic>.from(item);
+
+          // Ensure distance_meters is a double
+          if (hotspot['distance_meters'] != null) {
+            hotspot['distance_meters'] = (hotspot['distance_meters'] as num)
+                .toDouble();
+          } else {
+            hotspot['distance_meters'] = 0.0;
+          }
+
+          print(
+            '✅ Found hotspot: ${hotspot['id']} - ${hotspot['type_name']} - ${hotspot['distance_meters']}m away',
+          );
+
+          hotspots.add(hotspot);
+        } catch (e) {
+          print('⚠️ Error processing hotspot item: $e');
+          continue;
+        }
+      }
+
+      print('📊 Returning ${hotspots.length} processed hotspots');
+      return hotspots;
+    } catch (e, stackTrace) {
+      print('❌ Error in _getNearbyHotspotsSimple: $e');
+      print('Stack trace: $stackTrace');
+      return [];
+    }
+  }
+
+  // ============================================
+  // ADMIN NEARBY CHECK - No changes needed
+  // ============================================
+  Future<void> _checkAndShowNearbyHotspotsForAdmin(LatLng position) async {
+    try {
+      print('🔍 Admin checking for nearby hotspots...');
+
+      // Get nearby hotspots within 50 meters
+      final nearbyHotspots = await _getNearbyHotspotsSimple(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        distanceMeters: 50,
+      );
+
+      print('📍 Found ${nearbyHotspots.length} nearby hotspots');
+
+      if (nearbyHotspots.isEmpty) {
+        print('✅ No nearby hotspots - proceeding to form');
+        _showAddHotspotForm(position, skipNearbyCheck: true);
+        return;
+      }
+
+      // Filter to show reports from the last 24 hours
+      final oneDayAgo = DateTime.now().subtract(const Duration(hours: 24));
+      final recentNearbyHotspots = nearbyHotspots.where((hotspot) {
+        try {
+          final createdAt = parseStoredDateTime(hotspot['created_at']);
+          final isRecent = createdAt.isAfter(oneDayAgo);
+          print(
+            'Hotspot ${hotspot['id']}: created $createdAt, recent: $isRecent',
+          );
+          return isRecent;
+        } catch (e) {
+          print('⚠️ Error parsing date for hotspot: $e');
+          return false;
+        }
+      }).toList();
+
+      print('📊 ${recentNearbyHotspots.length} recent hotspots (last 24h)');
+
+      if (recentNearbyHotspots.isNotEmpty) {
+        // Show confirmation dialog
+        final shouldProceed = await _showNearbyHotspotConfirmation(
+          position,
+          recentNearbyHotspots,
+        );
+
+        if (shouldProceed) {
+          _showAddHotspotForm(position, skipNearbyCheck: true);
+        } else {
+          print('User cancelled report due to nearby hotspots');
+        }
+      } else {
+        // No recent nearby hotspots, proceed with normal report
+        print('✅ No recent nearby hotspots - proceeding to form');
+        _showAddHotspotForm(position, skipNearbyCheck: true);
+      }
+    } catch (e, stackTrace) {
+      print('❌ Error in _checkAndShowNearbyHotspotsForAdmin: $e');
+      print('Stack trace: $stackTrace');
+
+      if (mounted) {
+        _showSnackBar('Error checking nearby reports. Proceeding anyway...');
+        // Proceed to form anyway on error
+        _showAddHotspotForm(position, skipNearbyCheck: true);
+      }
+    }
+  }
+
+  Future<void> _checkAndShowNearbyHotspotsForSupport(LatLng position) async {
+    try {
+      setState(() => _isCheckingNearbySupports = true);
+
+      final currentUserId = _userProfile?['id'];
+      if (currentUserId == null) {
+        _showSnackBar('User not authenticated');
+        return;
+      }
+
+      // Get nearby hotspots within 50 meters
+      final nearbyHotspots = await HotspotSupportService.getNearbyHotspots(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        distanceMeters: 50,
+        userId: currentUserId,
+      );
+
+      // Filter to show APPROVED and PENDING hotspots from the last 24 hours
+      final oneDayAgo = DateTime.now().subtract(const Duration(hours: 24));
+      final recentNearbyHotspots = nearbyHotspots.where((hotspot) {
+        // ✅ FIX: Use parseStoredDateTime for proper timezone handling
+        final createdAt = parseStoredDateTime(hotspot['created_at']);
+        final isRecent = createdAt.isAfter(oneDayAgo);
+        final status = hotspot['status'];
+        // ✅ Include both pending and approved reports
+        final isRelevantStatus = status == 'approved' || status == 'pending';
+        return isRecent && isRelevantStatus;
+      }).toList();
+
+      if (mounted) {
+        setState(() => _isCheckingNearbySupports = false);
+      }
+
+      if (recentNearbyHotspots.isNotEmpty) {
+        // Show the nearby hotspot with option to support or file new report
+        _showNearbyHotspotSupportDialog(recentNearbyHotspots.first, position);
+      } else {
+        // No nearby hotspots, proceed with normal report
+        _showReportHotspotForm(position);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isCheckingNearbySupports = false);
+        _showSnackBar('Error checking nearby reports: ${e.toString()}');
+      }
+    }
+  }
+
+  // Replace your _showNearbyHotspotSupportDialog with this updated version
+
+  void _showNearbyHotspotSupportDialog(
+    Map<String, dynamic> nearbyHotspot,
+    LatLng userPosition,
+  ) async {
+    final isDesktop = _isDesktopScreen();
+    final distance = (nearbyHotspot['distance_meters'] as double).round();
+    final createdAt = parseStoredDateTime(nearbyHotspot['created_at']);
+    final timeAgo = _getTimeAgo(createdAt);
+    final supportCount = nearbyHotspot['support_count'] ?? 0;
+    final userHasSupported = nearbyHotspot['user_has_supported'] ?? false;
+
+    // Get user's existing support if they already supported
+    Map<String, dynamic>? existingSupport;
+    if (userHasSupported) {
+      try {
+        existingSupport = await HotspotSupportService.getUserSupportForHotspot(
+          hotspotId: nearbyHotspot['id'],
+          userId: _userProfile?['id'],
+        );
+      } catch (e) {
+        print('Error fetching existing support: $e');
+      }
+    }
+
+    if (isDesktop) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.blue),
+              SizedBox(width: 8),
+              Text('Nearby Crime Report Found'),
+            ],
+          ),
+          content: SizedBox(
+            width: 450,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'A crime report was recently filed ${distance}m away from your location:',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Crime details card
+                  Card(
+                    elevation: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.warning,
+                                color: Colors.red,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  nearbyHotspot['type_name'] ?? 'Unknown Crime',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 24),
+                          _buildDetailRow(
+                            Icons.location_on,
+                            'Distance',
+                            '${distance}m away',
+                          ),
+                          _buildDetailRow(
+                            Icons.access_time,
+                            'Reported',
+                            timeAgo,
+                          ),
+                          _buildDetailRow(
+                            Icons.people,
+                            'Support',
+                            '$supportCount ${supportCount == 1 ? 'person' : 'people'} supported',
+                          ),
+                          if (nearbyHotspot['description'] != null &&
+                              nearbyHotspot['description']
+                                  .toString()
+                                  .isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Description:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              nearbyHotspot['description'],
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  if (userHasSupported) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.green.withOpacity(0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.check_circle,
+                            color: Colors.green.shade700,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'You have already supported this report',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                      ),
+                      child: const Text(
+                        'Is this the same incident? Support the existing report or file a new one if this is a different crime.',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            if (userHasSupported) ...[
+              // ✅ UPDATED: Only Edit and File New Report (no Remove button)
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _showEditSupportForm(nearbyHotspot, existingSupport);
+                },
+                icon: const Icon(Icons.edit),
+                label: const Text('Edit Support'),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.orange),
+              ),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _showReportHotspotForm(userPosition);
+                },
+                icon: const Icon(Icons.add_location_alt),
+                label: const Text('File New Report'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ] else ...[
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _showSupportReportForm(nearbyHotspot);
+                },
+                icon: const Icon(Icons.thumb_up),
+                label: const Text('Support Report'),
+              ),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _showReportHotspotForm(userPosition);
+                },
+                icon: const Icon(Icons.add_location_alt),
+                label: const Text('File New Report'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    } else {
+      // Mobile bottom sheet version
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (context) => Container(
+          padding: const EdgeInsets.all(20),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag indicator
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Header
+              const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue, size: 28),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Nearby Crime Report',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              Text(
+                'A crime report was filed ${distance}m away:',
+                style: const TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+
+              // Crime details
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.warning,
+                            color: Colors.red,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              nearbyHotspot['type_name'] ?? 'Unknown Crime',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 24),
+                      _buildDetailRow(
+                        Icons.location_on,
+                        'Distance',
+                        '${distance}m away',
+                      ),
+                      _buildDetailRow(Icons.access_time, 'Reported', timeAgo),
+                      _buildDetailRow(
+                        Icons.people,
+                        'Support',
+                        '$supportCount supported',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              if (userHasSupported) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green.shade700),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'You already supported this report',
+                          style: TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Is this the same incident? Support the report or file new if different.',
+                    style: TextStyle(fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 20),
+
+              // Action buttons
+              if (userHasSupported) ...[
+                // ✅ UPDATED: Only Edit and File New Report side by side (no Remove button)
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _showEditSupportForm(nearbyHotspot, existingSupport);
+                        },
+                        icon: const Icon(Icons.edit),
+                        label: const Text('Edit Support'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.orange,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _showReportHotspotForm(userPosition);
+                        },
+                        icon: const Icon(Icons.add_location_alt),
+                        label: const Text('File New'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ] else ...[
+                // ✅ UPDATED: New layout for non-supporters
+                Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Navigator.of(context).pop();
+                              _showSupportReportForm(nearbyHotspot);
+                            },
+                            icon: const Icon(Icons.thumb_up),
+                            label: const Text('Support'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _showReportHotspotForm(userPosition);
+                        },
+                        icon: const Icon(Icons.add_location_alt),
+                        label: const Text('File New Report'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+
+              SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+
+  // ✅ NEW: Edit support form
+  void _showEditSupportForm(
+    Map<String, dynamic> hotspot,
+    Map<String, dynamic>? existingSupport,
+  ) {
+    final descriptionController = TextEditingController(
+      text: existingSupport?['description'] ?? '',
+    );
+    XFile? selectedPhoto;
+    bool isSubmitting = false;
+    final hasExistingPhoto = existingSupport?['photo_url'] != null;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit Your Support'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Editing support for: ${hotspot['type_name']}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  TextField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Additional Details (Optional)',
+                      hintText: 'Share what you witnessed or know...',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 4,
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  if (hasExistingPhoto && selectedPhoto == null)
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.photo, color: Colors.blue),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'You have an existing photo',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  const SizedBox(height: 8),
+
+                  OutlinedButton.icon(
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            final ImagePicker picker = ImagePicker();
+                            final photo = await picker.pickImage(
+                              source: ImageSource.camera,
+                              imageQuality: 85,
+                            );
+                            if (photo != null) {
+                              setDialogState(() => selectedPhoto = photo);
+                            }
+                          },
+                    icon: const Icon(Icons.camera_alt),
+                    label: Text(
+                      selectedPhoto == null
+                          ? (hasExistingPhoto ? 'Replace Photo' : 'Add Photo')
+                          : 'New Photo Selected ✓',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      setDialogState(() => isSubmitting = true);
+
+                      try {
+                        final currentUserId = _userProfile?['id'];
+                        if (currentUserId == null) {
+                          throw Exception('User not authenticated');
+                        }
+
+                        await HotspotSupportService.updateSupport(
+                          hotspotId: hotspot['id'],
+                          supporterId: currentUserId,
+                          description: descriptionController.text,
+                          photo: selectedPhoto,
+                        );
+
+                        if (mounted) {
+                          Navigator.pop(context);
+                          _showSnackBar('Support updated successfully!');
+                          await _loadHotspots();
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          _showSnackBar(
+                            'Failed to update support: ${e.toString()}',
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Update Support'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ✅ TEMPORARILY DISABLED DELETE SUPPORT
+  // ignore: unused_element
+  Future<void> _removeSupport(Map<String, dynamic> hotspot) async {
+    final shouldRemove = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove Support'),
+        content: Text(
+          'Are you sure you want to remove your support from this ${hotspot['type_name']} report?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRemove != true) return;
+
+    try {
+      final currentUserId = _userProfile?['id'];
+      if (currentUserId == null) {
+        _showSnackBar('User not authenticated');
+        return;
+      }
+
+      // Show loading overlay
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => WillPopScope(
+          onWillPop: () async => false,
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+      );
+
+      await HotspotSupportService.removeSupport(
+        hotspotId: hotspot['id'],
+        supporterId: currentUserId,
+      );
+
+      if (!mounted) return;
+
+      // ✅ Close loading dialog
+      Navigator.of(context).pop();
+
+      // ✅ NEW: Remove notification from local state immediately
+      setState(() {
+        _notifications.removeWhere(
+          (notification) =>
+              notification['hotspot_id'] == hotspot['id'] &&
+              notification['user_id'] == currentUserId,
+        );
+        _unreadNotificationCount = _notifications
+            .where((n) => !n['is_read'])
+            .length;
+      });
+
+      _showSnackBar('Support removed successfully');
+
+      // Reload hotspots to update UI
+      await _loadHotspots();
+    } catch (e) {
+      if (!mounted) return;
+
+      Navigator.of(context).pop();
+      _showSnackBar('Failed to remove support: ${e.toString()}');
+    }
+  }
+
+  // Helper widget for detail rows
+  Widget _buildDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: Colors.grey[600]),
+          const SizedBox(width: 8),
+          Text(
+            '$label: ',
+            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+          ),
+          Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+        ],
+      ),
+    );
+  }
+
+  void _showSupportReportForm(Map<String, dynamic> hotspot) {
+    final descriptionController = TextEditingController();
+    XFile? selectedPhoto;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Support Crime Report'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Supporting: ${hotspot['type_name']}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  TextField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Additional Details (Optional)',
+                      hintText:
+                          'Share what you witnessed or know about this incident...',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 4,
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  OutlinedButton.icon(
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            final ImagePicker picker = ImagePicker();
+                            final photo = await picker.pickImage(
+                              source: ImageSource.camera,
+                              imageQuality: 85,
+                            );
+                            if (photo != null) {
+                              setDialogState(() => selectedPhoto = photo);
+                            }
+                          },
+                    icon: const Icon(Icons.camera_alt),
+                    label: Text(
+                      selectedPhoto == null
+                          ? 'Add Photo (Optional)'
+                          : 'Photo Selected ✓',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      setDialogState(() => isSubmitting = true);
+
+                      try {
+                        final currentUserId = _userProfile?['id'];
+                        if (currentUserId == null) {
+                          throw Exception('User not authenticated');
+                        }
+
+                        await HotspotSupportService.addSupport(
+                          hotspotId: hotspot['id'],
+                          supporterId: currentUserId,
+                          description: descriptionController.text,
+                          photo: selectedPhoto,
+                        );
+
+                        if (mounted) {
+                          Navigator.pop(context);
+                          _showSnackBar('Support added successfully!');
+                          // Refresh hotspots to update support count
+                          await _loadHotspots();
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          _showSnackBar(
+                            'Failed to add support: ${e.toString()}',
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Submit Support'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // QUICK ADD SAFE SPOT FUNCTION
@@ -15208,16 +16447,23 @@ class _MapScreenState extends State<MapScreen> {
                           incidentTime.isAfter(thirtyDaysAgo);
                       final hotspotId = hotspot['id'];
 
+                      // ✅ NEW: Check if user has supported this hotspot
+                      final userHasSupported =
+                          hotspot['user_has_supported'] ?? false;
+
                       // First check the filter service (severity, category filters)
+                      // ✅ IMPORTANT: Pass current user ID to filter service
                       if (!filterService.shouldShowHotspot(hotspot)) {
                         return false;
                       }
 
                       // ✅ Special logic when date filter is active
                       if (hasCustomDateRange) {
-                        // Exception 1: Always show pending
+                        // ✅ UPDATED: Include supporters in pending visibility
                         if (status == 'pending') {
-                          return _canViewPending || isOwnHotspot; // ✅ CHANGED
+                          return _canViewPending ||
+                              isOwnHotspot ||
+                              userHasSupported;
                         }
 
                         // Exception 2: Always show rejected to owner
@@ -15258,10 +16504,13 @@ class _MapScreenState extends State<MapScreen> {
                       }
 
                       // ✅ NO DATE FILTER: Standard 30-day logic
-                      if (_canAccessAllReports) return true; // ✅ CHANGED
+                      if (_canAccessAllReports) return true;
 
+                      // ✅ UPDATED: Include supporters in pending visibility
                       if (status == 'pending') {
-                        return isOwnHotspot;
+                        return _canViewPending ||
+                            isOwnHotspot ||
+                            userHasSupported;
                       }
 
                       if (status == 'rejected') {
@@ -15874,8 +17123,11 @@ class _MapScreenState extends State<MapScreen> {
     required String status,
     required String crimeTypeName,
     required bool showLabel,
-    required String crimeLevel, // ADD THIS
+    required String crimeLevel,
   }) {
+    final supportCount = hotspot['support_count'] ?? 0;
+    final stars = HotspotSupportService.calculateConfidenceStars(supportCount);
+
     return Transform.rotate(
       angle: -_currentMapRotation * pi / 180,
       alignment: Alignment.center,
@@ -15905,7 +17157,7 @@ class _MapScreenState extends State<MapScreen> {
                   markerIcon: markerIcon,
                   isActive: isActive && status != 'rejected',
                   pulseScale: isSelected ? 1.1 : 0.9,
-                  crimeLevel: crimeLevel, // ADD THIS LINE
+                  crimeLevel: crimeLevel,
                   onTap: () {
                     setState(() {
                       _selectedHotspot = hotspot;
@@ -15915,13 +17167,55 @@ class _MapScreenState extends State<MapScreen> {
                   },
                 ),
               ),
+
+              // ✅ NEW: Support count badge (top-right like notification)
+              if (supportCount > 0)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade600,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.3),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        supportCount > 99 ? '99+' : '$supportCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          height: 1.0,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Status indicator (pending/rejected) - moved to left side
               if (status == 'pending' || status == 'rejected')
                 Positioned(
-                  top: 6,
-                  right: 6,
+                  top: 4,
+                  left: 4,
                   child: Container(
-                    width: 12,
-                    height: 12,
+                    width: 14,
+                    height: 14,
                     decoration: BoxDecoration(
                       color: status == 'pending' ? Colors.orange : Colors.grey,
                       shape: BoxShape.circle,
@@ -15939,7 +17233,7 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
 
-          // Crime type label (rest remains the same)
+          // Crime type label with stars
           if (showLabel)
             Positioned(
               left: isSelected ? 93 : 73,
@@ -15951,6 +17245,7 @@ class _MapScreenState extends State<MapScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Crime type label
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 6,
@@ -15981,7 +17276,7 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                       child: Text(
                         crimeTypeName,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Colors.white,
                           fontSize: 9,
                           fontWeight: FontWeight.w600,
@@ -15989,6 +17284,54 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ),
 
+                    // ✅ Confidence stars (if has support)
+                    if (supportCount > 0) ...[
+                      const SizedBox(height: 3),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.95),
+                          borderRadius: BorderRadius.circular(6),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 2,
+                              offset: const Offset(0.5, 0.5),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Stars (max 5)
+                            ...List.generate(5, (index) {
+                              return Icon(
+                                index < stars ? Icons.star : Icons.star_border,
+                                size: 8,
+                                color: index < stars
+                                    ? Colors.amber.shade600
+                                    : Colors.grey.shade400,
+                              );
+                            }),
+                            const SizedBox(width: 3),
+                            // Count
+                            Text(
+                              '$supportCount',
+                              style: TextStyle(
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue.shade700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    // Time info
                     if (hotspot['time'] != null &&
                         (status == 'approved' || status == 'pending')) ...[
                       const SizedBox(height: 3),
@@ -17364,6 +18707,11 @@ class _MapScreenState extends State<MapScreen> {
                                   ),
                                 ),
 
+                                // ✅ ADD THIS SECTION HERE (between Time and Rejection/Approval sections)
+                                const SizedBox(height: 16),
+                                _buildViewSupportsButton(hotspot),
+                                const SizedBox(height: 10),
+
                                 // Show rejection reason for rejected reports
                                 if (status == 'rejected' &&
                                     hotspot['rejection_reason'] != null)
@@ -18432,6 +19780,14 @@ class _MapScreenState extends State<MapScreen> {
                             ],
                           ),
                         ),
+
+                        // ✅ ADD THIS SECTION HERE (between Time and Rejection reason)
+                        const SizedBox(height: 16),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: _buildViewSupportsButton(hotspot),
+                        ),
+                        const SizedBox(height: 10),
 
                         // Show rejection reason for rejected reports
                         if (status == 'rejected' &&
@@ -19582,6 +20938,956 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // ✅ UPDATED: View Supports Button with reduced bottom padding
+  Widget _buildViewSupportsButton(Map<String, dynamic> hotspot) {
+    final supportCount = hotspot['support_count'] ?? 0;
+
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => _showSupportsModal(hotspot),
+            icon: const Icon(Icons.people, size: 18),
+            label: Text(
+              supportCount == 0
+                  ? 'View Supports (0)'
+                  : 'View Supports ($supportCount)',
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.blue.shade700,
+              side: BorderSide(color: Colors.blue.shade300),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8), // Reduced from 16 to 8
+        _buildSupporterStatusNote(hotspot), // NEW: Status note
+      ],
+    );
+  }
+
+  // ✅ IMPROVED: Status note for supporters with detailed messages
+  Widget _buildSupporterStatusNote(Map<String, dynamic> hotspot) {
+    final status = hotspot['status'] ?? 'pending';
+    final verificationStatus = hotspot['verification_status'] ?? 'unverified';
+    final isOwner =
+        (_userProfile?['id'] != null) &&
+        (hotspot['created_by'] == _userProfile!['id'] ||
+            hotspot['reported_by'] == _userProfile!['id']);
+    final userHasSupported = hotspot['user_has_supported'] ?? false;
+
+    // Don't show note for admin/officer/tanod
+    if (_canAccessAllReports) {
+      return const SizedBox.shrink();
+    }
+
+    // Determine the message and color based on status
+    String message;
+    Color backgroundColor;
+    Color textColor;
+    Color borderColor;
+    IconData icon;
+
+    if (status == 'pending') {
+      if (verificationStatus == 'verified') {
+        if (isOwner) {
+          message =
+              'Your report has been verified by local authorities and is now awaiting final approval from the admin. You will be notified once a decision is made.';
+        } else if (userHasSupported) {
+          message =
+              'This report has been verified by local authorities and is currently awaiting admin approval. Your support helps strengthen this report\'s credibility.';
+        } else {
+          message =
+              'This report has been verified by local authorities and is awaiting final approval. Consider supporting it if you have witnessed or know about this incident.';
+        }
+        icon = Icons.verified;
+        backgroundColor = Colors.blue.shade50;
+        textColor = Colors.blue.shade700;
+        borderColor = Colors.blue.shade200;
+      } else if (verificationStatus == 'rejected_verification') {
+        if (isOwner) {
+          message =
+              'The verification of your report was rejected by local authorities. This may affect its approval. Please ensure all details are accurate or contact support for assistance.';
+        } else {
+          message =
+              'The verification of this report was rejected by local authorities. It may not be approved. Exercise caution when considering this information.';
+        }
+        icon = Icons.cancel;
+        backgroundColor = Colors.orange.shade50;
+        textColor = Colors.orange.shade700;
+        borderColor = Colors.orange.shade200;
+      } else {
+        // unverified
+        if (isOwner) {
+          message =
+              'Your report is currently pending verification by local authorities. They will review the details to confirm accuracy before it can be approved by the admin.';
+        } else if (userHasSupported) {
+          message =
+              'This report is pending verification by local authorities. Your support has been recorded and will help validate this incident once it\'s verified.';
+        } else {
+          message =
+              'This report is awaiting verification by local authorities. You can support it now if you have witnessed this incident or have relevant information to share.';
+        }
+        icon = Icons.pending;
+        backgroundColor = Colors.orange.shade50;
+        textColor = Colors.orange.shade700;
+        borderColor = Colors.orange.shade200;
+      }
+    } else if (status == 'approved') {
+      if (isOwner) {
+        message =
+            'Your report has been approved and is now being actively monitored by authorities. Thank you for helping keep the community safe. You can still view all community supports below.';
+      } else if (userHasSupported) {
+        message =
+            'This report has been approved by authorities and is being actively monitored. Thank you for supporting this report and helping validate community safety concerns.';
+      } else {
+        message =
+            'This report has been officially approved and is being monitored by local authorities. Community members can still support it to show solidarity and awareness.';
+      }
+      icon = Icons.check_circle;
+      backgroundColor = Colors.green.shade50;
+      textColor = Colors.green.shade700;
+      borderColor = Colors.green.shade200;
+    } else if (status == 'rejected') {
+      if (isOwner) {
+        message =
+            'Your report was not approved by the admin. This could be due to insufficient details, duplication, or policy violations. You may view the rejection reason above or contact support.';
+      } else {
+        message =
+            'This report was not approved by authorities. It may have been flagged as inaccurate, duplicate, or violating community guidelines.';
+      }
+      icon = Icons.cancel;
+      backgroundColor = Colors.red.shade50;
+      textColor = Colors.red.shade700;
+      borderColor = Colors.red.shade200;
+    } else {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        crossAxisAlignment:
+            CrossAxisAlignment.start, // Changed to start for multi-line
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(
+              top: 2,
+            ), // Align icon with first line
+            child: Icon(icon, color: textColor, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w500,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ NEW: Show Supports Modal
+  Future<void> _showSupportsModal(Map<String, dynamic> hotspot) async {
+    final hotspotId = hotspot['id'];
+
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      // Fetch all supports for this hotspot
+      final supports = await HotspotSupportService.getHotspotSupports(
+        hotspotId,
+      );
+
+      if (!mounted) return;
+
+      // Close loading dialog
+      Navigator.pop(context);
+
+      // Show supports modal based on screen size
+      if (_isDesktopScreen()) {
+        _showSupportsModalDesktop(hotspot, supports);
+      } else {
+        _showSupportsModalMobile(hotspot, supports);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+      _showSnackBar('Failed to load supports: ${e.toString()}');
+    }
+  }
+
+  // ✅ NEW: Desktop Supports Modal
+  void _showSupportsModalDesktop(
+    Map<String, dynamic> hotspot,
+    List<Map<String, dynamic>> supports,
+  ) {
+    final supportCount = supports.length;
+    final crimeTypeName = hotspot['crime_type']?['name'] ?? 'Unknown Crime';
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.7,
+          constraints: BoxConstraints(
+            maxWidth: 700,
+            maxHeight: MediaQuery.of(context).size.height * 0.85,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(12),
+                    topRight: Radius.circular(12),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.people, color: Colors.blue.shade700),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Community Supports ($supportCount)',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            crimeTypeName,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Content
+              Flexible(
+                child: supports.isEmpty
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(32),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.inbox,
+                                size: 64,
+                                color: Colors.grey.shade300,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No supports yet',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey.shade600,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Be the first to support this report',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey.shade500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: supports.length,
+                        itemBuilder: (context, index) {
+                          final support = supports[index];
+                          return _buildSupportCard(support, index);
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ✅ NEW: Mobile Supports Modal
+  void _showSupportsModalMobile(
+    Map<String, dynamic> hotspot,
+    List<Map<String, dynamic>> supports,
+  ) {
+    final supportCount = supports.length;
+    final crimeTypeName = hotspot['crime_type']?['name'] ?? 'Unknown Crime';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.85,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // Drag handle
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+              child: Row(
+                children: [
+                  Icon(Icons.people, color: Colors.blue.shade700, size: 28),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Supports ($supportCount)',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          crimeTypeName,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const Divider(height: 1),
+
+            // Content
+            Expanded(
+              child: supports.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.inbox,
+                              size: 64,
+                              color: Colors.grey.shade300,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No supports yet',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.grey.shade600,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Be the first to support this report',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: supports.length,
+                      itemBuilder: (context, index) {
+                        final support = supports[index];
+                        return _buildSupportCard(support, index);
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ✅ UPDATED: Support Card Widget with ONLY edit icon (no delete)
+  Widget _buildSupportCard(Map<String, dynamic> support, int index) {
+    final supporter = support['supporter'];
+    final supporterId = supporter?['id'];
+    final supporterName = supporter != null
+        ? (supporter['full_name'] ?? supporter['username'] ?? 'Anonymous')
+        : 'Anonymous';
+    final description = support['description'];
+    final photoUrl = support['photo_url'];
+    final createdAt = parseStoredDateTime(support['created_at']);
+    final timeAgo = _getTimeAgo(createdAt);
+
+    // Check if current user is the supporter
+    final isCurrentUserSupporter = _userProfile?['id'] == supporterId;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with supporter info and edit icon
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: Colors.blue.shade100,
+                  child: Text(
+                    supporterName[0].toUpperCase(),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue.shade700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        supporterName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        timeAgo,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '#${index + 1}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue.shade700,
+                    ),
+                  ),
+                ),
+                // ✅ UPDATED: Simple edit icon button (no dropdown)
+                if (isCurrentUserSupporter) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: Icon(
+                      Icons.edit,
+                      color: Colors.orange.shade600,
+                      size: 20,
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context); // Close modal
+                      _showEditSupportDialog(support);
+                    },
+                    tooltip: 'Edit Support',
+                  ),
+                ],
+              ],
+            ),
+
+            // Photo if exists
+            if (photoUrl != null) ...[
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () => _showFullScreenImage(photoUrl),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    photoUrl,
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Container(
+                        height: 200,
+                        color: Colors.grey.shade200,
+                        child: const Center(child: CircularProgressIndicator()),
+                      );
+                    },
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 200,
+                        color: Colors.grey.shade200,
+                        child: const Center(
+                          child: Icon(Icons.broken_image, size: 50),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+
+            // Description if exists
+            if (description != null &&
+                description.toString().trim().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade800,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+
+            // Show "No additional details" if no description and no photo
+            if ((description == null ||
+                    description.toString().trim().isEmpty) &&
+                photoUrl == null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Supported this report',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey.shade500,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ✅ NEW: Edit Support Dialog
+  void _showEditSupportDialog(Map<String, dynamic> support) {
+    final hotspotId = support['hotspot_id'];
+    final descriptionController = TextEditingController(
+      text: support['description'] ?? '',
+    );
+    XFile? selectedPhoto;
+    bool isSubmitting = false;
+    final hasExistingPhoto = support['photo_url'] != null;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.edit, color: Colors.orange),
+              SizedBox(width: 8),
+              Text('Edit Your Support'),
+            ],
+          ),
+          content: SizedBox(
+            width: _isDesktopScreen() ? 400 : double.infinity,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Update your support details for this report',
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Existing photo indicator
+                  if (hasExistingPhoto && selectedPhoto == null)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.photo,
+                            color: Colors.blue.shade700,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'You have an existing photo attached',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.blue.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  if (hasExistingPhoto && selectedPhoto == null)
+                    const SizedBox(height: 12),
+
+                  // Description field
+                  TextField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Additional Details (Optional)',
+                      hintText: 'Update what you witnessed or know...',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 4,
+                    enabled: !isSubmitting,
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Photo buttons
+                  if (selectedPhoto != null)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.check_circle,
+                            color: Colors.green.shade700,
+                          ),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'New photo selected',
+                              style: TextStyle(fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 20),
+                            onPressed: isSubmitting
+                                ? null
+                                : () => setDialogState(
+                                    () => selectedPhoto = null,
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  if (selectedPhoto != null) const SizedBox(height: 8),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: isSubmitting
+                              ? null
+                              : () async {
+                                  final ImagePicker picker = ImagePicker();
+                                  final photo = await picker.pickImage(
+                                    source: ImageSource.camera,
+                                    imageQuality: 85,
+                                  );
+                                  if (photo != null) {
+                                    setDialogState(() => selectedPhoto = photo);
+                                  }
+                                },
+                          icon: const Icon(Icons.camera_alt, size: 18),
+                          label: Text(
+                            selectedPhoto == null
+                                ? (hasExistingPhoto
+                                      ? 'Replace Photo'
+                                      : 'Add Photo')
+                                : 'Retake Photo',
+                          ),
+                        ),
+                      ),
+                      if (hasExistingPhoto && selectedPhoto == null) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: isSubmitting
+                                ? null
+                                : () {
+                                    // Show confirmation to remove existing photo
+                                    showDialog(
+                                      context: context,
+                                      builder: (ctx) => AlertDialog(
+                                        title: const Text('Remove Photo?'),
+                                        content: const Text(
+                                          'Are you sure you want to remove the existing photo?',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx),
+                                            child: const Text('Cancel'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () {
+                                              Navigator.pop(ctx);
+                                              setDialogState(() {
+                                                // Mark for deletion by setting a flag
+                                              });
+                                            },
+                                            child: const Text(
+                                              'Remove',
+                                              style: TextStyle(
+                                                color: Colors.red,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                            icon: const Icon(Icons.delete, size: 18),
+                            label: const Text('Remove'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton.icon(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      setDialogState(() => isSubmitting = true);
+
+                      try {
+                        final currentUserId = _userProfile?['id'];
+                        if (currentUserId == null) {
+                          throw Exception('User not authenticated');
+                        }
+
+                        await HotspotSupportService.updateSupport(
+                          hotspotId: hotspotId,
+                          supporterId: currentUserId,
+                          description: descriptionController.text,
+                          photo: selectedPhoto,
+                        );
+
+                        if (mounted) {
+                          Navigator.pop(context);
+                          _showSnackBar('Support updated successfully!');
+                          await _loadHotspots();
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          _showSnackBar('Failed to update: ${e.toString()}');
+                        }
+                      }
+                    },
+              icon: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save, size: 18),
+              label: const Text('Update Support'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ✅ TEMPORARILY DISABLED DELETE SUPPORT DIALOG
+  // ignore: unused_element
+  void _showDeleteSupportDialog(Map<String, dynamic> support) {
+    final hotspotId = support['hotspot_id'];
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Delete Support?'),
+          ],
+        ),
+        content: const Text(
+          'Are you sure you want to delete your support from this report? '
+          'This action cannot be undone and will remove your photo and description.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              // Close confirmation dialog
+              Navigator.pop(context);
+
+              // Show loading
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) => WillPopScope(
+                  onWillPop: () async => false,
+                  child: const Center(child: CircularProgressIndicator()),
+                ),
+              );
+
+              try {
+                final currentUserId = _userProfile?['id'];
+                if (currentUserId == null) {
+                  throw Exception('User not authenticated');
+                }
+
+                await HotspotSupportService.removeSupport(
+                  hotspotId: hotspotId,
+                  supporterId: currentUserId,
+                );
+
+                if (mounted) {
+                  // ✅ Close loading dialog
+                  Navigator.pop(context);
+
+                  // ✅ Close supports modal
+                  Navigator.pop(context);
+
+                  // ✅ NEW: Remove notification from local state
+                  setState(() {
+                    _notifications.removeWhere(
+                      (notification) =>
+                          notification['hotspot_id'] == hotspotId &&
+                          notification['user_id'] == currentUserId,
+                    );
+                    _unreadNotificationCount = _notifications
+                        .where((n) => !n['is_read'])
+                        .length;
+                  });
+
+                  _showSnackBar('Support deleted successfully');
+
+                  // Reload hotspots to update UI
+                  await _loadHotspots();
+                }
+              } catch (e) {
+                if (mounted) {
+                  Navigator.pop(context); // Close loading
+                  _showSnackBar('Failed to delete: ${e.toString()}');
+                }
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
   }
@@ -21354,13 +23660,14 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // DELETE HOTSPOT
+  // ✅ UPDATED: DELETE HOTSPOT with support photos cleanup
   Future<void> _deleteHotspot(int id) async {
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Confirm Deletion'),
         content: const Text(
-          'Are you sure you want to delete this hotspot? This will also delete any associated photos.',
+          'Are you sure you want to delete this hotspot? This will also delete all associated photos and support photos.',
         ),
         actions: [
           TextButton(
@@ -21378,19 +23685,35 @@ class _MapScreenState extends State<MapScreen> {
     if (shouldDelete != true) return;
 
     try {
-      // Delete associated photo first
+      // ✅ NEW: Delete all support photos first
+      try {
+        final supports = await HotspotSupportService.getHotspotSupports(id);
+        for (final support in supports) {
+          if (support['photo_path'] != null) {
+            await Supabase.instance.client.storage
+                .from('hotspot_support_photos')
+                .remove([support['photo_path']]);
+            print('Deleted support photo: ${support['photo_path']}');
+          }
+        }
+      } catch (e) {
+        print('Error deleting support photos: $e');
+        // Continue with deletion even if support photo deletion fails
+      }
+
+      // Delete hotspot photo
       try {
         final existingPhoto = await PhotoService.getHotspotPhoto(id);
         if (existingPhoto != null) {
           await PhotoService.deletePhoto(existingPhoto);
-          print('Deleted photo for hotspot $id');
+          print('Deleted hotspot photo for hotspot $id');
         }
       } catch (e) {
         print('Error deleting hotspot photo: $e');
         // Continue with hotspot deletion even if photo deletion fails
       }
 
-      // Delete the hotspot
+      // Delete the hotspot (this will cascade delete supports via database)
       await Supabase.instance.client.from('hotspot').delete().eq('id', id);
 
       if (mounted) {
@@ -22886,10 +25209,17 @@ class _MapScreenState extends State<MapScreen> {
 
       // Add end date filter if specified
       if (filterService.crimeEndDate != null) {
-        query = query.lte(
-          'time',
-          filterService.crimeEndDate!.toIso8601String(),
+        // ✅ Include the entire end date (23:59:59.999)
+        final endOfDay = DateTime(
+          filterService.crimeEndDate!.year,
+          filterService.crimeEndDate!.month,
+          filterService.crimeEndDate!.day,
+          23,
+          59,
+          59,
+          999,
         );
+        query = query.lte('time', endOfDay.toIso8601String());
       }
 
       final response = await query;
@@ -22934,12 +25264,8 @@ class _MapScreenState extends State<MapScreen> {
         ''');
 
       if (hasCustomDateRange) {
-        if (filterService.crimeStartDate != null) {
-          query = query.or(
-            'status.eq.active,'
-            'and(status.eq.inactive,created_at.lte.${filterService.crimeEndDate?.toIso8601String() ?? DateTime.now().toIso8601String()})',
-          );
-        }
+        // ✅ Load ALL clusters (active + inactive) that might contain crimes in the date range
+        query = query.or('status.eq.active,status.eq.inactive');
       } else {
         query = query.eq('status', 'active');
       }
@@ -22985,10 +25311,17 @@ class _MapScreenState extends State<MapScreen> {
             );
           }
           if (filterService.crimeEndDate != null) {
-            crimeQuery = crimeQuery.lte(
-              'time',
-              filterService.crimeEndDate!.toIso8601String(),
+            // ✅ Include the entire end date (23:59:59.999)
+            final endOfDay = DateTime(
+              filterService.crimeEndDate!.year,
+              filterService.crimeEndDate!.month,
+              filterService.crimeEndDate!.day,
+              23,
+              59,
+              59,
+              999,
             );
+            crimeQuery = crimeQuery.lte('time', endOfDay.toIso8601String());
           }
         }
 
@@ -24243,20 +26576,25 @@ class _MapScreenState extends State<MapScreen> {
         CircleLayer(
           circles: _heatmapClusters.map((cluster) {
             final isExpired = _isClusterExpired(cluster);
-            final color = isExpired
-                ? Colors
-                      .blueGrey
-                      .shade600 // ⭐ Blue-grey main layer
+            final fillColor = isExpired
+                ? Colors.blueGrey.shade600
+                : _getHeatmapColor(cluster.intensity);
+            final borderColor = isExpired
+                ? _getSeverityColor(
+                    cluster,
+                  ) // ⭐ Severity-based border for expired
                 : _getHeatmapColor(cluster.intensity);
 
             return CircleMarker(
               point: cluster.center,
               radius: cluster.radius * radiusMultiplier,
-              color: color.withOpacity(fillOpacity * (isExpired ? 0.5 : 1.0)),
-              borderColor: color.withOpacity(
-                borderOpacity * (isExpired ? 0.65 : 1.0),
+              color: fillColor.withOpacity(
+                fillOpacity * (isExpired ? 0.5 : 1.0),
               ),
-              borderStrokeWidth: isExpired ? borderWidth * 0.75 : borderWidth,
+              borderColor: borderColor.withOpacity(
+                borderOpacity * (isExpired ? 0.8 : 1.0),
+              ),
+              borderStrokeWidth: isExpired ? borderWidth * 1.0 : borderWidth,
               useRadiusInMeter: true,
             );
           }).toList(),
@@ -24279,6 +26617,27 @@ class _MapScreenState extends State<MapScreen> {
     return false;
   }
 
+  // ============================================
+  // NEW: Get severity color for expired clusters
+  // ============================================
+  Color _getSeverityColor(HeatmapCluster cluster) {
+    // Use the cluster's dominantSeverity directly
+    final severity = cluster.dominantSeverity;
+
+    switch (severity.toLowerCase()) {
+      case 'critical':
+        return Colors.red.shade900;
+      case 'high':
+        return Colors.deepOrange;
+      case 'medium':
+        return Colors.orange;
+      case 'low':
+        return Colors.yellow.shade700;
+      default:
+        return Colors.blueGrey.shade700;
+    }
+  }
+
   Widget _buildHeatmapMarkers() {
     if (!_showHeatmap || _heatmapClusters.isEmpty || _currentZoom < 13.0) {
       return const SizedBox.shrink();
@@ -24287,10 +26646,11 @@ class _MapScreenState extends State<MapScreen> {
     return MarkerLayer(
       markers: _heatmapClusters.map((cluster) {
         final isExpired = _isClusterExpired(cluster);
-        final color = isExpired
-            ? Colors
-                  .blueGrey
-                  .shade700 // ⭐ Blue-grey for markers
+        final fillColor = isExpired
+            ? Colors.blueGrey.shade700
+            : _getHeatmapColor(cluster.intensity);
+        final borderColor = isExpired
+            ? _getSeverityColor(cluster) // ⭐ Severity-based border for expired
             : _getHeatmapColor(cluster.intensity);
 
         return Marker(
@@ -24302,8 +26662,8 @@ class _MapScreenState extends State<MapScreen> {
             child: Container(
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: color.withOpacity(isExpired ? 0.15 : 0.1),
-                border: Border.all(color: color, width: 2),
+                color: fillColor.withOpacity(isExpired ? 0.15 : 0.1),
+                border: Border.all(color: borderColor, width: 2),
               ),
               child: Center(
                 child: Column(
@@ -24312,7 +26672,7 @@ class _MapScreenState extends State<MapScreen> {
                     Text(
                       '${cluster.crimeCount}',
                       style: TextStyle(
-                        color: color,
+                        color: fillColor,
                         fontWeight: isExpired
                             ? FontWeight.w600
                             : FontWeight.bold,
@@ -24323,7 +26683,7 @@ class _MapScreenState extends State<MapScreen> {
                       Icon(
                         Icons.history,
                         size: 12,
-                        color: color.withOpacity(0.8),
+                        color: fillColor.withOpacity(0.8),
                       ),
                   ],
                 ),
@@ -24446,7 +26806,7 @@ class _MapScreenState extends State<MapScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Status indicator
+                        // Status indicator with severity level
                         if (isExpiredCluster)
                           Container(
                             width: double.infinity,
@@ -24459,25 +26819,68 @@ class _MapScreenState extends State<MapScreen> {
                               borderRadius: BorderRadius.circular(
                                 isMobile ? 10 : 8,
                               ),
-                              border: Border.all(color: Colors.grey.shade400),
+                              border: Border.all(
+                                color: _getSeverityColor(cluster),
+                                width: 2,
+                              ),
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(
-                                  Icons.info_outline,
-                                  size: isMobile ? 18 : 16,
-                                  color: Colors.grey.shade700,
-                                ),
-                                SizedBox(width: isMobile ? 8 : 6),
-                                Expanded(
-                                  child: Text(
-                                    'All crimes expired - Historical data only',
-                                    style: TextStyle(
-                                      fontSize: isMobile ? 13 : 12,
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.info_outline,
+                                      size: isMobile ? 18 : 16,
                                       color: Colors.grey.shade700,
-                                      fontWeight: FontWeight.w500,
                                     ),
+                                    SizedBox(width: isMobile ? 8 : 6),
+                                    Expanded(
+                                      child: Text(
+                                        'All crimes expired - Historical data only',
+                                        style: TextStyle(
+                                          fontSize: isMobile ? 13 : 12,
+                                          color: Colors.grey.shade700,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: isMobile ? 8 : 6),
+                                Container(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: isMobile ? 10 : 8,
+                                    vertical: isMobile ? 6 : 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _getSeverityColor(
+                                      cluster,
+                                    ).withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: _getSeverityColor(cluster),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.warning_amber_rounded,
+                                        size: isMobile ? 16 : 14,
+                                        color: _getSeverityColor(cluster),
+                                      ),
+                                      SizedBox(width: isMobile ? 6 : 4),
+                                      Text(
+                                        'Previous Severity: ${cluster.dominantSeverity.toUpperCase()}',
+                                        style: TextStyle(
+                                          fontSize: isMobile ? 12 : 11,
+                                          color: _getSeverityColor(cluster),
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],

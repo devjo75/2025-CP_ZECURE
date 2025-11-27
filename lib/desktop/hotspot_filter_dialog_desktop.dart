@@ -362,6 +362,24 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                       ],
                     ),
 
+                    // Year preset buttons
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                      child: Row(
+                        children: [
+                          for (int year = 2020; year <= 2025; year++) ...[
+                            _buildYearPresetButton(
+                              context,
+                              year,
+                              filterService,
+                            ),
+                            if (year != 2025) const SizedBox(width: 6),
+                          ],
+                        ],
+                      ),
+                    ),
+
                     const SizedBox(height: 16),
 
                     // Dynamic content based on toggle
@@ -730,6 +748,48 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                 ),
               );
             },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildYearPresetButton(
+    BuildContext context,
+    int year,
+    HotspotFilterService filterService,
+  ) {
+    final isSelected =
+        filterService.startDate?.year == year &&
+        filterService.startDate?.month == 1 &&
+        filterService.startDate?.day == 1 &&
+        filterService.endDate?.year == year &&
+        filterService.endDate?.month == 12 &&
+        filterService.endDate?.day == 31;
+
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          filterService.setYearPreset(year);
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected ? Colors.blue.shade600 : Colors.grey.shade200,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isSelected ? Colors.blue.shade700 : Colors.grey.shade300,
+            ),
+          ),
+          child: Text(
+            year.toString(),
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+              color: isSelected ? Colors.white : Colors.grey.shade700,
+            ),
           ),
         ),
       ),
