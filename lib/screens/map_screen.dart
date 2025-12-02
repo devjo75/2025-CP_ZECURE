@@ -54,6 +54,9 @@ import 'package:zecure/safespot/safe_spot_details.dart';
 import 'package:zecure/safespot/safe_spot_form.dart';
 import 'package:zecure/safespot/safe_spot_service.dart';
 import 'package:zecure/savepoint/save_point_service.dart';
+import 'package:zecure/thread/thread_desktop_screen.dart';
+import 'package:zecure/thread/thread_list_screen.dart';
+import 'package:zecure/thread/thread_service.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -120,6 +123,10 @@ class _MapScreenState extends State<MapScreen> {
       'max_retries': MAX_RETRY_ATTEMPTS,
     };
   }
+
+  //THREAD
+  final ThreadService _threadService = ThreadService();
+  int _unreadThreadCount = 0;
 
   //CHATBOX
   int _unreadChatCount = 0;
@@ -230,7 +237,7 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _settingsUpdateDebouncer;
 
   // Dynamic settings (loaded from database)
-  double _clusterMergeDistance = 500.0;
+  double _clusterMergeDistance = 50.0;
   int _minCrimesForCluster = 3;
   double _proximityAlertDistance = 500.0;
 
@@ -783,7 +790,6 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoadingProfile = false; // Prevent duplicate profile loads
 
   void _initializeEssentials() {
-    // Only setup auth listener once
     if (!_authListenerSetup) {
       _authListenerSetup = true;
 
@@ -804,14 +810,16 @@ class _MapScreenState extends State<MapScreen> {
                     _userProfile?['id']?.toString(),
                   );
 
-                  // ✅ Setup Firebase notifications after profile is loaded
                   _initializeFirebaseForUser();
 
-                  // ✅ Load unread chat count and setup realtime subscription
+                  // ✅ Load unread counts for both chat and threads
                   _loadUnreadChatCount();
-                  _setupChatRealtimeSubscription();
+                  _loadUnreadThreadCount(); // ADD THIS
 
-                  // Only setup notifications if not already done
+                  // ✅ Setup real-time subscriptions
+                  _setupChatRealtimeSubscription();
+                  _setupThreadRealtimeSubscription(); // ADD THIS
+
                   if (_notificationsChannel == null) {
                     _deferredLoadTimer = Timer(
                       Duration(milliseconds: 1000),
@@ -833,7 +841,6 @@ class _MapScreenState extends State<MapScreen> {
           print('User logged out, cleaning up');
           _isLoadingProfile = false;
 
-          // ✅ Clear Firebase token on logout
           _clearFirebaseToken();
 
           setState(() {
@@ -843,7 +850,8 @@ class _MapScreenState extends State<MapScreen> {
             _hotspots = [];
             _notifications = [];
             _unreadNotificationCount = 0;
-            _unreadChatCount = 0; // ✅ Reset chat count on logout
+            _unreadChatCount = 0;
+            _unreadThreadCount = 0; // ✅ ADD THIS
           });
 
           final filterService = Provider.of<HotspotFilterService>(
@@ -853,13 +861,11 @@ class _MapScreenState extends State<MapScreen> {
           filterService.resetFiltersForUser(null);
 
           _cleanupChannels();
-          _chatUpdatesSubscription
-              ?.unsubscribe(); // ✅ Cleanup chat subscription
+          _chatUpdatesSubscription?.unsubscribe();
         }
       });
     }
 
-    // Start location immediately (but don't block)
     _getCurrentLocationAsync();
   }
 
@@ -1050,6 +1056,14 @@ class _MapScreenState extends State<MapScreen> {
       _loadUnreadChatCount();
     }
 
+    if (_userProfile != null) {
+      await Future.delayed(Duration(milliseconds: 200));
+      if (!mounted) return;
+
+      print('Loading thread unread count...');
+      await _loadUnreadThreadCount();
+    }
+
     await Future.delayed(Duration(milliseconds: 200));
     if (!mounted) return;
 
@@ -1226,6 +1240,8 @@ class _MapScreenState extends State<MapScreen> {
     } catch (e) {
       print('Error removing filter listener in dispose: $e');
     }
+
+    _threadService.dispose();
 
     super.dispose();
   }
@@ -3842,7 +3858,7 @@ class _MapScreenState extends State<MapScreen> {
     print('🔧 Running cluster maintenance...');
 
     for (final cluster in _persistentClusters) {
-      if (cluster['status'] != 'active') continue;
+      if ((cluster['status'] ?? 'active') != 'active') continue;
 
       try {
         // Get all crimes in this cluster
@@ -4519,7 +4535,7 @@ class _MapScreenState extends State<MapScreen> {
       setState(() {
         // Distance settings
         _clusterMergeDistance =
-            settings['cluster_merge_distance']?.toDouble() ?? 500.0;
+            settings['cluster_merge_distance']?.toDouble() ?? 50.0;
         _minCrimesForCluster = settings['min_crimes_for_cluster'] ?? 3;
         _proximityAlertDistance =
             settings['proximity_alert_distance']?.toDouble() ?? 500.0;
@@ -6250,9 +6266,12 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
 
-      // PRIORITY 2: Check heatmap clusters (only if not already marked unsafe)
+      // PRIORITY 2: Check heatmap clusters (only ACTIVE ones, not historical/expired)
       if (!isUnsafe && _showHeatmap && _heatmapClusters.isNotEmpty) {
         for (final cluster in _heatmapClusters) {
+          // ⭐ SKIP inactive/expired clusters for routing avoidance
+          if (cluster.status != 'active') continue;
+
           final distanceToCluster = _calculateDistance(point, cluster.center);
 
           // Use cluster radius + safety buffer based on severity
@@ -11351,13 +11370,18 @@ class _MapScreenState extends State<MapScreen> {
                       child: SingleChildScrollView(
                         child: Column(
                           children: nearbyHotspots.take(3).map((hotspot) {
-                            // ✅ CHANGED: Use parseStoredDateTime instead of DateTime.parse
-                            final createdAt = parseStoredDateTime(
-                              hotspot['created_at'],
-                            );
+                            // ✅ FIX: Add null safety for created_at
+                            final createdAtStr = hotspot['created_at'];
+                            final createdAt = createdAtStr != null
+                                ? parseStoredDateTime(createdAtStr)
+                                : DateTime.now();
                             final timeAgo = _getTimeAgo(createdAt);
-                            final distance =
-                                (hotspot['distance_meters'] as double).round();
+
+                            // ✅ FIX: Add null safety for distance_meters
+                            final distanceValue = hotspot['distance_meters'];
+                            final distance = distanceValue != null
+                                ? (distanceValue as num).round()
+                                : 0;
 
                             return Card(
                               margin: const EdgeInsets.only(bottom: 8),
@@ -11367,7 +11391,7 @@ class _MapScreenState extends State<MapScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Crime Type: ${hotspot['type_name']}',
+                                      'Crime Type: ${hotspot['type_name'] ?? 'Unknown'}',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 12,
@@ -11489,13 +11513,18 @@ class _MapScreenState extends State<MapScreen> {
                     child: SingleChildScrollView(
                       child: Column(
                         children: nearbyHotspots.take(3).map((hotspot) {
-                          // ✅ CHANGED: Use parseStoredDateTime instead of DateTime.parse
-                          final createdAt = parseStoredDateTime(
-                            hotspot['created_at'],
-                          );
+                          // ✅ FIX: Add null safety for created_at
+                          final createdAtStr = hotspot['created_at'];
+                          final createdAt = createdAtStr != null
+                              ? parseStoredDateTime(createdAtStr)
+                              : DateTime.now();
                           final timeAgo = _getTimeAgo(createdAt);
-                          final distance =
-                              (hotspot['distance_meters'] as double).round();
+
+                          // ✅ FIX: Add null safety for distance_meters
+                          final distanceValue = hotspot['distance_meters'];
+                          final distance = distanceValue != null
+                              ? (distanceValue as num).round()
+                              : 0;
 
                           return Card(
                             margin: const EdgeInsets.only(bottom: 8),
@@ -11505,7 +11534,7 @@ class _MapScreenState extends State<MapScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Crime Type: ${hotspot['type_name']}',
+                                    'Crime Type: ${hotspot['type_name'] ?? 'Unknown'}',
                                     style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                     ),
@@ -11934,7 +11963,6 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // BOTTOM NAV BARS MAIN WIDGETS
-
   Widget _buildBottomNavBar() {
     final profilePictureUrl = _userProfile?['profile_picture_url'];
     final hasProfilePhoto =
@@ -11959,7 +11987,6 @@ class _MapScreenState extends State<MapScreen> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            // Bottom Nav Bar
             BottomNavigationBar(
               currentIndex: _getBottomNavIndexFromMainTab(_currentTab),
               onTap: _handleBottomNavTap,
@@ -11973,23 +12000,22 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   label: 'Map',
                 ),
+
+                // ✅ UPDATED: Replace chat with threads
                 BottomNavigationBarItem(
                   icon: Stack(
                     clipBehavior: Clip.none,
                     children: [
                       Icon(
                         _currentTab == MainTab.chat
-                            ? Icons.chat
-                            : Icons.chat_outlined,
+                            ? Icons.forum
+                            : Icons.forum_outlined,
                         size: 26,
                         color: _currentTab == MainTab.chat
-                            ? Colors
-                                  .blue
-                                  .shade600 // ✅ Blue when active
-                            : Colors.grey.shade600, // Gray when inactive
+                            ? Colors.blue.shade600
+                            : Colors.grey.shade600,
                       ),
-
-                      if (_unreadChatCount > 0)
+                      if (_unreadThreadCount > 0)
                         Positioned(
                           right: -2,
                           top: -2,
@@ -12008,9 +12034,9 @@ class _MapScreenState extends State<MapScreen> {
                               minHeight: 16,
                             ),
                             child: Text(
-                              _unreadChatCount > 99
+                              _unreadThreadCount > 99
                                   ? '99+'
-                                  : '$_unreadChatCount',
+                                  : '$_unreadThreadCount',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 10,
@@ -12023,13 +12049,14 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                     ],
                   ),
-                  label: 'Chat',
+                  label: 'Threads', // Changed from 'Chat'
                 ),
 
                 const BottomNavigationBarItem(
                   icon: SizedBox(width: 30, height: 30),
                   label: '',
                 ),
+
                 BottomNavigationBarItem(
                   icon: Stack(
                     clipBehavior: Clip.none,
@@ -12076,6 +12103,7 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   label: 'Alerts',
                 ),
+
                 BottomNavigationBarItem(
                   icon: hasProfilePhoto
                       ? Container(
@@ -12135,7 +12163,7 @@ class _MapScreenState extends State<MapScreen> {
               elevation: 0,
             ),
 
-            // Center + Button
+            // Center + Button (unchanged)
             Positioned(
               top: 11,
               left: 0,
@@ -12474,8 +12502,21 @@ class _MapScreenState extends State<MapScreen> {
         targetTab = MainTab.map;
         break;
       case 1:
-        targetTab = MainTab.chat;
-        break;
+        // ✅ UPDATED: Navigate to ThreadListScreen instead of chat tab
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ThreadListScreen(
+              userId: _userProfile?['id']?.toString() ?? '',
+              userLocation:
+                  _currentPosition, // ✅ FIXED: Use _currentPosition instead of _currentLocation
+            ),
+          ),
+        ).then((_) {
+          // Refresh unread count when returning from threads
+          _loadUnreadThreadCount();
+        });
+        return; // Exit early, don't change tab
       case 2:
         // Center + button - handled by floating button
         return;
@@ -12494,11 +12535,6 @@ class _MapScreenState extends State<MapScreen> {
         if (_currentTab == MainTab.profile) {
           _profileScreen.isEditingProfile = false;
           _profileScreen.resetTab();
-        }
-
-        // ✅ Refresh chat count when switching to chat
-        if (_currentTab == MainTab.chat) {
-          _loadUnreadChatCount();
         }
       });
     }
@@ -12710,6 +12746,12 @@ class _MapScreenState extends State<MapScreen> {
       // Filter to show APPROVED and PENDING hotspots from the last 24 hours
       final oneDayAgo = DateTime.now().subtract(const Duration(hours: 24));
       final recentNearbyHotspots = nearbyHotspots.where((hotspot) {
+        // ✅ FIX: Check if distance_meters is not null before filtering
+        if (hotspot['distance_meters'] == null) {
+          print('⚠️ Warning: hotspot ${hotspot['id']} has null distance');
+          return false;
+        }
+
         // ✅ FIX: Use parseStoredDateTime for proper timezone handling
         final createdAt = parseStoredDateTime(hotspot['created_at']);
         final isRecent = createdAt.isAfter(oneDayAgo);
@@ -12735,6 +12777,7 @@ class _MapScreenState extends State<MapScreen> {
         setState(() => _isCheckingNearbySupports = false);
         _showSnackBar('Error checking nearby reports: ${e.toString()}');
       }
+      print('❌ Error in _checkAndShowNearbyHotspotsForSupport: $e');
     }
   }
 
@@ -12745,9 +12788,20 @@ class _MapScreenState extends State<MapScreen> {
     LatLng userPosition,
   ) async {
     final isDesktop = _isDesktopScreen();
-    final distance = (nearbyHotspot['distance_meters'] as double).round();
-    final createdAt = parseStoredDateTime(nearbyHotspot['created_at']);
+
+    // ✅ FIX: Add null safety for distance
+    final distanceDouble = nearbyHotspot['distance_meters'];
+    final distance = distanceDouble != null
+        ? (distanceDouble as double).round()
+        : 0;
+
+    // ✅ FIX: Add null safety for created_at
+    final createdAtStr = nearbyHotspot['created_at'];
+    final createdAt = createdAtStr != null
+        ? parseStoredDateTime(createdAtStr)
+        : DateTime.now();
     final timeAgo = _getTimeAgo(createdAt);
+
     final supportCount = nearbyHotspot['support_count'] ?? 0;
     final userHasSupported = nearbyHotspot['user_has_supported'] ?? false;
 
@@ -14079,17 +14133,17 @@ class _MapScreenState extends State<MapScreen> {
                   clipBehavior: Clip.none,
                   children: [
                     _buildModernActionButton(
-                      icon: Icons.chat,
+                      icon: Icons.forum,
                       isActive: false,
                       onTap: () {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (context) =>
-                                ChatDesktopScreen(userProfile: _userProfile!),
+                                ThreadDesktopScreen(userProfile: _userProfile!),
                           ),
                         ).then((_) {
-                          _loadUnreadChatCount();
+                          _loadUnreadThreadCount();
                         });
 
                         if (_showMapTypeSelector) {
@@ -14098,10 +14152,10 @@ class _MapScreenState extends State<MapScreen> {
                           });
                         }
                       },
-                      tooltip: 'Community Chat',
+                      tooltip: 'Threads',
                       size: 40,
                     ),
-                    if (_unreadChatCount > 0)
+                    if (_unreadThreadCount > 0)
                       Positioned(
                         right: -4,
                         top: -4,
@@ -17953,6 +18007,24 @@ class _MapScreenState extends State<MapScreen> {
       final userId = _userProfile?['id'];
       if (userId == null) return;
 
+      // ✅ Check if hotspot is still pending before tracking NEW views
+      final hotspot = await Supabase.instance.client
+          .from('hotspot')
+          .select('status, verification_status')
+          .eq('id', hotspotId)
+          .single();
+
+      final status = hotspot['status'];
+      final verificationStatus = hotspot['verification_status'];
+
+      // ✅ Only track views for pending and unverified reports
+      if (status != 'pending' || verificationStatus != 'unverified') {
+        print(
+          '📊 Skipping view tracking: Report is $status/$verificationStatus',
+        );
+        return;
+      }
+
       // Check if user has already viewed this hotspot
       final existingView = await Supabase.instance.client
           .from('hotspot_views')
@@ -17962,7 +18034,7 @@ class _MapScreenState extends State<MapScreen> {
           .maybeSingle();
 
       if (existingView != null) {
-        // Update existing view
+        // Update existing view (last seen timestamp)
         await Supabase.instance.client
             .from('hotspot_views')
             .update({
@@ -17970,6 +18042,8 @@ class _MapScreenState extends State<MapScreen> {
               'view_source': source,
             })
             .eq('id', existingView['id']);
+
+        print('✅ Updated view log for pending hotspot $hotspotId');
       } else {
         // Insert new view
         await Supabase.instance.client.from('hotspot_views').insert({
@@ -17978,6 +18052,8 @@ class _MapScreenState extends State<MapScreen> {
           'view_source': source,
           'viewed_at': DateTime.now().toUtc().toIso8601String(),
         });
+
+        print('✅ Created view log for pending hotspot $hotspotId');
       }
     } catch (e) {
       print('Error tracking hotspot view: $e');
@@ -20974,7 +21050,6 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // ✅ IMPROVED: Status note for supporters with detailed messages
   Widget _buildSupporterStatusNote(Map<String, dynamic> hotspot) {
     final status = hotspot['status'] ?? 'pending';
     final verificationStatus = hotspot['verification_status'] ?? 'unverified';
@@ -20984,12 +21059,12 @@ class _MapScreenState extends State<MapScreen> {
             hotspot['reported_by'] == _userProfile!['id']);
     final userHasSupported = hotspot['user_has_supported'] ?? false;
 
-    // Don't show note for admin/officer/tanod
-    if (_canAccessAllReports) {
+    // Don't show note for admin/officer/tanod or owner
+    if (_canAccessAllReports || isOwner) {
       return const SizedBox.shrink();
     }
 
-    // Determine the message and color based on status
+    // Determine the message and color based on status (supporters only)
     String message;
     Color backgroundColor;
     Color textColor;
@@ -20998,10 +21073,7 @@ class _MapScreenState extends State<MapScreen> {
 
     if (status == 'pending') {
       if (verificationStatus == 'verified') {
-        if (isOwner) {
-          message =
-              'Your report has been verified by local authorities and is now awaiting final approval from the admin. You will be notified once a decision is made.';
-        } else if (userHasSupported) {
+        if (userHasSupported) {
           message =
               'This report has been verified by local authorities and is currently awaiting admin approval. Your support helps strengthen this report\'s credibility.';
         } else {
@@ -21013,23 +21085,15 @@ class _MapScreenState extends State<MapScreen> {
         textColor = Colors.blue.shade700;
         borderColor = Colors.blue.shade200;
       } else if (verificationStatus == 'rejected_verification') {
-        if (isOwner) {
-          message =
-              'The verification of your report was rejected by local authorities. This may affect its approval. Please ensure all details are accurate or contact support for assistance.';
-        } else {
-          message =
-              'The verification of this report was rejected by local authorities. It may not be approved. Exercise caution when considering this information.';
-        }
+        message =
+            'The verification of this report was rejected by local authorities. It may not be approved. Exercise caution when considering this information.';
         icon = Icons.cancel;
         backgroundColor = Colors.orange.shade50;
         textColor = Colors.orange.shade700;
         borderColor = Colors.orange.shade200;
       } else {
         // unverified
-        if (isOwner) {
-          message =
-              'Your report is currently pending verification by local authorities. They will review the details to confirm accuracy before it can be approved by the admin.';
-        } else if (userHasSupported) {
+        if (userHasSupported) {
           message =
               'This report is pending verification by local authorities. Your support has been recorded and will help validate this incident once it\'s verified.';
         } else {
@@ -21042,10 +21106,7 @@ class _MapScreenState extends State<MapScreen> {
         borderColor = Colors.orange.shade200;
       }
     } else if (status == 'approved') {
-      if (isOwner) {
-        message =
-            'Your report has been approved and is now being actively monitored by authorities. Thank you for helping keep the community safe. You can still view all community supports below.';
-      } else if (userHasSupported) {
+      if (userHasSupported) {
         message =
             'This report has been approved by authorities and is being actively monitored. Thank you for supporting this report and helping validate community safety concerns.';
       } else {
@@ -21057,13 +21118,8 @@ class _MapScreenState extends State<MapScreen> {
       textColor = Colors.green.shade700;
       borderColor = Colors.green.shade200;
     } else if (status == 'rejected') {
-      if (isOwner) {
-        message =
-            'Your report was not approved by the admin. This could be due to insufficient details, duplication, or policy violations. You may view the rejection reason above or contact support.';
-      } else {
-        message =
-            'This report was not approved by authorities. It may have been flagged as inaccurate, duplicate, or violating community guidelines.';
-      }
+      message =
+          'This report was not approved by authorities. It may have been flagged as inaccurate, duplicate, or violating community guidelines.';
       icon = Icons.cancel;
       backgroundColor = Colors.red.shade50;
       textColor = Colors.red.shade700;
@@ -21080,13 +21136,10 @@ class _MapScreenState extends State<MapScreen> {
         border: Border.all(color: borderColor),
       ),
       child: Row(
-        crossAxisAlignment:
-            CrossAxisAlignment.start, // Changed to start for multi-line
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(
-              top: 2,
-            ), // Align icon with first line
+            padding: const EdgeInsets.only(top: 2),
             child: Icon(icon, color: textColor, size: 18),
           ),
           const SizedBox(width: 10),
@@ -21250,7 +21303,7 @@ class _MapScreenState extends State<MapScreen> {
                         itemCount: supports.length,
                         itemBuilder: (context, index) {
                           final support = supports[index];
-                          return _buildSupportCard(support, index);
+                          return _buildSupportCard(support, index, hotspot);
                         },
                       ),
               ),
@@ -21366,7 +21419,7 @@ class _MapScreenState extends State<MapScreen> {
                       itemCount: supports.length,
                       itemBuilder: (context, index) {
                         final support = supports[index];
-                        return _buildSupportCard(support, index);
+                        return _buildSupportCard(support, index, hotspot);
                       },
                     ),
             ),
@@ -21377,7 +21430,12 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // ✅ UPDATED: Support Card Widget with ONLY edit icon (no delete)
-  Widget _buildSupportCard(Map<String, dynamic> support, int index) {
+  // ✅ UPDATED: Support Card Widget with conditional edit button
+  Widget _buildSupportCard(
+    Map<String, dynamic> support,
+    int index,
+    Map<String, dynamic> hotspot, // Added hotspot parameter
+  ) {
     final supporter = support['supporter'];
     final supporterId = supporter?['id'];
     final supporterName = supporter != null
@@ -21390,6 +21448,19 @@ class _MapScreenState extends State<MapScreen> {
 
     // Check if current user is the supporter
     final isCurrentUserSupporter = _userProfile?['id'] == supporterId;
+
+    // ✅ FIXED: Get report status and verification status from hotspot parameter
+    final status = hotspot['status'] ?? 'pending';
+    final verificationStatus = hotspot['verification_status'] ?? 'unverified';
+
+    // ✅ NEW: Determine if editing is allowed
+    final canEdit =
+        isCurrentUserSupporter &&
+        status == 'pending' &&
+        verificationStatus == 'unverified';
+
+    // ✅ NEW: Determine if should show locked message
+    final showLockedMessage = isCurrentUserSupporter && !canEdit;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -21455,8 +21526,8 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 ),
-                // ✅ UPDATED: Simple edit icon button (no dropdown)
-                if (isCurrentUserSupporter) ...[
+                // ✅ UPDATED: Show edit icon only if editing is allowed
+                if (canEdit) ...[
                   const SizedBox(width: 8),
                   IconButton(
                     icon: Icon(
@@ -21473,6 +21544,41 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ],
             ),
+
+            // ✅ NEW: Show locked message if report is verified/approved
+            if (showLockedMessage) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.lock_outline,
+                      color: Colors.grey.shade600,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        status == 'approved'
+                            ? 'This support is locked because the report has been approved.'
+                            : 'This support is locked because the report has been verified and is awaiting approval.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
 
             // Photo if exists
             if (photoUrl != null) ...[
@@ -26411,6 +26517,7 @@ class _MapScreenState extends State<MapScreen> {
       topCrimeTypes: topTypes,
       crimes: crimes, // ALL crimes (for historical reference)
       dominantSeverity: persistentCluster['dominant_severity'],
+      status: persistentCluster['status'] ?? 'active',
     );
   }
 
@@ -27502,7 +27609,7 @@ class _MapScreenState extends State<MapScreen> {
         setState(() {
           // Update all dynamic settings
           _clusterMergeDistance =
-              newSettings['cluster_merge_distance']?.toDouble() ?? 500.0;
+              newSettings['cluster_merge_distance']?.toDouble() ?? 50.0;
           _minCrimesForCluster = newSettings['min_crimes_for_cluster'] ?? 3;
           _proximityAlertDistance =
               newSettings['proximity_alert_distance']?.toDouble() ?? 500.0;
@@ -27643,6 +27750,13 @@ class _MapScreenState extends State<MapScreen> {
   void _showViewLogsModal(int hotspotId) async {
     final logs = await _fetchHotspotViewLogs(hotspotId);
 
+    // ✅ NEW: Get current hotspot status
+    final hotspot = await Supabase.instance.client
+        .from('hotspot')
+        .select('status, verification_status')
+        .eq('id', hotspotId)
+        .single();
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -27662,27 +27776,80 @@ class _MapScreenState extends State<MapScreen> {
                     top: Radius.circular(12),
                   ),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'View History',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'View History',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    // ✅ NEW: Show status context
+                    if (hotspot['status'] != 'pending')
+                      Container(
+                        margin: const EdgeInsets.only(top: 8),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.info_outline,
+                              size: 16,
+                              color: Colors.orange.shade700,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Views tracked while report was pending',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.orange.shade700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close),
-                    ),
                   ],
                 ),
               ),
               // Logs List
               Expanded(
                 child: logs.isEmpty
-                    ? const Center(child: Text('No views yet'))
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.visibility_off,
+                              size: 48,
+                              color: Colors.grey[400],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              hotspot['status'] == 'pending'
+                                  ? 'No views yet'
+                                  : 'No views while pending',
+                              style: TextStyle(color: Colors.grey[600]),
+                            ),
+                          ],
+                        ),
+                      )
                     : ListView.builder(
                         padding: const EdgeInsets.all(16),
                         itemCount: logs.length,
@@ -27719,7 +27886,7 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    'Last seen: ${DateFormat('MMM dd, yyyy - hh:mm a').format(viewedAt)}',
+                                    'Viewed: ${DateFormat('MMM dd, yyyy - hh:mm a').format(viewedAt)}',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: Colors.grey[600],
@@ -27820,6 +27987,34 @@ class _MapScreenState extends State<MapScreen> {
 
     return '';
   }
+
+  /// Load unread thread count for the current user
+  Future<void> _loadUnreadThreadCount() async {
+    if (_userProfile == null) return;
+
+    try {
+      final count = await _threadService.getUnreadThreadCount(
+        _userProfile!['id'].toString(),
+      );
+
+      if (mounted) {
+        setState(() {
+          _unreadThreadCount = count;
+        });
+        print('Unread thread count: $_unreadThreadCount');
+      }
+    } catch (e) {
+      print('Error loading unread thread count: $e');
+    }
+  }
+
+  /// Setup real-time subscription for thread updates
+  void _setupThreadRealtimeSubscription() {
+    _threadService.subscribeToThreadUpdates((_) {
+      // When threads update, refresh the unread count
+      _loadUnreadThreadCount();
+    });
+  }
 }
 
 class CoordinateParseResult {
@@ -27842,8 +28037,8 @@ class HeatmapCluster {
   final Map<String, int> crimeBreakdown;
   final List<String> topCrimeTypes;
   final List<Map<String, dynamic>> crimes; // Individual crimes in this cluster
-  final String
-  dominantSeverity; // ADD THIS LINE - Store the dominant severity level
+  final String dominantSeverity; // Dominant severity level
+  final String status; // ⭐ ADD THIS LINE - 'active' or 'inactive'
 
   HeatmapCluster({
     required this.center,
@@ -27853,7 +28048,8 @@ class HeatmapCluster {
     required this.crimeBreakdown,
     required this.topCrimeTypes,
     required this.crimes,
-    required this.dominantSeverity, // Now it matches the field above
+    required this.dominantSeverity,
+    this.status = 'active', // ⭐ ADD THIS LINE - Default to 'active'
   });
 }
 

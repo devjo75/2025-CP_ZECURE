@@ -518,26 +518,23 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                         ),
                         const SizedBox(height: 8),
 
-                        // Pending/Rejected only for users who can see them (admin/officer or own reports)
-                        if (userProfile?['role'] == 'admin' ||
-                            userProfile?['role'] == 'officer') ...[
-                          buildFilterToggle(
-                            context,
-                            'Pending',
-                            Icons.hourglass_empty,
-                            Colors.deepPurple,
-                            filterService.showPending,
-                            (value) => filterService.togglePending(),
-                          ),
-                          buildFilterToggle(
-                            context,
-                            'Rejected',
-                            Icons.cancel_outlined,
-                            Colors.red,
-                            filterService.showRejected,
-                            (value) => filterService.toggleRejected(),
-                          ),
-                        ],
+                        // Pending/Rejected visible to ALL logged-in users
+                        buildFilterToggle(
+                          context,
+                          'Pending',
+                          Icons.hourglass_empty,
+                          Colors.deepPurple,
+                          filterService.showPending,
+                          (value) => filterService.togglePending(),
+                        ),
+                        buildFilterToggle(
+                          context,
+                          'Rejected',
+                          Icons.cancel_outlined,
+                          Colors.red,
+                          filterService.showRejected,
+                          (value) => filterService.toggleRejected(),
+                        ),
 
                         // Active/Inactive filters for admins, officers, AND regular users
                         buildFilterToggle(

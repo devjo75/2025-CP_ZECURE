@@ -200,7 +200,7 @@ class HeatmapSettingsService {
   // ============================================
   Map<String, dynamic> _getDefaultSettings() {
     return {
-      'cluster_merge_distance': 500.0,
+      'cluster_merge_distance': 50.0,
       'min_crimes_for_cluster': 3,
       'proximity_alert_distance': 500.0,
       'time_window_critical': 120,

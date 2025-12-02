@@ -197,47 +197,47 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
         'icon': Icons.map_rounded,
         'title': 'Live Safety Map',
         'description':
-            'Interactive map displaying only police-verified crime incidents and safe spots in Zamboanga City.',
+            'See current unsafe areas and safe zones in your neighborhood on an easy-to-read map',
         'color': Colors.blue,
         'gradient': [Colors.blue.shade400, Colors.blue.shade600],
       },
       {
-        'icon': Icons.report_rounded,
-        'title': 'AI-Assisted Reporting',
+        'icon': Icons.forum_rounded,
+        'title': 'Report Discussions',
         'description':
-            'Submit geo-located crime reports easily via mobile app, with automatic categorization by type and severity.',
+            'Share additional details and context on verified incidents through structured discussion threads',
         'color': Colors.purple,
         'gradient': [Colors.purple.shade400, Colors.purple.shade600],
       },
       {
-        'icon': Icons.verified_rounded,
+        'icon': Icons.verified_user_rounded,
         'title': 'Police Verification',
         'description':
-            'Secure dashboard for officers to review, categorize, and verify reports before public display.',
+            'All reports are reviewed and verified by police officers before appearing on the public map',
         'color': Colors.green,
         'gradient': [Colors.green.shade400, Colors.green.shade600],
       },
       {
         'icon': Icons.route_rounded,
-        'title': 'Safe Route Recommendations',
+        'title': 'Safe Route Finder',
         'description':
-            'Algorithm suggests safer paths avoiding verified hotspots and prioritizing user-marked safe locations.',
+            'Find the safest paths to your destination avoiding high-crime areas and active incidents',
         'color': Colors.orange,
         'gradient': [Colors.orange.shade400, Colors.orange.shade600],
       },
       {
         'icon': Icons.notification_important_rounded,
-        'title': 'Real-Time Alerts',
+        'title': 'Instant Safety Alerts',
         'description':
-            'Automatic notifications for verified incidents near your location to keep you informed.',
+            'Get quick notifications about verified safety concerns happening near your location',
         'color': Colors.teal,
         'gradient': [Colors.teal.shade400, Colors.teal.shade600],
       },
       {
-        'icon': Icons.trending_up_rounded,
-        'title': 'Pattern Detection',
+        'icon': Icons.people_rounded,
+        'title': 'Community Safety',
         'description':
-            'AI identifies duplicate reports and emerging crime trends to aid faster responses.',
+            'Report incidents with precise locations and mark safe spots to help your community',
         'color': Colors.indigo,
         'gradient': [Colors.indigo.shade400, Colors.indigo.shade600],
       },
