@@ -1,5 +1,7 @@
 // lib/thread/thread_detail_screen.dart
 
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'thread_models.dart';
 import 'thread_service.dart';
@@ -10,10 +12,10 @@ class ThreadDetailScreen extends StatefulWidget {
   final String userId;
 
   const ThreadDetailScreen({
-    Key? key,
+    super.key,
     required this.thread,
     required this.userId,
-  }) : super(key: key);
+  });
 
   @override
   State<ThreadDetailScreen> createState() => _ThreadDetailScreenState();

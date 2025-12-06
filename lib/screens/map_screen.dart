@@ -33,6 +33,7 @@ import 'package:zecure/auth/register_screen.dart';
 import 'package:zecure/quick_access/quick_access_screen.dart';
 import 'package:zecure/savepoint/save_point.dart';
 import 'package:zecure/savepoint/save_point_details.dart';
+import 'package:zecure/screens/crime_heatmap_layer.dart';
 import 'package:zecure/screens/welcome_message_first_timer.dart';
 import 'package:zecure/screens/welcome_message_screen.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
@@ -43,6 +44,7 @@ import 'package:zecure/desktop/hotspot_filter_dialog_desktop.dart';
 import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
 import 'package:zecure/desktop/save_point_desktop.dart';
+import 'package:zecure/services/crime_heatmap_service.dart';
 import 'package:zecure/services/firebase_service.dart';
 import 'package:zecure/services/heatmap_settings_service.dart';
 import 'package:zecure/services/hotspot_support_service.dart';
@@ -174,12 +176,6 @@ class _MapScreenState extends State<MapScreen> {
   bool _showProximityAlert = false;
   Timer? _proximityCheckTimer;
 
-  // NEW: Heatmap proximity alerts
-  List<HeatmapCluster> _nearbyHeatmapClusters = [];
-  bool _showHeatmapProximityAlert = false;
-  String _proximityAlertType =
-      'none'; // 'hotspot', 'heatmap', 'both', or 'none'
-
   // Directions state
   double _distance = 0;
   String _duration = '';
@@ -209,6 +205,10 @@ class _MapScreenState extends State<MapScreen> {
   MainTab _currentTab = MainTab.map;
   late ProfileScreen _profileScreen;
 
+  //SUPPORT REPORT
+  bool _isCheckingNearbySupports = false;
+  Map<String, dynamic>? _nearbyHotspotForSupport;
+
   //HOTSPOT MARKER LIMIT ON THE MAP
   bool _markersLoaded = false;
   int _maxMarkersToShow = 77; // Progressive loading
@@ -221,70 +221,21 @@ class _MapScreenState extends State<MapScreen> {
 
   final Set<int> _processedHotspotIds = {};
 
-  //SUPPORT REPORT
-  bool _isCheckingNearbySupports = false;
-  Map<String, dynamic>? _nearbyHotspotForSupport;
-
-  //HEATMAP
-  List<HeatmapCluster> _heatmapClusters = [];
-  List<Map<String, dynamic>> _heatmapCrimes = [];
-  bool _showHeatmap = true; // Toggle for users
-  bool _isCalculatingHeatmap = false;
-  Timer? _heatmapUpdateTimer;
+  // Heatmap state
+  // Add near other heatmap state variables
+  HeatmapStats? _heatmapStats;
+  bool _showHeatmap = false;
+  List<HeatmapPoint> _heatmapPoints = [];
+  HeatmapConfig _heatmapConfig = HeatmapConfig(
+    radius: 30,
+    blur: 25,
+    maxOpacity: 0.6,
+    minOpacity: 0.1,
+  );
 
   // HEATMAP SETTINGS SERVICE
   final HeatmapSettingsService _heatmapSettings = HeatmapSettingsService();
   Timer? _settingsUpdateDebouncer;
-
-  // Dynamic settings (loaded from database)
-  double _clusterMergeDistance = 50.0;
-  int _minCrimesForCluster = 3;
-  double _proximityAlertDistance = 500.0;
-
-  Map<String, int> _severityTimeWindows = {
-    'critical': 120,
-    'high': 90,
-    'medium': 60,
-    'low': 30,
-  };
-
-  Map<String, double> _severityWeights = {
-    'critical': 1.0,
-    'high': 0.75,
-    'medium': 0.5,
-    'low': 0.25,
-  };
-
-  Map<String, Map<String, double>> _severityRadiusConfig = {
-    'critical': {
-      'base': 200.0,
-      'min': 250.0,
-      'max': 1200.0,
-      'countMultiplier': 15.0,
-      'intensityMultiplier': 50.0,
-    },
-    'high': {
-      'base': 150.0,
-      'min': 200.0,
-      'max': 900.0,
-      'countMultiplier': 10.0,
-      'intensityMultiplier': 30.0,
-    },
-    'medium': {
-      'base': 100.0,
-      'min': 150.0,
-      'max': 600.0,
-      'countMultiplier': 8.0,
-      'intensityMultiplier': 25.0,
-    },
-    'low': {
-      'base': 80.0,
-      'min': 100.0,
-      'max': 400.0,
-      'countMultiplier': 5.0,
-      'intensityMultiplier': 20.0,
-    },
-  };
 
   // PERSISTENT HEATMAP CLUSTERS
   List<Map<String, dynamic>> _persistentClusters = [];
@@ -359,26 +310,12 @@ class _MapScreenState extends State<MapScreen> {
     );
 
     final hasCustomDateRange =
-        filterService.crimeStartDate != null ||
+        filterService.crimeStartDate != null &&
         filterService.crimeEndDate != null;
 
     final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
 
-    Set<int>? clusterHotspotIds;
-    if (hasCustomDateRange && _persistentClusters.isNotEmpty) {
-      clusterHotspotIds = {};
-      for (final cluster in _persistentClusters) {
-        final crimes = cluster['crimes'] as List<dynamic>?;
-        if (crimes != null) {
-          for (final crime in crimes) {
-            final hotspotId = crime['id'];
-            if (hotspotId != null) {
-              clusterHotspotIds.add(hotspotId);
-            }
-          }
-        }
-      }
-    }
+    // ✅ Cluster code removed - no longer needed without heatmap
 
     if (_currentZoom < 8.0) {
       return _hotspots
@@ -406,7 +343,6 @@ class _MapScreenState extends State<MapScreen> {
             final status = h['status'] ?? 'approved';
             final activeStatus = h['active_status'] ?? 'active';
 
-            // ✅ UPDATED: Use helper method for pending visibility
             if (status == 'pending') {
               return _canUserSeeHotspot(h);
             }
@@ -442,7 +378,6 @@ class _MapScreenState extends State<MapScreen> {
 
             if (_canAccessAllReports) return true;
 
-            // ✅ UPDATED: Use helper method for pending visibility
             if (status == 'pending') {
               return _canUserSeeHotspot(h);
             }
@@ -463,7 +398,8 @@ class _MapScreenState extends State<MapScreen> {
           })
           .take(_maxMarkersToShow)
           .toList();
-    } else if (_currentZoom < 15.5) {
+    } else if (_currentZoom < 16.5) {
+      // Zoom 13.0 - 16.5: Still apply limits
       return _hotspots
           .where((h) {
             final status = h['status'] ?? 'approved';
@@ -479,7 +415,6 @@ class _MapScreenState extends State<MapScreen> {
 
             if (_canAccessAllReports) return true;
 
-            // ✅ UPDATED: Use helper method for pending visibility
             if (status == 'pending') {
               return _canUserSeeHotspot(h);
             }
@@ -501,7 +436,7 @@ class _MapScreenState extends State<MapScreen> {
           .take(_maxMarkersToShow)
           .toList();
     } else {
-      // ✅ Zoom 15.5+ logic - FIXED: Always show pending hotspots user can see
+      // ✅ Zoom 16.5+ logic - Show ALL markers when date filter is active
       return _hotspots.where((h) {
         final status = h['status'] ?? 'approved';
         final activeStatus = h['active_status'] ?? 'active';
@@ -513,10 +448,11 @@ class _MapScreenState extends State<MapScreen> {
         final incidentTime = DateTime.tryParse(h['time'] ?? '');
         final isRecent =
             incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
-        final hotspotId = h['id'];
 
         if (hasCustomDateRange) {
-          // ✅ UPDATED: Use helper method for pending visibility
+          // ✅ WITH DATE FILTER: Show ALL hotspots within the date range (no 30-day restriction)
+
+          // Exception 1: Always show pending to authorized users
           if (status == 'pending') {
             return _canUserSeeHotspot(h);
           }
@@ -526,59 +462,37 @@ class _MapScreenState extends State<MapScreen> {
             return isOwnHotspot;
           }
 
-          // Exception 3: Show recent active crimes (within 30 days)
-          if (status == 'approved' && activeStatus == 'active' && isRecent) {
-            return true;
-          }
-
-          // Exception 4: Show recent inactive crimes (within 30 days)
-          if (status == 'approved' && activeStatus == 'inactive' && isRecent) {
-            return true;
-          }
-
-          // ✅ MAIN RULE: For older crimes (beyond 30 days)
-          if (status == 'approved' && !isRecent) {
-            // ✅ Below zoom 17.0: HIDE all old crimes
-            if (_currentZoom < 17.0) {
-              return false;
-            }
-
-            // ✅ At zoom 17.0+: SHOW crimes that are in clusters
-            if (clusterHotspotIds != null) {
-              return clusterHotspotIds.contains(hotspotId);
-            }
-
-            return false;
+          // ✅ MAIN RULE: Show all approved hotspots (active & inactive) within date range
+          // The date filtering is already handled by shouldShowHotspot in the filter service
+          if (status == 'approved') {
+            return true; // Let filter service handle date range validation
           }
 
           return false;
         }
 
-        // NO DATE FILTER: Original 30-day logic
-        // ✅ UPDATED: Use helper method for pending visibility
+        // ✅ NO DATE FILTER: Standard 30-day logic
+        if (_canAccessAllReports) return true;
+
         if (status == 'pending') {
           return _canUserSeeHotspot(h);
         }
 
-        // ✅ FIX: Always show rejected to owner regardless of date
         if (status == 'rejected') {
           return isOwnHotspot;
         }
 
-        if (_canAccessAllReports) {
-          return isRecent;
-        }
-
-        if (status == 'approved' && activeStatus == 'active') {
-          return isRecent;
-        }
-
-        if (status == 'approved' && activeStatus == 'inactive') {
-          return isRecent;
+        if (status == 'approved') {
+          // Only show if within 30 days for inactive
+          if (activeStatus == 'inactive') {
+            return isRecent;
+          }
+          // Always show active (within 30 days)
+          return activeStatus == 'active' && isRecent;
         }
 
         return false;
-      }).toList();
+      }).toList(); // ✅ NO LIMIT when zoom >= 16.5
     }
   }
 
@@ -748,7 +662,6 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  // ✅ CONSOLIDATED: Handle ALL filter changes
   void _onFiltersChanged() async {
     if (!mounted) return;
 
@@ -772,10 +685,20 @@ class _MapScreenState extends State<MapScreen> {
     setState(() => _isReloadingData = true);
 
     try {
-      // Reload in sequence
-      await _loadHeatmapData();
-      await _loadPersistentClusters();
-      await _calculateHeatmap();
+      // ✅ CRITICAL: Reload hotspots first and WAIT for completion
+      print('📥 Loading hotspots...');
+      await _loadHotspots();
+
+      // ✅ Small delay to ensure state is fully updated
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      if (!mounted) return;
+
+      // ✅ NOW generate heatmap with the freshly loaded data
+      print('🔥 Generating heatmap...');
+      _generateHeatmap();
+
+      print('✅ Filter reload complete');
     } catch (e) {
       print('❌ Error reloading data: $e');
     } finally {
@@ -819,6 +742,7 @@ class _MapScreenState extends State<MapScreen> {
                   // ✅ Setup real-time subscriptions
                   _setupChatRealtimeSubscription();
                   _setupThreadRealtimeSubscription(); // ADD THIS
+                  _setupUnreadCountSubscription();
 
                   if (_notificationsChannel == null) {
                     _deferredLoadTimer = Timer(
@@ -930,13 +854,6 @@ class _MapScreenState extends State<MapScreen> {
       _clustersChannel = null;
     }
 
-    // ⭐ ADD: Remove heatmap settings listener
-    try {
-      _heatmapSettings.removeListener(_onHeatmapSettingsChanged);
-    } catch (e) {
-      print('Error removing heatmap settings listener: $e');
-    }
-
     // Remove filter listener
     try {
       final filterService = Provider.of<HotspotFilterService>(
@@ -981,22 +898,20 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   bool _deferredInitialized = false; // Prevent multiple deferred loads
-  // OPTIMIZED: Deferred initialization with staggered loading - PREVENT DUPLICATES
   void _deferredInitialization() async {
     if (!mounted || _deferredInitialized) return;
     _deferredInitialized = true;
 
     print('Starting deferred initialization...');
 
-    // Show welcome modal IMMEDIATELY after basic setup - don't wait for everything
+    // Show welcome modal IMMEDIATELY after basic setup
     Timer(Duration(milliseconds: 500), () {
-      // Much shorter delay
       if (mounted) {
         _showWelcomeModal();
       }
     });
 
-    // Load user profile first (lightweight) - only if not already loaded
+    // Load user profile first (lightweight)
     if (_userProfile == null && !_isLoadingProfile) {
       await _loadUserProfile();
       if (!mounted) return;
@@ -1009,11 +924,11 @@ class _MapScreenState extends State<MapScreen> {
       filterService.resetFiltersForUser(_userProfile?['id']?.toString());
     }
 
-    // Stagger heavy operations to prevent frame drops
+    // Stagger heavy operations
     await Future.delayed(Duration(milliseconds: 200));
     if (!mounted) return;
 
-    // Load hotspots first (most important) - only if not already loaded
+    // Load hotspots first
     if (_hotspots.isEmpty) {
       print('Loading hotspots...');
       await _loadHotspots();
@@ -1023,7 +938,7 @@ class _MapScreenState extends State<MapScreen> {
     await Future.delayed(Duration(milliseconds: 200));
     if (!mounted) return;
 
-    // Setup realtime for hotspots - only if not already setup
+    // Setup realtime for hotspots
     if (_hotspotsChannel == null) {
       print('Setting up hotspots realtime...');
       _setupRealtimeSubscription();
@@ -1032,7 +947,7 @@ class _MapScreenState extends State<MapScreen> {
     await Future.delayed(Duration(milliseconds: 200));
     if (!mounted) return;
 
-    // Load safe spots - only if not already loaded
+    // Load safe spots
     if (_safeSpots.isEmpty) {
       print('Loading safe spots...');
       await _loadSafeSpots();
@@ -1042,7 +957,7 @@ class _MapScreenState extends State<MapScreen> {
     await Future.delayed(Duration(milliseconds: 200));
     if (!mounted) return;
 
-    // Setup safe spots realtime - only if not already setup
+    // Setup safe spots realtime
     if (_safeSpotsChannel == null) {
       print('Setting up safe spots realtime...');
       _setupSafeSpotsRealtime();
@@ -1067,7 +982,7 @@ class _MapScreenState extends State<MapScreen> {
     await Future.delayed(Duration(milliseconds: 200));
     if (!mounted) return;
 
-    // Load save points - only if not already loaded
+    // Load save points
     if (_savePoints.isEmpty) {
       print('Loading save points...');
       await _loadSavePoints();
@@ -1079,47 +994,10 @@ class _MapScreenState extends State<MapScreen> {
       _markersLoaded = true;
     });
 
-    await Future.delayed(Duration(milliseconds: 200));
-    if (!mounted) return;
-
-    print('Loading heatmap settings...');
-    await _loadHeatmapSettings();
-    if (!mounted) return;
-
-    print('Setting up heatmap settings real-time...');
-    _heatmapSettings.setupRealtimeSubscription();
-    _heatmapSettings.addListener(_onHeatmapSettingsChanged);
-
-    // HEATMAP INITIALIZATION
-    await Future.delayed(Duration(milliseconds: 300));
-    if (!mounted) return;
-
-    // Load heatmap data (all approved crimes)
-    print('Loading heatmap data...');
-    await _loadHeatmapData();
-    if (!mounted) return;
-
-    // Load persistent clusters from database
-    print('Loading persistent clusters...');
-    await _loadPersistentClusters();
-    if (!mounted) return;
-
-    // Setup real-time for clusters
-    print('Setting up clusters real-time...');
-    _setupClustersRealtime();
-
-    // Calculate initial heatmap (processes crimes against clusters)
-    print('Initializing crime heatmap...');
-    await _calculateHeatmap();
-    if (!mounted) return;
-
-    print('✅ Heatmap ready: ${_heatmapClusters.length} hotspots identified');
-
-    // Setup periodic tasks with initial delays (REDUCED FREQUENCY)
+    // Setup periodic tasks
     _setupPeriodicTasksOptimized();
-    _startPeriodicClusterMaintenance();
 
-    // DELAY location services startup to prevent early proximity checking
+    // DELAY location services startup
     _deferredLoadTimer = Timer(Duration(milliseconds: 2000), () {
       if (mounted) {
         print('Starting location services...');
@@ -1127,7 +1005,7 @@ class _MapScreenState extends State<MapScreen> {
       }
     });
 
-    // Add this at the end of _deferredInitialization()
+    // Time update timer
     _timeUpdateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
       if (mounted) {
         setState(() {}); // Updates time indicators
@@ -1158,12 +1036,6 @@ class _MapScreenState extends State<MapScreen> {
           const Duration(minutes: 5),
           (_) => _checkRealtimeConnection(),
         ); // Increased from 2 minutes
-      }
-    });
-
-    Timer.periodic(const Duration(minutes: 5), (timer) {
-      if (mounted) {
-        _cleanupExpiredHeatmapCrimes();
       }
     });
   }
@@ -1213,17 +1085,8 @@ class _MapScreenState extends State<MapScreen> {
     _updateDebounceTimer?.cancel();
     _processedUpdateIds.clear();
     _savePoints.clear();
-    _heatmapUpdateTimer?.cancel();
     _timeUpdateTimer?.cancel();
     _settingsUpdateDebouncer?.cancel();
-
-    // Remove heatmap settings listener
-    try {
-      _heatmapSettings.removeListener(_onHeatmapSettingsChanged);
-      print('Removed heatmap settings listener');
-    } catch (e) {
-      print('Error removing heatmap settings listener in dispose: $e');
-    }
 
     // ✅ FIXED: Remove the consolidated filter listener
     try {
@@ -1945,137 +1808,28 @@ class _MapScreenState extends State<MapScreen> {
     _proximityCheckTimer?.cancel();
     _proximityCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _checkProximityToHotspots();
-      _checkProximityToHeatmaps(); // NEW: Check heatmaps too
     });
   }
 
   // ============================================
   // NEW: Check proximity to heatmap clusters
   // ============================================
-  void _checkProximityToHeatmaps() {
-    if (_currentPosition == null || !mounted) {
-      if (_showHeatmapProximityAlert) {
-        setState(() {
-          _nearbyHeatmapClusters.clear();
-          _showHeatmapProximityAlert = false;
-          _updateAlertType();
-        });
-      }
-      return;
-    }
 
-    // ✅ EFFICIENT: Create a map of active cluster centers for quick lookup
-    final activeClusterCenters = <LatLng>{};
-    for (final pc in _persistentClusters) {
-      if (pc['status'] == 'active') {
-        activeClusterCenters.add(LatLng(pc['center_lat'], pc['center_lng']));
-      }
-    }
-
-    if (activeClusterCenters.isEmpty) {
-      if (_showHeatmapProximityAlert) {
-        setState(() {
-          _nearbyHeatmapClusters.clear();
-          _showHeatmapProximityAlert = false;
-          _updateAlertType();
-        });
-      }
-      return;
-    }
-
-    final nearbyHeatmaps = <Map<String, dynamic>>[];
-
-    for (final cluster in _heatmapClusters) {
-      // ✅ Quick check: Is this cluster active?
-      final isActive = activeClusterCenters.any((center) {
-        return _calculateDistance(cluster.center, center) < 10.0;
-      });
-
-      if (!isActive) {
-        continue; // Skip inactive/expired clusters
-      }
-
-      final distanceToCenter = _calculateDistance(
-        _currentPosition!,
-        cluster.center,
-      );
-      final distanceToEdge = distanceToCenter - cluster.radius;
-
-      final bufferZone = 50.0;
-      final isInside = distanceToCenter <= (cluster.radius - bufferZone);
-      final isApproaching = !isInside && distanceToEdge <= 150;
-
-      if (isInside || isApproaching) {
-        nearbyHeatmaps.add({
-          'cluster': cluster,
-          'distanceToCenter': distanceToCenter,
-          'distanceToEdge': distanceToEdge,
-          'isInside': isInside,
-        });
-
-        if (isInside) {
-          print(
-            '🚨 INSIDE active heatmap zone! ${distanceToCenter.toStringAsFixed(1)}m from center',
-          );
-        } else {
-          print(
-            '⚠️ Approaching active heatmap zone! ${distanceToEdge.toStringAsFixed(1)}m from edge',
-          );
-        }
-      }
-    }
-
-    nearbyHeatmaps.sort((a, b) {
-      if (a['isInside'] && !b['isInside']) return -1;
-      if (!a['isInside'] && b['isInside']) return 1;
-      return (a['distanceToEdge'] as double).compareTo(
-        b['distanceToEdge'] as double,
-      );
-    });
-
-    final previousHeatmapAlertState = _showHeatmapProximityAlert;
-
-    if (mounted) {
-      setState(() {
-        _nearbyHeatmapClusters = nearbyHeatmaps
-            .map((h) => h['cluster'] as HeatmapCluster)
-            .toList();
-        _showHeatmapProximityAlert = nearbyHeatmaps.isNotEmpty;
-        _updateAlertType();
-      });
-
-      if (_showHeatmapProximityAlert && !previousHeatmapAlertState) {
-        final isInside = nearbyHeatmaps.first['isInside'] as bool;
-        if (isInside) {
-          HapticFeedback.mediumImpact();
-          print('🚨 HEATMAP ALERT ACTIVATED: Inside active danger zone');
-        } else {
-          HapticFeedback.lightImpact();
-          print('⚠️ HEATMAP ALERT ACTIVATED: Approaching active danger zone');
-        }
-      }
-    }
-  }
-
-  // ⭐ ADD THIS METHOD: Centralized alert type update
-  void _updateAlertType() {
-    if (_showProximityAlert && _showHeatmapProximityAlert) {
-      _proximityAlertType = 'both';
-    } else if (_showHeatmapProximityAlert) {
-      _proximityAlertType = 'heatmap';
-    } else if (_showProximityAlert) {
-      _proximityAlertType = 'hotspot';
-    } else {
-      _proximityAlertType = 'none';
-    }
-  }
-
+  double _proximityAlertDistance = 250.0;
   // Main method to check proximity to active hotspots
   void _checkProximityToHotspots() {
     if (_currentPosition == null || !mounted) {
       print(
         'DEBUG: Cannot check proximity - position: $_currentPosition, mounted: $mounted',
       );
+
+      // Clear proximity alert if it was active
+      if (_showProximityAlert) {
+        setState(() {
+          _nearbyHotspots.clear();
+          _showProximityAlert = false;
+        });
+      }
       return;
     }
 
@@ -2106,10 +1860,7 @@ class _MapScreenState extends State<MapScreen> {
       final hotspotPosition = LatLng(coords[1], coords[0]);
       final distance = _calculateDistance(_currentPosition!, hotspotPosition);
 
-      // Get alert distance based on crime level (for Option 2)
-      // final alertDistance = _alertDistances[crimeLevel] ?? 200.0;
-
-      // For Option 1, just use the constant:
+      // Use the proximity alert distance
       final alertDistance = _proximityAlertDistance;
 
       print(
@@ -2128,41 +1879,27 @@ class _MapScreenState extends State<MapScreen> {
       }
     }
 
-    print('DEBUG: Found ${nearbyHotspots.length} nearby hotspots');
-
     // Sort by distance (closest first)
-    nearbyHotspots.sort(
-      (a, b) => (a['distance'] as double).compareTo(b['distance'] as double),
-    );
+    nearbyHotspots.sort((a, b) {
+      return (a['distance'] as double).compareTo(b['distance'] as double);
+    });
 
-    // Always update state based on what we found
-    final hasNearbyHotspots = nearbyHotspots.isNotEmpty;
     final previousAlertState = _showProximityAlert;
 
     if (mounted) {
       setState(() {
         _nearbyHotspots = nearbyHotspots;
-        _showProximityAlert = hasNearbyHotspots;
-        _updateAlertType();
+        _showProximityAlert = nearbyHotspots.isNotEmpty;
       });
 
-      // Log state changes
-      if (_showProximityAlert != previousAlertState) {
-        if (_showProximityAlert) {
-          final closestDistance = nearbyHotspots.first['distance'] as double;
-          print(
-            'DEBUG: 🚨 ALERT ACTIVATED - ${nearbyHotspots.length} crimes nearby (closest: ${closestDistance.toStringAsFixed(1)}m)',
-          );
-          HapticFeedback.lightImpact(); // Haptic feedback when alert appears
-        } else {
-          print('DEBUG: ✅ ALERT CLEARED - moved away from danger zone');
-        }
+      // Trigger haptic feedback when alert activates
+      if (_showProximityAlert && !previousAlertState) {
+        HapticFeedback.mediumImpact();
+        print('🚨 HOTSPOT PROXIMITY ALERT ACTIVATED');
       }
-
-      print(
-        'DEBUG: Updated state - showAlert: $_showProximityAlert, nearbyCount: ${_nearbyHotspots.length}',
-      );
     }
+
+    print('DEBUG: Found ${nearbyHotspots.length} nearby hotspots');
   }
 
   // NOTIFICATION REALTIME METHOD
@@ -2533,215 +2270,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // ============================================
-  // SETUP REAL-TIME FOR PERSISTENT CLUSTERS
-  // ============================================
-  void _setupClustersRealtime() {
-    if (_clustersChannel != null) {
-      print('⚠️ Clusters channel already exists, skipping setup');
-      return;
-    }
-
-    try {
-      _clustersChannel = Supabase.instance.client
-          .channel('heatmap_clusters_changes')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.insert,
-            schema: 'public',
-            table: 'heatmap_clusters',
-            callback: (payload) {
-              // ✅ Check historical mode before processing
-              if (_isInHistoricalMode()) {
-                print('📅 Ignoring cluster insert (historical mode)');
-                return;
-              }
-              _handleClusterInsert(payload);
-            },
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.update,
-            schema: 'public',
-            table: 'heatmap_clusters',
-            callback: (payload) {
-              // ✅ Check historical mode before processing
-              if (_isInHistoricalMode()) {
-                print('📅 Ignoring cluster update (historical mode)');
-                return;
-              }
-              _handleClusterUpdate(payload);
-            },
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.delete,
-            schema: 'public',
-            table: 'heatmap_clusters',
-            callback: (payload) {
-              // ✅ Check historical mode before processing
-              if (_isInHistoricalMode()) {
-                print('📅 Ignoring cluster delete (historical mode)');
-                return;
-              }
-              _handleClusterDelete(payload);
-            },
-          )
-          .subscribe();
-
-      print('✅ Clusters real-time subscription active');
-    } catch (e) {
-      print('Error setting up clusters real-time: $e');
-    }
-  }
-
-  // ✅ HELPER: Check if currently in historical mode
-  bool _isInHistoricalMode() {
-    try {
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-
-      return filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null;
-    } catch (e) {
-      print('Error checking historical mode: $e');
-      return false;
-    }
-  }
-
-  // ============================================
-  // CLUSTER REAL-TIME HANDLERS
-  // ============================================
-  void _handleClusterInsert(PostgresChangePayload payload) async {
-    if (!mounted) return;
-
-    print('📥 Cluster insert received, debouncing...');
-    _hasPendingClusterUpdate = true;
-
-    _clusterUpdateDebouncer?.cancel();
-    _clusterUpdateDebouncer = Timer(
-      const Duration(milliseconds: 800),
-      () async {
-        if (!mounted || !_hasPendingClusterUpdate) return;
-        _hasPendingClusterUpdate = false;
-
-        await _loadPersistentClusters();
-
-        if (mounted) {
-          // ✅ Respect filter mode
-          final filterService = Provider.of<HotspotFilterService>(
-            context,
-            listen: false,
-          );
-
-          final hasCustomDateRange =
-              filterService.crimeStartDate != null ||
-              filterService.crimeEndDate != null;
-
-          setState(() {
-            if (hasCustomDateRange) {
-              _heatmapClusters = _persistentClusters
-                  .map((pc) => _convertPersistentToDisplayCluster(pc))
-                  .toList();
-            } else {
-              _heatmapClusters = _persistentClusters
-                  .where((pc) => pc['status'] == 'active')
-                  .map((pc) => _convertPersistentToDisplayCluster(pc))
-                  .toList();
-            }
-          });
-        }
-      },
-    );
-  }
-
-  void _handleClusterUpdate(PostgresChangePayload payload) async {
-    if (!mounted) return;
-
-    print('📥 Cluster update received, debouncing...');
-    _hasPendingClusterUpdate = true;
-
-    _clusterUpdateDebouncer?.cancel();
-    _clusterUpdateDebouncer = Timer(
-      const Duration(milliseconds: 800),
-      () async {
-        if (!mounted || !_hasPendingClusterUpdate) return;
-        _hasPendingClusterUpdate = false;
-
-        await _loadPersistentClusters();
-
-        if (mounted) {
-          // ✅ Respect filter mode
-          final filterService = Provider.of<HotspotFilterService>(
-            context,
-            listen: false,
-          );
-
-          final hasCustomDateRange =
-              filterService.crimeStartDate != null ||
-              filterService.crimeEndDate != null;
-
-          setState(() {
-            if (hasCustomDateRange) {
-              _heatmapClusters = _persistentClusters
-                  .map((pc) => _convertPersistentToDisplayCluster(pc))
-                  .toList();
-            } else {
-              _heatmapClusters = _persistentClusters
-                  .where((pc) => pc['status'] == 'active')
-                  .map((pc) => _convertPersistentToDisplayCluster(pc))
-                  .toList();
-            }
-          });
-        }
-      },
-    );
-  }
-
-  void _handleClusterDelete(PostgresChangePayload payload) {
-    if (!mounted) return;
-
-    final clusterId = payload.oldRecord['id'];
-
-    setState(() {
-      _persistentClusters.removeWhere((c) => c['id'] == clusterId);
-      _heatmapClusters = _persistentClusters
-          .where((pc) => pc['status'] == 'active')
-          .map((pc) => _convertPersistentToDisplayCluster(pc))
-          .toList();
-
-      // ⭐ ADD THIS: Clear proximity alerts if the deleted cluster was in the alert list
-      _nearbyHeatmapClusters.removeWhere((cluster) {
-        // Check if this cluster matches the deleted one (by comparing center coordinates)
-        final matchesPersistent = _persistentClusters.any((pc) {
-          final pcCenter = LatLng(pc['center_lat'], pc['center_lng']);
-          return _calculateDistance(cluster.center, pcCenter) <
-              10.0; // Within 10m
-        });
-        return !matchesPersistent; // Remove if not in persistent list
-      });
-
-      // ⭐ Update alert state
-      _showHeatmapProximityAlert = _nearbyHeatmapClusters.isNotEmpty;
-
-      // ⭐ Update combined alert type
-      if (_showProximityAlert && _showHeatmapProximityAlert) {
-        _proximityAlertType = 'both';
-      } else if (_showHeatmapProximityAlert) {
-        _proximityAlertType = 'heatmap';
-      } else if (_showProximityAlert) {
-        _proximityAlertType = 'hotspot';
-      } else {
-        _proximityAlertType = 'none';
-      }
-    });
-
-    _updateAlertType();
-
-    print('🗑️ Cluster $clusterId deleted instantly');
-    print('   Remaining heatmap clusters: ${_heatmapClusters.length}');
-    print('   Nearby clusters in alert: ${_nearbyHeatmapClusters.length}');
-  }
-
   //REAL TIME HOTSPOT
   void _setupRealtimeSubscription() {
     _hotspotsChannel?.unsubscribe();
@@ -2898,7 +2426,6 @@ class _MapScreenState extends State<MapScreen> {
       }
 
       // ✅ Always update heatmap (even if duplicate in list)
-      _updateHeatmapOnInsert(response);
     } catch (e) {
       print('❌ Error in _handleHotspotInsert: $e');
 
@@ -2965,8 +2492,6 @@ class _MapScreenState extends State<MapScreen> {
             print('✅ Retry successful - added hotspot $hotspotId');
           });
         }
-
-        _updateHeatmapOnInsert(retryResponse);
       } catch (retryError) {
         print('❌ Retry also failed: $retryError');
 
@@ -2992,8 +2517,6 @@ class _MapScreenState extends State<MapScreen> {
             if (mounted) _loadHotspots();
           });
         }
-
-        _updateHeatmapOnInsert(payload.newRecord);
       }
     }
   }
@@ -3102,7 +2625,6 @@ class _MapScreenState extends State<MapScreen> {
             previousHotspot['type_id'] != response['type_id'] ||
             previousHotspot['location'] != response['location']) {
           print('🔄 Heatmap affected by update - recalculating...');
-          _updateHeatmapOnUpdate(response);
         }
       }
     } catch (e) {
@@ -3130,15 +2652,12 @@ class _MapScreenState extends State<MapScreen> {
             print('Fallback update applied');
           }
         });
-
-        _updateHeatmapOnUpdate(payload.newRecord);
       }
 
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) {
         print('Forcing full reload due to update error');
         await _loadHotspots();
-        _updateHeatmapOnUpdate({});
       }
     }
   }
@@ -3165,7 +2684,6 @@ class _MapScreenState extends State<MapScreen> {
 
     // Update heatmap if needed
     print('🔄 Heatmap: Removing expired hotspot from active crimes...');
-    _updateHeatmapOnUpdate(expiredHotspot);
   }
 
   /// Create a notification when hotspot expires
@@ -3218,18 +2736,9 @@ class _MapScreenState extends State<MapScreen> {
 
     print('🗑️ Handling hotspot deletion: $deletedHotspotId');
 
-    // First, clean up clusters BEFORE updating local state
-    await _cleanupClusterAfterCrimeDeletion(deletedHotspotId);
-
-    // Small delay to ensure database operations complete
-    await Future.delayed(const Duration(milliseconds: 300));
-
     setState(() {
       // Remove the hotspot from local state
       _hotspots.removeWhere((hotspot) => hotspot['id'] == deletedHotspotId);
-
-      // Remove from heatmap dataset too
-      _heatmapCrimes.removeWhere((crime) => crime['id'] == deletedHotspotId);
 
       // Remove any notifications related to this hotspot
       _notifications.removeWhere(
@@ -3242,784 +2751,10 @@ class _MapScreenState extends State<MapScreen> {
           .length;
     });
 
-    // Force reload clusters from database to ensure UI is in sync
-    await _loadPersistentClusters();
+    // Recheck proximity after deletion
+    _checkProximityToHotspots();
 
-    if (mounted) {
-      // ✅ FIXED: Respect current filter mode when displaying clusters
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-
-      final hasCustomDateRange =
-          filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null;
-
-      setState(() {
-        if (hasCustomDateRange) {
-          // 📅 Historical mode: Show all clusters (active + inactive)
-          _heatmapClusters = _persistentClusters
-              .map((pc) => _convertPersistentToDisplayCluster(pc))
-              .toList();
-          print(
-            '📅 Showing ${_heatmapClusters.length} clusters (historical mode)',
-          );
-        } else {
-          // 🔴 Live mode: Show only active clusters
-          _heatmapClusters = _persistentClusters
-              .where((pc) => pc['status'] == 'active')
-              .map((pc) => _convertPersistentToDisplayCluster(pc))
-              .toList();
-          print(
-            '🔴 Showing ${_heatmapClusters.length} active clusters (live mode)',
-          );
-        }
-
-        _checkProximityToHeatmaps();
-      });
-    }
-
-    print('✅ Crime deletion and cluster cleanup completed');
-    print('   Displayed clusters: ${_heatmapClusters.length}');
-  }
-
-  // ============================================
-  // IMPROVED: Cleanup clusters after crime deletion with dynamic updates
-  // ============================================
-  Future<void> _cleanupClusterAfterCrimeDeletion(int deletedCrimeId) async {
-    try {
-      // Find all clusters containing this crime
-      final clusterLinks = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('cluster_id')
-          .eq('hotspot_id', deletedCrimeId);
-
-      if ((clusterLinks as List).isEmpty) {
-        print('Crime was not in any cluster');
-        return;
-      }
-
-      // Remove the crime from junction table FIRST
-      await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .delete()
-          .eq('hotspot_id', deletedCrimeId);
-
-      print('✅ Removed crime $deletedCrimeId from heatmap_cluster_crimes');
-
-      // Check each affected cluster
-      for (final link in clusterLinks) {
-        final clusterId = link['cluster_id'];
-
-        // Count remaining crimes in this cluster
-        final remainingCrimeLinks = await Supabase.instance.client
-            .from('heatmap_cluster_crimes')
-            .select('hotspot_id, is_still_active')
-            .eq('cluster_id', clusterId);
-
-        final crimeCount = (remainingCrimeLinks as List).length;
-
-        print('🔍 Cluster $clusterId has $crimeCount remaining crimes');
-
-        // ⭐ If no crimes left, delete cluster immediately
-        if (crimeCount == 0) {
-          await Supabase.instance.client
-              .from('heatmap_clusters')
-              .delete()
-              .eq('id', clusterId);
-
-          print('🗑️ Deleted cluster $clusterId (no crimes remaining)');
-
-          // Remove from local state
-          setState(() {
-            _persistentClusters.removeWhere((c) => c['id'] == clusterId);
-          });
-
-          continue; // Move to next cluster
-        }
-
-        // ⭐ Check if cluster still meets minimum requirements
-        final hotspotIds = remainingCrimeLinks
-            .map((c) => c['hotspot_id'])
-            .toList();
-
-        final remainingCrimesData = await Supabase.instance.client
-            .from('hotspot')
-            .select('''
-            id,
-            type_id,
-            location,
-            time,
-            status,
-            active_status,
-            created_by,
-            reported_by,
-            created_at,
-            crime_type: type_id (id, name, level, category, description)
-          ''')
-            .inFilter('id', hotspotIds);
-
-        final allCrimes = (remainingCrimesData as List)
-            .map((c) => _formatCrimeForHeatmap(c))
-            .toList();
-
-        // Count by severity
-        final criticalCount = allCrimes
-            .where((c) => c['crime_type']['level'] == 'critical')
-            .length;
-        final highCount = allCrimes
-            .where((c) => c['crime_type']['level'] == 'high')
-            .length;
-
-        // ⭐ Check if cluster should be deleted based on minimum requirements
-        bool shouldDeleteCluster = false;
-
-        if (crimeCount < _minCrimesForCluster) {
-          // Less than minimum - check special cases
-          if (criticalCount >= 1 && crimeCount >= 2) {
-            shouldDeleteCluster = false; // Keep: 1 critical + 1 other
-          } else if (highCount >= 2) {
-            shouldDeleteCluster = false; // Keep: 2+ high severity
-          } else {
-            shouldDeleteCluster = true; // Delete: doesn't meet any criteria
-          }
-        }
-
-        if (shouldDeleteCluster) {
-          await Supabase.instance.client
-              .from('heatmap_clusters')
-              .delete()
-              .eq('id', clusterId);
-
-          print(
-            '🗑️ Deleted cluster $clusterId (only $crimeCount crime(s) - below minimum)',
-          );
-
-          setState(() {
-            _persistentClusters.removeWhere((c) => c['id'] == clusterId);
-          });
-
-          continue;
-        }
-
-        // ⭐ Cluster survives - check if it should be active or inactive
-        final activeCrimeCount = remainingCrimeLinks
-            .where((c) => c['is_still_active'] == true)
-            .length;
-
-        if (activeCrimeCount == 0) {
-          // No active crimes - deactivate cluster
-          await Supabase.instance.client
-              .from('heatmap_clusters')
-              .update({
-                'status': 'inactive',
-                'deactivated_at': DateTime.now().toIso8601String(),
-                'active_crime_count': 0,
-                'total_crime_count': crimeCount,
-              })
-              .eq('id', clusterId);
-
-          print('⏸️ Deactivated cluster $clusterId (no active crimes left)');
-        } else {
-          // ⭐ CRITICAL: Recalculate cluster properties with remaining crimes
-          print(
-            '♻️ Recalculating cluster $clusterId with $crimeCount remaining crimes...',
-          );
-          await _recalculateClusterAfterDeletion(clusterId, allCrimes);
-        }
-      }
-    } catch (e) {
-      print('❌ Error cleaning up cluster after crime deletion: $e');
-    }
-  }
-
-  // ============================================
-  // FIXED: Recalculate cluster after crime deletion
-  // ============================================
-  Future<void> _recalculateClusterAfterDeletion(
-    String clusterId,
-    List<Map<String, dynamic>> allCrimes,
-  ) async {
-    try {
-      if (allCrimes.isEmpty) {
-        print('⚠️ No crimes to recalculate cluster $clusterId');
-        return;
-      }
-
-      // ⭐ Separate active crimes from all crimes
-      final activeCrimes = allCrimes
-          .where((c) => _isWithinHeatmapTimeWindow(c))
-          .toList();
-
-      print(
-        '📊 Cluster $clusterId: ${activeCrimes.length} active / ${allCrimes.length} total crimes',
-      );
-
-      if (activeCrimes.isEmpty) {
-        // No active crimes - deactivate
-        await Supabase.instance.client
-            .from('heatmap_clusters')
-            .update({
-              'status': 'inactive',
-              'deactivated_at': DateTime.now().toIso8601String(),
-              'active_crime_count': 0,
-              'total_crime_count': allCrimes.length,
-            })
-            .eq('id', clusterId);
-
-        print('⏸️ Deactivated cluster $clusterId (all crimes expired)');
-        return;
-      }
-
-      // ⭐ Recalculate properties with active crimes only
-      final clusterData = _calculateClusterProperties(activeCrimes);
-
-      // ⭐ Adjust radius based on crime reduction
-      final reductionFactor = activeCrimes.length / allCrimes.length;
-      final baseRadius = clusterData['radius'];
-      final adjustedRadius = (baseRadius * reductionFactor).clamp(
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!,
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!,
-      );
-
-      // ⭐ Update database with new properties
-      await Supabase.instance.client
-          .from('heatmap_clusters')
-          .update({
-            'center_lat': clusterData['center'].latitude,
-            'center_lng': clusterData['center'].longitude,
-            'current_radius': adjustedRadius,
-            'dominant_severity': clusterData['dominantSeverity'],
-            'intensity': clusterData['intensity'],
-            'active_crime_count': activeCrimes.length,
-            'total_crime_count': allCrimes.length,
-            'status': 'active', // Ensure it stays active
-            'last_recalculated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', clusterId);
-
-      print(
-        '✅ Recalculated cluster $clusterId:\n'
-        '   Crimes: ${activeCrimes.length}/${allCrimes.length}\n'
-        '   Radius: ${baseRadius.toStringAsFixed(1)}m → ${adjustedRadius.toStringAsFixed(1)}m\n'
-        '   Severity: ${clusterData['dominantSeverity']}\n'
-        '   Intensity: ${clusterData['intensity'].toStringAsFixed(2)}',
-      );
-    } catch (e) {
-      print('❌ Error recalculating cluster after deletion: $e');
-    }
-  }
-
-  // ============================================
-  // HEATMAP UPDATE HELPER METHODS
-  // ============================================
-
-  void _updateHeatmapOnInsert(Map<String, dynamic> newCrime) async {
-    print('🔥 _updateHeatmapOnInsert called for crime: ${newCrime['id']}');
-
-    // Only add if approved
-    if (newCrime['status'] != 'approved') {
-      print('❌ Crime not approved - not adding to heatmap');
-      return;
-    }
-
-    // Check if already exists in heatmap
-    final existsInHeatmap = _heatmapCrimes.any(
-      (c) => c['id'] == newCrime['id'],
-    );
-    if (existsInHeatmap) {
-      print(
-        '⚠️ Crime ${newCrime['id']} already in heatmap, triggering recalculation only',
-      );
-      _scheduleHeatmapUpdate();
-      return;
-    }
-
-    // Fetch complete crime data to ensure we have crime_type
-    try {
-      final response = await Supabase.instance.client
-          .from('hotspot')
-          .select('''
-          id,
-          type_id,
-          location,
-          time,
-          status,
-          active_status,
-          created_by,
-          reported_by,
-          created_at,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-          .eq('id', newCrime['id'])
-          .single();
-
-      final formattedCrime = _formatCrimeForHeatmap(response);
-
-      // ✅ Check if crime falls within current date filter (if active)
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-
-      final hasCustomDateRange =
-          filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null;
-
-      bool shouldAddToHeatmap = true;
-
-      // If date filter is active, check if crime is within range
-      if (hasCustomDateRange) {
-        final crimeTime = DateTime.tryParse(formattedCrime['time'] ?? '');
-
-        if (crimeTime != null) {
-          final isAfterStart =
-              filterService.crimeStartDate == null ||
-              crimeTime.isAfter(filterService.crimeStartDate!) ||
-              crimeTime.isAtSameMomentAs(filterService.crimeStartDate!);
-
-          final isBeforeEnd =
-              filterService.crimeEndDate == null ||
-              crimeTime.isBefore(filterService.crimeEndDate!) ||
-              crimeTime.isAtSameMomentAs(filterService.crimeEndDate!);
-
-          shouldAddToHeatmap = isAfterStart && isBeforeEnd;
-        }
-      }
-
-      if (!shouldAddToHeatmap) {
-        print(
-          '⚠️ Crime ${newCrime['id']} outside current date filter range - not adding to heatmap display',
-        );
-        // Still process it for database, but don't show in current view
-        return;
-      }
-
-      // Double-check it wasn't added during the async operation
-      final stillNotInHeatmap = !_heatmapCrimes.any(
-        (c) => c['id'] == newCrime['id'],
-      );
-
-      if (stillNotInHeatmap) {
-        setState(() {
-          _heatmapCrimes.add(formattedCrime);
-        });
-
-        print(
-          '✅ Crime inserted into heatmap (${formattedCrime['crime_type']['name']}) '
-          '${hasCustomDateRange ? "[Historical Mode]" : "[Live Mode]"}',
-        );
-      } else {
-        print('⚠️ Crime was added to heatmap during fetch, skipping');
-      }
-
-      // ✅ Trigger cluster processing (will create cluster even in historical mode)
-      _scheduleHeatmapUpdate();
-    } catch (e) {
-      print('Error fetching complete crime data for heatmap insert: $e');
-      _scheduleHeatmapUpdate();
-    }
-  }
-
-  // ============================================
-  // MODIFIED: Update handler with time validation
-  // ============================================
-  void _updateHeatmapOnUpdate(Map<String, dynamic> updatedCrime) async {
-    if (updatedCrime.isEmpty) {
-      _scheduleHeatmapUpdate();
-      return;
-    }
-
-    final crimeId = updatedCrime['id'];
-    final index = _heatmapCrimes.indexWhere((c) => c['id'] == crimeId);
-
-    try {
-      final response = await Supabase.instance.client
-          .from('hotspot')
-          .select('''
-          id,
-          type_id,
-          location,
-          time,
-          status,
-          active_status,
-          created_by,
-          reported_by,
-          created_at,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-          .eq('id', crimeId)
-          .single();
-
-      final formattedCrime = _formatCrimeForHeatmap(response);
-
-      final shouldBeInHeatmap = formattedCrime['status'] == 'approved';
-
-      if (shouldBeInHeatmap) {
-        if (index != -1) {
-          setState(() {
-            _heatmapCrimes[index] = formattedCrime;
-          });
-          print(
-            '✅ Updated crime in heatmap (${formattedCrime['crime_type']['name']})',
-          );
-        } else {
-          setState(() {
-            _heatmapCrimes.add(formattedCrime);
-          });
-          print(
-            '✅ Added crime to heatmap after update (${formattedCrime['crime_type']['name']})',
-          );
-        }
-
-        // ⭐ NEW: Update is_still_active status in clusters
-        await _updateCrimeActiveStatusInClusters(formattedCrime);
-      } else {
-        if (index != -1) {
-          setState(() {
-            _heatmapCrimes.removeAt(index);
-          });
-          print('❌ Removed crime from heatmap (not approved)');
-        }
-      }
-
-      _scheduleHeatmapUpdate();
-    } catch (e) {
-      print('Error fetching complete crime data for heatmap update: $e');
-      _scheduleHeatmapUpdate();
-    }
-  }
-
-  // ============================================
-  // SIMPLIFIED: Update is_still_active and recalculate cluster
-  // ============================================
-  Future<void> _updateCrimeActiveStatusInClusters(
-    Map<String, dynamic> crime,
-  ) async {
-    try {
-      final crimeId = crime['id'];
-      // ⭐ USE FILTER-AWARE CHECK
-      final isStillActive = _isWithinHeatmapTimeWindow(crime);
-
-      // Find which clusters contain this crime
-      final clusterLinks = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('cluster_id, is_still_active')
-          .eq('hotspot_id', crimeId);
-
-      if ((clusterLinks as List).isEmpty) {
-        print('Crime $crimeId not in any cluster');
-        return;
-      }
-
-      // Update the is_still_active status
-      await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .update({'is_still_active': isStillActive})
-          .eq('hotspot_id', crimeId);
-
-      print('✅ Updated is_still_active=$isStillActive for crime $crimeId');
-
-      // Recalculate each affected cluster
-      for (final link in clusterLinks) {
-        final clusterId = link['cluster_id'];
-
-        // Count active crimes in this cluster
-        final activeCountResponse = await Supabase.instance.client
-            .from('heatmap_cluster_crimes')
-            .select('hotspot_id')
-            .eq('cluster_id', clusterId)
-            .eq('is_still_active', true);
-
-        final activeCrimeCount = (activeCountResponse as List).length;
-
-        // ⭐ CRITICAL: Keep active if at least 1 active crime
-        if (activeCrimeCount >= 1) {
-          // Fetch all crimes for full recalculation
-          final allCrimeLinks = await Supabase.instance.client
-              .from('heatmap_cluster_crimes')
-              .select('hotspot_id')
-              .eq('cluster_id', clusterId);
-
-          final hotspotIds = (allCrimeLinks as List)
-              .map((l) => l['hotspot_id'])
-              .toList();
-
-          final crimesResponse = await Supabase.instance.client
-              .from('hotspot')
-              .select('''
-            id,
-            type_id,
-            location,
-            time,
-            status,
-            active_status,
-            created_by,
-            reported_by,
-            created_at,
-            crime_type: type_id (id, name, level, category, description)
-          ''')
-              .inFilter('id', hotspotIds);
-
-          final allCrimes = (crimesResponse as List)
-              .map((c) => _formatCrimeForHeatmap(c))
-              .toList();
-
-          // Recalculate with all crimes (uses filter-aware _isWithinHeatmapTimeWindow)
-          await _recalculateClusterProperties(clusterId, allCrimes);
-        } else {
-          // No active crimes - deactivate
-          await Supabase.instance.client
-              .from('heatmap_clusters')
-              .update({
-                'status': 'inactive',
-                'deactivated_at': DateTime.now().toIso8601String(),
-                'active_crime_count': 0,
-              })
-              .eq('id', clusterId);
-
-          print('⏸️ Deactivated cluster $clusterId (no active crimes)');
-        }
-      }
-
-      // Reload clusters to reflect changes
-      await _loadPersistentClusters();
-
-      if (mounted) {
-        setState(() {
-          _heatmapClusters = _persistentClusters
-              .where((pc) => pc['status'] == 'active')
-              .map((pc) => _convertPersistentToDisplayCluster(pc))
-              .toList();
-        });
-      }
-    } catch (e) {
-      print('Error updating crime active status: $e');
-    }
-  }
-
-  // ============================================
-  // Delete handler (no changes needed)
-  // ============================================
-
-  // Centralized debounced update scheduler
-  void _scheduleHeatmapUpdate() {
-    _heatmapUpdateTimer?.cancel();
-    _heatmapUpdateTimer = Timer(const Duration(milliseconds: 1500), () {
-      if (mounted) {
-        print('♻️ Recalculating heatmap...');
-        _calculateHeatmap();
-      }
-    });
-  }
-
-  // ============================================
-  // PERIODIC CLUSTER MAINTENANCE
-  // ============================================
-
-  void _startPeriodicClusterMaintenance() {
-    // Run every 5 minutes to check for crimes that expired
-    Timer.periodic(const Duration(minutes: 5), (timer) async {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-
-      await _performClusterMaintenance();
-    });
-
-    // Also run once after 30 seconds on startup
-    Timer(const Duration(seconds: 30), () {
-      if (mounted) {
-        _performClusterMaintenance();
-      }
-    });
-  }
-
-  Future<void> _performClusterMaintenance() async {
-    if (_persistentClusters.isEmpty) return;
-
-    // ✅ CRITICAL FIX: Don't run maintenance when viewing historical data
-    final filterService = Provider.of<HotspotFilterService>(
-      context,
-      listen: false,
-    );
-
-    final hasCustomDateRange =
-        filterService.crimeStartDate != null ||
-        filterService.crimeEndDate != null;
-
-    if (hasCustomDateRange) {
-      print('⏸️ Skipping cluster maintenance - custom date range active');
-      return; // Don't modify cluster status when user is viewing historical data
-    }
-
-    print('🔧 Running cluster maintenance...');
-
-    for (final cluster in _persistentClusters) {
-      if ((cluster['status'] ?? 'active') != 'active') continue;
-
-      try {
-        // Get all crimes in this cluster
-        final crimeLinks = await Supabase.instance.client
-            .from('heatmap_cluster_crimes')
-            .select('hotspot_id, is_still_active')
-            .eq('cluster_id', cluster['id']);
-
-        if ((crimeLinks as List).isEmpty) {
-          // No crimes - delete cluster
-          await Supabase.instance.client
-              .from('heatmap_clusters')
-              .delete()
-              .eq('id', cluster['id']);
-          continue;
-        }
-
-        final hotspotIds = crimeLinks
-            .map((link) => link['hotspot_id'])
-            .toList();
-
-        // Fetch complete crime data
-        final crimesResponse = await Supabase.instance.client
-            .from('hotspot')
-            .select('''
-            id,
-            type_id,
-            location,
-            time,
-            status,
-            active_status,
-            created_by,
-            reported_by,
-            created_at,
-            crime_type: type_id (id, name, level, category, description)
-          ''')
-            .inFilter('id', hotspotIds);
-
-        final allCrimes = (crimesResponse as List)
-            .map((c) => _formatCrimeForHeatmap(c))
-            .toList();
-
-        // Check each crime's active status
-        bool hasChanges = false;
-        for (final crime in allCrimes) {
-          final isActive = _isWithinHeatmapTimeWindow(crime);
-          final currentLink = crimeLinks.firstWhere(
-            (link) => link['hotspot_id'] == crime['id'],
-            orElse: () => {},
-          );
-
-          if (currentLink['is_still_active'] != isActive) {
-            // Update the status
-            await Supabase.instance.client
-                .from('heatmap_cluster_crimes')
-                .update({'is_still_active': isActive})
-                .eq('cluster_id', cluster['id'])
-                .eq('hotspot_id', crime['id']);
-
-            hasChanges = true;
-            print('Updated crime ${crime['id']} active status to $isActive');
-          }
-        }
-
-        if (hasChanges) {
-          // Recalculate cluster properties
-          await _recalculateClusterProperties(cluster['id'], allCrimes);
-        }
-      } catch (e) {
-        print('Error in cluster maintenance for ${cluster['id']}: $e');
-      }
-    }
-
-    // Reload clusters after maintenance
-    await _loadPersistentClusters();
-
-    if (mounted) {
-      setState(() {
-        _heatmapClusters = _persistentClusters
-            .where((pc) => pc['status'] == 'active')
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
-      });
-    }
-
-    print('✅ Cluster maintenance complete');
-  }
-
-  // ============================================
-  // SIMPLIFIED: Just recalculate properties
-  // ============================================
-  Future<void> _recalculateClusterProperties(
-    String clusterId,
-    List<Map<String, dynamic>> allCrimes,
-  ) async {
-    try {
-      // ⭐ USE FILTER-AWARE CHECK to determine active crimes
-      final activeCrimes = allCrimes
-          .where((c) => _isWithinHeatmapTimeWindow(c))
-          .toList();
-
-      print(
-        'Recalculating cluster $clusterId: ${activeCrimes.length} active / ${allCrimes.length} total',
-      );
-
-      // Even if no active crimes, keep cluster alive (just update counts via trigger)
-      if (activeCrimes.isEmpty) {
-        print('⚠️ No active crimes but cluster remains (historical data)');
-
-        if (mounted) {
-          await _loadPersistentClusters();
-          setState(() {
-            _heatmapClusters = _persistentClusters
-                .where((pc) => pc['status'] == 'active')
-                .map((pc) => _convertPersistentToDisplayCluster(pc))
-                .toList();
-          });
-        }
-
-        return;
-      }
-
-      // ✅ Has active crimes - recalculate properties
-      final clusterData = _calculateClusterProperties(activeCrimes);
-
-      final reductionFactor = activeCrimes.length / allCrimes.length;
-      final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!, // ⭐ CHANGED
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!, // ⭐ CHANGED
-      );
-
-      await Supabase.instance.client
-          .from('heatmap_clusters')
-          .update({
-            'center_lat': clusterData['center'].latitude,
-            'center_lng': clusterData['center'].longitude,
-            'current_radius': adjustedRadius,
-            'dominant_severity': clusterData['dominantSeverity'],
-            'intensity': clusterData['intensity'],
-            'active_crime_count': activeCrimes.length,
-            'total_crime_count': allCrimes.length,
-            'last_recalculated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', clusterId);
-
-      print(
-        '✅ Recalculated cluster $clusterId (${activeCrimes.length}/${allCrimes.length})',
-      );
-
-      if (mounted) {
-        await _loadPersistentClusters();
-        setState(() {
-          _heatmapClusters = _persistentClusters
-              .where((pc) => pc['status'] == 'active')
-              .map((pc) => _convertPersistentToDisplayCluster(pc))
-              .toList();
-        });
-      }
-    } catch (e) {
-      print('Error recalculating cluster properties: $e');
-    }
+    print('✅ Hotspot deletion completed');
   }
 
   void _handleStatusChangeMessages(
@@ -4521,98 +3256,81 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // ============================================
-  // LOAD HEATMAP SETTINGS FROM DATABASE
-  // ============================================
-  Future<void> _loadHeatmapSettings() async {
-    try {
-      print('📊 Loading heatmap settings from database...');
+  /// Generates heatmap points from filtered crimes
+  void _generateHeatmap() {
+    if (!mounted) return;
 
-      final settings = await _heatmapSettings.getAllSettings();
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: false,
+    );
 
-      if (!mounted) return;
+    // ✅ Debug: Print current hotspot count
+    print('🔍 Total hotspots loaded: ${_hotspots.length}');
 
+    // Only generate heatmap if BOTH dates are set
+    if (filterService.crimeStartDate == null ||
+        filterService.crimeEndDate == null) {
+      print('⚠️ Date range incomplete - clearing heatmap');
       setState(() {
-        // Distance settings
-        _clusterMergeDistance =
-            settings['cluster_merge_distance']?.toDouble() ?? 50.0;
-        _minCrimesForCluster = settings['min_crimes_for_cluster'] ?? 3;
-        _proximityAlertDistance =
-            settings['proximity_alert_distance']?.toDouble() ?? 500.0;
-
-        // Time windows
-        _severityTimeWindows = {
-          'critical': settings['time_window_critical'] ?? 120,
-          'high': settings['time_window_high'] ?? 90,
-          'medium': settings['time_window_medium'] ?? 60,
-          'low': settings['time_window_low'] ?? 30,
-        };
-
-        // Weights
-        _severityWeights = {
-          'critical': settings['weight_critical']?.toDouble() ?? 1.0,
-          'high': settings['weight_high']?.toDouble() ?? 0.75,
-          'medium': settings['weight_medium']?.toDouble() ?? 0.5,
-          'low': settings['weight_low']?.toDouble() ?? 0.25,
-        };
-
-        // Radius configs
-        _severityRadiusConfig = {
-          'critical': {
-            'base': settings['radius_critical_base']?.toDouble() ?? 200.0,
-            'min': settings['radius_critical_min']?.toDouble() ?? 250.0,
-            'max': settings['radius_critical_max']?.toDouble() ?? 1200.0,
-            'countMultiplier':
-                settings['radius_critical_count_multiplier']?.toDouble() ??
-                15.0,
-            'intensityMultiplier':
-                settings['radius_critical_intensity_multiplier']?.toDouble() ??
-                50.0,
-          },
-          'high': {
-            'base': settings['radius_high_base']?.toDouble() ?? 150.0,
-            'min': settings['radius_high_min']?.toDouble() ?? 200.0,
-            'max': settings['radius_high_max']?.toDouble() ?? 900.0,
-            'countMultiplier':
-                settings['radius_high_count_multiplier']?.toDouble() ?? 10.0,
-            'intensityMultiplier':
-                settings['radius_high_intensity_multiplier']?.toDouble() ??
-                30.0,
-          },
-          'medium': {
-            'base': settings['radius_medium_base']?.toDouble() ?? 100.0,
-            'min': settings['radius_medium_min']?.toDouble() ?? 150.0,
-            'max': settings['radius_medium_max']?.toDouble() ?? 600.0,
-            'countMultiplier':
-                settings['radius_medium_count_multiplier']?.toDouble() ?? 8.0,
-            'intensityMultiplier':
-                settings['radius_medium_intensity_multiplier']?.toDouble() ??
-                25.0,
-          },
-          'low': {
-            'base': settings['radius_low_base']?.toDouble() ?? 80.0,
-            'min': settings['radius_low_min']?.toDouble() ?? 100.0,
-            'max': settings['radius_low_max']?.toDouble() ?? 400.0,
-            'countMultiplier':
-                settings['radius_low_count_multiplier']?.toDouble() ?? 5.0,
-            'intensityMultiplier':
-                settings['radius_low_intensity_multiplier']?.toDouble() ?? 20.0,
-          },
-        };
+        _heatmapPoints = [];
+        _showHeatmap = false;
       });
+      return;
+    }
 
-      print('✅ Heatmap settings loaded successfully');
-      print('   Cluster merge distance: $_clusterMergeDistance m');
-      print('   Min crimes for cluster: $_minCrimesForCluster');
-      print('   Proximity alert distance: $_proximityAlertDistance m');
-    } catch (e) {
-      print('❌ Error loading heatmap settings: $e');
-      // Keep default values already set
-      if (mounted) {
-        setState(() {
-          // Mark as loaded even on error to prevent blocking
-        });
-      }
+    print(
+      '📅 Filtering by date range: ${filterService.crimeStartDate} to ${filterService.crimeEndDate}',
+    );
+
+    // ✅ Filter crimes by date range (ignore 30-day rule for heatmap)
+    final filteredCrimes = CrimeHeatmapService.filterCrimesByDateRange(
+      _hotspots,
+      filterService.crimeStartDate,
+      filterService.crimeEndDate,
+    );
+
+    print('📊 Crimes in date range: ${filteredCrimes.length}');
+
+    // ✅ Apply category and severity filters
+    final fullyFilteredCrimes = filteredCrimes.where((hotspot) {
+      return filterService.shouldShowHotspot(hotspot);
+    }).toList();
+
+    print('🎯 Crimes after all filters: ${fullyFilteredCrimes.length}');
+
+    // ✅ Generate heatmap points
+    final points = CrimeHeatmapService.generateHeatmapPoints(
+      fullyFilteredCrimes,
+    );
+
+    // ✅ Get config for current zoom
+    final config = CrimeHeatmapService.getConfigForZoom(_currentZoom);
+
+    // ✅ Generate heatmap points
+    CrimeHeatmapService.generateHeatmapPoints(fullyFilteredCrimes);
+
+    // ✅ Calculate stats
+    final stats = CrimeHeatmapService.calculateStats(points);
+
+    // ✅ Get config for current zoom
+    CrimeHeatmapService.getConfigForZoom(_currentZoom);
+
+    setState(() {
+      _heatmapPoints = points;
+      _heatmapConfig = config;
+      _showHeatmap = points.isNotEmpty;
+      _heatmapStats = stats; // ✅ Store stats
+    });
+
+    // ✅ Print detailed stats
+    CrimeHeatmapService.calculateStats(points);
+    print('🔥 Heatmap generated: ${stats.summary}');
+
+    if (points.isEmpty) {
+      print('⚠️ WARNING: No heatmap points generated!');
+      print('   - Check if crimes have valid "time" or "created_at" fields');
+      print('   - Check if date range matches crime timestamps');
     }
   }
 
@@ -5374,6 +4092,39 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ),
 
+                                  // Warning for incomplete date range
+                                  if ((filterService.startDate != null &&
+                                          filterService.endDate == null) ||
+                                      (filterService.startDate == null &&
+                                          filterService.endDate != null)) ...[
+                                    const SizedBox(height: 8),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8.0,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            Icons.info_outline,
+                                            size: 16,
+                                            color: Colors.orange.shade600,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              'Please select both start and end dates to apply filter',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.orange.shade600,
+                                                fontStyle: FontStyle.italic,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+
                                   // Clear dates option - bottom right
                                   if (filterService.startDate != null ||
                                       filterService.endDate != null) ...[
@@ -5567,12 +4318,179 @@ class _MapScreenState extends State<MapScreen> {
 
                               // Dynamic content based on toggle
                               if (isShowingCrimes) ...[
-                                // CRIMES FILTERS
+                                // ✅ ADD HEATMAP INFO CARD HERE
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8.0,
+                                  ),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          Colors.red.shade50,
+                                          Colors.orange.shade50,
+                                        ],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.red.shade200,
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Builder(
+                                      builder: (context) {
+                                        final bool heatmapEnabled =
+                                            filterService.crimeStartDate !=
+                                                null &&
+                                            filterService.crimeEndDate != null;
+
+                                        return Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets.all(
+                                                    6,
+                                                  ),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.red.shade100,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          8,
+                                                        ),
+                                                  ),
+                                                  child: Icon(
+                                                    Icons.whatshot,
+                                                    size: 20,
+                                                    color: Colors.red.shade700,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        'Crime Heatmap',
+                                                        style: TextStyle(
+                                                          fontSize: 15,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          color: Colors
+                                                              .red
+                                                              .shade900,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        heatmapEnabled
+                                                            ? 'Toggle heatmap from map controls'
+                                                            : 'Select date range to enable',
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          color: Colors
+                                                              .grey
+                                                              .shade700,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            if (heatmapEnabled) ...[
+                                              const SizedBox(height: 10),
+                                              // Heatmap legend preview
+                                              Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment
+                                                        .spaceEvenly,
+                                                children: [
+                                                  _buildMiniLegendItem(
+                                                    'Low',
+                                                    Colors.blue,
+                                                  ),
+                                                  _buildMiniLegendItem(
+                                                    '',
+                                                    Colors.cyan,
+                                                  ),
+                                                  _buildMiniLegendItem(
+                                                    'Med',
+                                                    Colors.yellow,
+                                                  ),
+                                                  _buildMiniLegendItem(
+                                                    '',
+                                                    Colors.orange,
+                                                  ),
+                                                  _buildMiniLegendItem(
+                                                    'High',
+                                                    Colors.red,
+                                                  ),
+                                                ],
+                                              ),
+                                            ] else ...[
+                                              const SizedBox(height: 8),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 6,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.orange.shade100,
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                  border: Border.all(
+                                                    color:
+                                                        Colors.orange.shade300,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                      Icons.info_outline,
+                                                      size: 14,
+                                                      color: Colors
+                                                          .orange
+                                                          .shade700,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    Expanded(
+                                                      child: Text(
+                                                        'Complete date range above to activate',
+                                                        style: TextStyle(
+                                                          fontSize: 10,
+                                                          color: Colors
+                                                              .orange
+                                                              .shade900,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                // CRIMES FILTERS (existing code)
                                 // Severity filters
                                 const Padding(
                                   padding: EdgeInsets.only(left: 8.0),
                                   child: Text(
                                     'Severity',
+                                    // ... rest of existing code
                                     style: TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
@@ -5961,6 +4879,30 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  Widget _buildMiniLegendItem(String label, Color color) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.7),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.grey.shade300, width: 0.5),
+          ),
+        ),
+        if (label.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(fontSize: 8, color: Colors.grey.shade700),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildFilterToggle(
     BuildContext context,
     String label,
@@ -6245,45 +5187,23 @@ class _MapScreenState extends State<MapScreen> {
     final unsafeSegments = <LatLng>[];
     const safeDistance = 150.0; // Distance for active hotspots
 
-    // Filter hotspots to only include active + approved ones (PRIORITY 1)
+    // Filter hotspots to only include active + approved ones
     final activeApprovedHotspots = _hotspots.where((hotspot) {
       final status = hotspot['status'] ?? 'approved';
       final activeStatus = hotspot['active_status'] ?? 'active';
       return status == 'approved' && activeStatus == 'active';
     }).toList();
 
-    // Check each route point
+    // Check each route point against active hotspots
     for (final point in route) {
       bool isUnsafe = false;
 
-      // PRIORITY 1: Check active hotspots
       for (final hotspot in activeApprovedHotspots) {
         final coords = hotspot['location']['coordinates'];
         final hotspotLatLng = LatLng(coords[1], coords[0]);
         if (_calculateDistance(point, hotspotLatLng) < safeDistance) {
           isUnsafe = true;
           break;
-        }
-      }
-
-      // PRIORITY 2: Check heatmap clusters (only ACTIVE ones, not historical/expired)
-      if (!isUnsafe && _showHeatmap && _heatmapClusters.isNotEmpty) {
-        for (final cluster in _heatmapClusters) {
-          // ⭐ SKIP inactive/expired clusters for routing avoidance
-          if (cluster.status != 'active') continue;
-
-          final distanceToCluster = _calculateDistance(point, cluster.center);
-
-          // Use cluster radius + safety buffer based on severity
-          final safetyBuffer = _getClusterSafetyBuffer(
-            cluster.dominantSeverity,
-          );
-          final totalSafeDistance = cluster.radius + safetyBuffer;
-
-          if (distanceToCluster < totalSafeDistance) {
-            isUnsafe = true;
-            break;
-          }
         }
       }
 
@@ -6296,20 +5216,6 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // NEW: Get safety buffer based on cluster severity
-  double _getClusterSafetyBuffer(String severity) {
-    switch (severity) {
-      case 'critical':
-        return 300.0; // 300m extra buffer for critical zones
-      case 'high':
-        return 200.0; // 200m extra buffer for high zones
-      case 'medium':
-        return 150.0; // 150m extra buffer for medium zones
-      case 'low':
-        return 100.0; // 100m extra buffer for low zones
-      default:
-        return 100.0;
-    }
-  }
 
   // Helper to get minimum distance to any active hotspot
 
@@ -6795,7 +5701,7 @@ class _MapScreenState extends State<MapScreen> {
     required int originalUnsafeCount,
     required int newUnsafeCount,
     String? error,
-    List<LatLng>? currentRoute, // NEW: Pass the actual route being evaluated
+    List<LatLng>? currentRoute,
   }) async {
     return showDialog<bool>(
       context: context,
@@ -6803,11 +5709,6 @@ class _MapScreenState extends State<MapScreen> {
       builder: (BuildContext context) {
         final double screenWidth = MediaQuery.of(context).size.width;
         final bool isMobile = screenWidth < 600;
-
-        // FIXED: Calculate zones from the passed route, not _routePoints
-        final heatmapZonesCount = _showHeatmap && currentRoute != null
-            ? _countHeatmapZonesInRoute(currentRoute)
-            : 0;
 
         return AlertDialog(
           insetPadding: isMobile
@@ -6845,49 +5746,6 @@ class _MapScreenState extends State<MapScreen> {
                     const SizedBox(height: 8),
                   ],
 
-                  // FIXED: Show heatmap warning BEFORE the explanation
-                  if (_showHeatmap && heatmapZonesCount > 0) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.orange.shade200),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.heat_pump,
-                                color: Colors.orange.shade700,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 8),
-                              const Expanded(
-                                child: Text(
-                                  'Crime Heatmap Zones Detected',
-                                  style: TextStyle(fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Route passes through $heatmapZonesCount high-crime density area${heatmapZonesCount > 1 ? 's' : ''}. '
-                            'These zones are calculated from historical crime patterns.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey.shade700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-
                   const Text(
                     'We couldn\'t find a significantly safer route to your destination. '
                     'This might be due to:',
@@ -6896,10 +5754,6 @@ class _MapScreenState extends State<MapScreen> {
                   const SizedBox(height: 8),
                   const Text('• Limited alternative roads in the area'),
                   const Text('• Multiple hotspots along possible routes'),
-                  if (heatmapZonesCount > 0)
-                    const Text(
-                      '• High-crime density zones blocking alternatives',
-                    ),
                   const Text('• API routing limitations'),
                   const SizedBox(height: 12),
 
@@ -6923,10 +5777,6 @@ class _MapScreenState extends State<MapScreen> {
                             '• Extended detour search (may be much longer)',
                           ),
                           const Text('• Alternative routing strategies'),
-                          if (heatmapZonesCount > 0)
-                            const Text(
-                              '• Wider avoidance of crime density zones',
-                            ),
                           Text(
                             '• Attempt ${_routingRetryCount + 1} of $MAX_RETRY_ATTEMPTS',
                           ),
@@ -6984,32 +5834,6 @@ class _MapScreenState extends State<MapScreen> {
         );
       },
     );
-  }
-
-  // FIXED: Accept route parameter to avoid race conditions
-  int _countHeatmapZonesInRoute([List<LatLng>? routeToCheck]) {
-    final route = routeToCheck ?? _routePoints;
-
-    if (route.isEmpty || _heatmapClusters.isEmpty) return 0;
-
-    int count = 0;
-    final checkedClusters = <HeatmapCluster>{};
-
-    for (final point in route) {
-      for (final cluster in _heatmapClusters) {
-        if (checkedClusters.contains(cluster)) continue;
-
-        final distance = _calculateDistance(point, cluster.center);
-        final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
-
-        if (distance <= cluster.radius + safetyBuffer) {
-          count++;
-          checkedClusters.add(cluster);
-        }
-      }
-    }
-
-    return count;
   }
 
   // Retry with extended search parameters
@@ -7317,7 +6141,7 @@ class _MapScreenState extends State<MapScreen> {
     final hotspotClusters = _clusterHotspots(unsafeSegments);
     final waypoints = <LatLng>[];
 
-    // Process both active hotspot clusters AND heatmap clusters
+    // Process active hotspot clusters
     for (final cluster in hotspotClusters) {
       final clusterCenter = _getClusterCenter(cluster);
 
@@ -7326,12 +6150,7 @@ class _MapScreenState extends State<MapScreen> {
       final perpendicularDirection1 = (mainRouteDirection + 90) % 360;
       final perpendicularDirection2 = (mainRouteDirection - 90) % 360;
 
-      // Increased distances to account for heatmap zones
-      final distances = [
-        600.0,
-        900.0,
-        1400.0,
-      ]; // Increased from [500, 800, 1200]
+      final distances = [600.0, 900.0, 1400.0];
 
       for (final distance in distances) {
         final waypoint1 = _calculateDestination(
@@ -7345,64 +6164,16 @@ class _MapScreenState extends State<MapScreen> {
           distance,
         );
 
-        // Enhanced safety evaluation (considers both hotspots and heatmap)
+        // Evaluate waypoint safety
         final safety1 = _evaluateWaypointSafety(waypoint1);
         final safety2 = _evaluateWaypointSafety(waypoint2);
 
-        // Also check if waypoints are in heatmap danger zones
-        final inDanger1 = _isPointInHeatmapDangerZone(waypoint1);
-        final inDanger2 = _isPointInHeatmapDangerZone(waypoint2);
-
-        if (!inDanger1 && safety1 > safety2 && safety1 > 250) {
-          // Increased from 200
+        if (safety1 > safety2 && safety1 > 250) {
           waypoints.add(waypoint1);
           break;
-        } else if (!inDanger2 && safety2 > 250) {
-          // Increased from 200
+        } else if (safety2 > 250) {
           waypoints.add(waypoint2);
           break;
-        }
-      }
-    }
-
-    // NEW: Also create waypoints to avoid heatmap clusters directly
-    if (_showHeatmap && _heatmapClusters.isNotEmpty) {
-      final mainBearing = _calculateBearing(start, destination);
-
-      for (final heatCluster in _heatmapClusters) {
-        // Only process high-danger clusters
-        if (heatCluster.dominantSeverity == 'critical' ||
-            heatCluster.dominantSeverity == 'high') {
-          final safetyBuffer = _getClusterSafetyBuffer(
-            heatCluster.dominantSeverity,
-          );
-          final avoidanceDistance =
-              heatCluster.radius + safetyBuffer + 200; // Extra margin
-
-          // Try perpendicular directions
-          final perpBearing1 = (mainBearing + 90) % 360;
-          final perpBearing2 = (mainBearing - 90) % 360;
-
-          final candidate1 = _calculateDestination(
-            heatCluster.center,
-            perpBearing1,
-            avoidanceDistance,
-          );
-          final candidate2 = _calculateDestination(
-            heatCluster.center,
-            perpBearing2,
-            avoidanceDistance,
-          );
-
-          final safety1 = _evaluateWaypointSafety(candidate1);
-          final safety2 = _evaluateWaypointSafety(candidate2);
-
-          if (safety1 > 300 && !_isPointInHeatmapDangerZone(candidate1)) {
-            waypoints.add(candidate1);
-          } else if (safety2 > 300 &&
-              !_isPointInHeatmapDangerZone(candidate2)) {
-            waypoints.add(candidate2);
-          }
         }
       }
     }
@@ -7697,7 +6468,7 @@ class _MapScreenState extends State<MapScreen> {
   double _evaluateWaypointSafety(LatLng waypoint) {
     double minDistance = double.infinity;
 
-    // PRIORITY 1: Check active hotspots
+    // Check distance to all active hotspots
     final activeHotspots = _hotspots.where((hotspot) {
       final status = hotspot['status'] ?? 'approved';
       final activeStatus = hotspot['active_status'] ?? 'active';
@@ -7713,60 +6484,40 @@ class _MapScreenState extends State<MapScreen> {
       }
     }
 
-    // PRIORITY 2: Check heatmap clusters
-    if (_showHeatmap && _heatmapClusters.isNotEmpty) {
-      for (final cluster in _heatmapClusters) {
-        // Distance to cluster edge (not center)
-        final distanceToCenter = _calculateDistance(waypoint, cluster.center);
-        final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
-        final effectiveDistance =
-            distanceToCenter - cluster.radius - safetyBuffer;
-
-        // Penalize waypoints inside or near cluster boundaries
-        if (effectiveDistance < minDistance) {
-          minDistance = effectiveDistance;
-        }
-      }
-    }
-
     return minDistance;
   }
 
-  // NEW: Check if a point is within any heatmap cluster danger zone
-  bool _isPointInHeatmapDangerZone(LatLng point) {
-    if (!_showHeatmap || _heatmapClusters.isEmpty) return false;
-
-    for (final cluster in _heatmapClusters) {
-      final distanceToCenter = _calculateDistance(point, cluster.center);
-      final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
-      final dangerZoneRadius = cluster.radius + safetyBuffer;
-
-      if (distanceToCenter <= dangerZoneRadius) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  // NEW: Get cluster danger score for a point (for prioritization)
+  // ============================================
+  // GET CLUSTER DANGER SCORE (hotspots only)
+  // ============================================
   double _getClusterDangerScore(LatLng point) {
-    if (!_showHeatmap || _heatmapClusters.isEmpty) return 0.0;
-
     double maxDangerScore = 0.0;
 
-    for (final cluster in _heatmapClusters) {
-      final distanceToCenter = _calculateDistance(point, cluster.center);
-      final safetyBuffer = _getClusterSafetyBuffer(cluster.dominantSeverity);
-      final dangerZoneRadius = cluster.radius + safetyBuffer;
+    // Get active hotspots
+    final activeHotspots = _hotspots.where((hotspot) {
+      final status = hotspot['status'] ?? 'approved';
+      final activeStatus = hotspot['active_status'] ?? 'active';
+      return status == 'approved' && activeStatus == 'active';
+    });
 
-      if (distanceToCenter <= dangerZoneRadius) {
-        // Calculate danger score based on proximity and severity
-        final proximityFactor = 1.0 - (distanceToCenter / dangerZoneRadius);
-        final severityWeight =
-            _severityWeights[cluster.dominantSeverity] ?? 0.25;
-        final dangerScore =
-            proximityFactor * severityWeight * cluster.intensity;
+    // Calculate danger score based on proximity to active hotspots
+    for (final hotspot in activeHotspots) {
+      final coords = hotspot['location']['coordinates'];
+      final hotspotLatLng = LatLng(coords[1], coords[0]);
+      final distance = _calculateDistance(point, hotspotLatLng);
+
+      // Danger zone radius (adjust as needed)
+      const dangerZoneRadius = 200.0;
+
+      if (distance <= dangerZoneRadius) {
+        // Calculate danger score based on proximity
+        final proximityFactor = 1.0 - (distance / dangerZoneRadius);
+
+        // Get severity weight
+        final level = hotspot['crime_type']?['level'] ?? 'medium';
+        final severityWeight = _getSeverityWeight(level);
+
+        final dangerScore = proximityFactor * severityWeight;
 
         if (dangerScore > maxDangerScore) {
           maxDangerScore = dangerScore;
@@ -7775,6 +6526,21 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     return maxDangerScore;
+  }
+
+  double _getSeverityWeight(String level) {
+    switch (level.toLowerCase()) {
+      case 'critical':
+        return 1.0;
+      case 'high':
+        return 0.75;
+      case 'medium':
+        return 0.5;
+      case 'low':
+        return 0.25;
+      default:
+        return 0.25;
+    }
   }
 
   // Helper to calculate total distance of a route in meters
@@ -11117,8 +9883,6 @@ class _MapScreenState extends State<MapScreen> {
               'crime_type': crimeTypeData,
             });
           });
-
-          _updateHeatmapOnInsert(newHotspot);
         }
       } catch (fetchError) {
         print('Error fetching newly created hotspot: $fetchError');
@@ -12017,39 +10781,41 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                       if (_unreadThreadCount > 0)
                         Positioned(
-                          right: -2,
-                          top: -2,
+                          right: -4,
+                          top: -4,
                           child: Container(
-                            padding: const EdgeInsets.all(2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.red,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: Colors.white,
-                                width: 1.5,
-                              ),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.white, width: 2),
                             ),
                             constraints: const BoxConstraints(
-                              minWidth: 16,
-                              minHeight: 16,
+                              minWidth: 18,
+                              minHeight: 18,
                             ),
-                            child: Text(
-                              _unreadThreadCount > 99
-                                  ? '99+'
-                                  : '$_unreadThreadCount',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                height: 1.1,
+                            child: Center(
+                              child: Text(
+                                _unreadThreadCount > 99
+                                    ? '99+'
+                                    : '$_unreadThreadCount',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  height: 1.0,
+                                ),
+                                textAlign: TextAlign.center,
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ),
                         ),
                     ],
                   ),
-                  label: 'Threads', // Changed from 'Chat'
+                  label: 'Threads',
                 ),
 
                 const BottomNavigationBarItem(
@@ -12069,33 +10835,35 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                       if (_unreadNotificationCount > 0)
                         Positioned(
-                          right: -2,
-                          top: -2,
+                          right: -4,
+                          top: -4,
                           child: Container(
-                            padding: const EdgeInsets.all(2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.red,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: Colors.white,
-                                width: 1.5,
-                              ),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.white, width: 2),
                             ),
                             constraints: const BoxConstraints(
-                              minWidth: 16,
-                              minHeight: 16,
+                              minWidth: 18,
+                              minHeight: 18,
                             ),
-                            child: Text(
-                              _unreadNotificationCount > 99
-                                  ? '99+'
-                                  : '$_unreadNotificationCount',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                height: 1.1,
+                            child: Center(
+                              child: Text(
+                                _unreadNotificationCount > 99
+                                    ? '99+'
+                                    : '$_unreadNotificationCount',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  height: 1.0,
+                                ),
+                                textAlign: TextAlign.center,
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ),
                         ),
@@ -14128,6 +12896,7 @@ class _MapScreenState extends State<MapScreen> {
               const SizedBox(width: 4),
 
               // Chat button - for desktop
+              // Thread button - for desktop
               if (_userProfile != null) ...[
                 Stack(
                   clipBehavior: Clip.none,
@@ -14172,9 +12941,10 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                           child: Center(
                             child: Text(
-                              _unreadChatCount > 99
+                              _unreadThreadCount >
+                                      99 // ✅ FIXED
                                   ? '99+'
-                                  : '$_unreadChatCount',
+                                  : '$_unreadThreadCount', // ✅ FIXED
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 10,
@@ -16162,79 +14932,6 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget _buildHistoricalModeIndicator() {
-    final filterService = Provider.of<HotspotFilterService>(
-      context,
-      listen: true,
-    );
-
-    final hasCustomDateRange =
-        filterService.crimeStartDate != null ||
-        filterService.crimeEndDate != null;
-
-    // ✅ Check screen width - only show on desktop/tablets (600px+)
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isDesktop = screenWidth >= 600; // Adjust breakpoint as needed
-
-    // ✅ Only show if: desktop screen AND date filter is active AND heatmap is enabled AND there's at least 1 cluster
-    if (!isDesktop ||
-        !hasCustomDateRange ||
-        !_showHeatmap ||
-        _heatmapClusters.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Positioned(
-      top: 100,
-      left: 16,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.deepPurple.withOpacity(0.9),
-          borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.history, color: Colors.white, size: 16),
-            const SizedBox(width: 6),
-            Text(
-              'Historical Heatmap Mode',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                '${_heatmapClusters.length} clusters',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // MAP MAP MAP
 
   Widget _buildMap() {
@@ -16373,6 +15070,13 @@ class _MapScreenState extends State<MapScreen> {
                   },
                 ),
 
+                if (_showHeatmap && _heatmapPoints.isNotEmpty)
+                  CrimeHeatmapLayer(
+                    points: _heatmapPoints,
+                    config: _heatmapConfig,
+                    currentZoom: _currentZoom,
+                  ),
+
                 // UPDATED: Only show route polylines, not tracking polylines
                 if (_routePoints.isNotEmpty && _hasActiveRoute) ...[
                   PolylineLayer(
@@ -16420,8 +15124,7 @@ class _MapScreenState extends State<MapScreen> {
                     ],
                   ),
                 ],
-                _buildHeatmapLayer(),
-                _buildHeatmapMarkers(),
+
                 // Enhanced Main markers layer (current position and destination) - MINIMIZED
                 MarkerLayer(
                   markers: [
@@ -16456,7 +15159,6 @@ class _MapScreenState extends State<MapScreen> {
                   ],
                 ),
 
-                // FIXED: Hotspots layer with stable markers and labels
                 Consumer<HotspotFilterService>(
                   builder: (context, filterService, child) {
                     final thirtyDaysAgo = DateTime.now().subtract(
@@ -16464,24 +15166,10 @@ class _MapScreenState extends State<MapScreen> {
                     );
 
                     final hasCustomDateRange =
-                        filterService.crimeStartDate != null ||
+                        filterService.crimeStartDate != null &&
                         filterService.crimeEndDate != null;
 
-                    Set<int>? clusterHotspotIds;
-                    if (hasCustomDateRange && _persistentClusters.isNotEmpty) {
-                      clusterHotspotIds = {};
-                      for (final cluster in _persistentClusters) {
-                        final crimes = cluster['crimes'] as List<dynamic>?;
-                        if (crimes != null) {
-                          for (final crime in crimes) {
-                            final hotspotId = crime['id'];
-                            if (hotspotId != null) {
-                              clusterHotspotIds.add(hotspotId);
-                            }
-                          }
-                        }
-                      }
-                    }
+                    // ✅ Cluster code removed - no longer needed without heatmap
 
                     final visibleHotspots = _visibleHotspots.where((hotspot) {
                       final currentUserId = _userProfile?['id'];
@@ -16499,59 +15187,60 @@ class _MapScreenState extends State<MapScreen> {
                       final isRecent =
                           incidentTime != null &&
                           incidentTime.isAfter(thirtyDaysAgo);
-                      final hotspotId = hotspot['id'];
 
-                      // ✅ NEW: Check if user has supported this hotspot
                       final userHasSupported =
                           hotspot['user_has_supported'] ?? false;
 
-                      // First check the filter service (severity, category filters)
-                      // ✅ IMPORTANT: Pass current user ID to filter service
+                      // First check the filter service (severity, category, date filters)
                       if (!filterService.shouldShowHotspot(hotspot)) {
                         return false;
                       }
 
-                      // ✅ Special logic when date filter is active
-                      if (hasCustomDateRange) {
-                        // ✅ UPDATED: Include supporters in pending visibility
+                      // ✅ Special logic when date filter is active AND zoom >= 16.5
+                      if (hasCustomDateRange && _currentZoom >= 16.5) {
+                        // Show pending to authorized users
                         if (status == 'pending') {
                           return _canViewPending ||
                               isOwnHotspot ||
                               userHasSupported;
                         }
 
-                        // Exception 2: Always show rejected to owner
+                        // Always show rejected to owner
                         if (status == 'rejected') {
                           return isOwnHotspot;
                         }
 
-                        // Exception 3: Always show recent active crimes (within 30 days)
+                        // ✅ Show ALL approved hotspots within date range (no 30-day limit)
+                        if (status == 'approved') {
+                          return true; // Date filtering already handled by shouldShowHotspot
+                        }
+
+                        return false;
+                      }
+
+                      // ✅ Special logic when date filter is active but zoom < 16.5
+                      if (hasCustomDateRange && _currentZoom < 16.5) {
+                        if (status == 'pending') {
+                          return _canViewPending ||
+                              isOwnHotspot ||
+                              userHasSupported;
+                        }
+
+                        if (status == 'rejected') {
+                          return isOwnHotspot;
+                        }
+
+                        // Show recent crimes always
                         if (status == 'approved' &&
                             activeStatus == 'active' &&
                             isRecent) {
                           return true;
                         }
 
-                        // Exception 4: Always show recent inactive crimes (within 30 days)
                         if (status == 'approved' &&
                             activeStatus == 'inactive' &&
                             isRecent) {
                           return true;
-                        }
-
-                        // ✅ MAIN RULE: For older approved crimes (beyond 30 days)
-                        if (status == 'approved' && !isRecent) {
-                          // ✅ Below zoom 17.0: HIDE all old crimes
-                          if (_currentZoom < 17.0) {
-                            return false;
-                          }
-
-                          // ✅ At zoom 17.0+: SHOW crimes that are in clusters
-                          if (clusterHotspotIds != null) {
-                            return clusterHotspotIds.contains(hotspotId);
-                          }
-
-                          return false;
                         }
 
                         return false;
@@ -16560,7 +15249,6 @@ class _MapScreenState extends State<MapScreen> {
                       // ✅ NO DATE FILTER: Standard 30-day logic
                       if (_canAccessAllReports) return true;
 
-                      // ✅ UPDATED: Include supporters in pending visibility
                       if (status == 'pending') {
                         return _canViewPending ||
                             isOwnHotspot ||
@@ -16753,8 +15441,6 @@ class _MapScreenState extends State<MapScreen> {
                     );
                   },
                 ),
-
-                _buildHistoricalModeIndicator(),
 
                 // Safe Spots Marker Layer
                 if (_showSafeSpots)
@@ -23998,382 +22684,11 @@ class _MapScreenState extends State<MapScreen> {
   // Shows most critical threat first, with compact multi-alert display
   // ============================================
   Widget _buildProximityAlert() {
-    // Show nothing if no alerts
-    if (_proximityAlertType == 'none') {
+    if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
       return const SizedBox.shrink();
     }
 
-    // CASE 1: Both alerts active - Show most critical first
-    if (_proximityAlertType == 'both') {
-      // Determine which is more critical
-      final hotspotLevel =
-          _nearbyHotspots.first['crime_type']['level'] ?? 'low';
-      final heatmapLevel = _nearbyHeatmapClusters.first.dominantSeverity;
-      final hotspotDistance = _nearbyHotspots.first['distance'] as double;
-      final heatmapDistance = _calculateDistance(
-        _currentPosition!,
-        _nearbyHeatmapClusters.first.center,
-      );
-      final isInsideHeatmap =
-          heatmapDistance <= _nearbyHeatmapClusters.first.radius;
-
-      // Priority logic:
-      // 1. Inside heatmap zone = highest priority
-      // 2. Critical level crimes
-      // 3. High level crimes
-      // 4. Closer distance
-
-      bool showHeatmapFirst =
-          isInsideHeatmap ||
-          _getSeverityPriority(heatmapLevel) >
-              _getSeverityPriority(hotspotLevel) ||
-          (heatmapLevel == hotspotLevel && heatmapDistance < hotspotDistance);
-
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (showHeatmapFirst) ...[
-            _buildHeatmapAlert(),
-            const SizedBox(height: 6),
-            _buildCompactHotspotAlert(), // Compact version when secondary
-          ] else ...[
-            _buildHotspotAlert(),
-            const SizedBox(height: 6),
-            _buildCompactHeatmapAlert(), // Compact version when secondary
-          ],
-        ],
-      );
-    }
-
-    // CASE 2: Heatmap alert only
-    if (_proximityAlertType == 'heatmap') {
-      return _buildHeatmapAlert();
-    }
-
-    // CASE 3: Hotspot alert only (original behavior)
     return _buildHotspotAlert();
-  }
-
-  // Helper: Get numeric priority for severity levels
-  int _getSeverityPriority(String level) {
-    switch (level) {
-      case 'critical':
-        return 4;
-      case 'high':
-        return 3;
-      case 'medium':
-        return 2;
-      case 'low':
-        return 1;
-      default:
-        return 0;
-    }
-  }
-
-  // ============================================
-  // NEW: Compact versions for secondary alerts
-  // ============================================
-  Widget _buildCompactHotspotAlert() {
-    if (_nearbyHotspots.isEmpty) return const SizedBox.shrink();
-
-    final closestHotspot = _nearbyHotspots.first;
-    final crimeType = closestHotspot['crime_type'];
-    final distance = (closestHotspot['distance'] as double).round();
-    final level = crimeType['level'] ?? 'unknown';
-
-    Color alertColor = _getAlertColor(level);
-    Color textColor = level == 'low' ? Colors.black87 : Colors.white;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: alertColor.withOpacity(0.9),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: alertColor, width: 1.5),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.location_on, color: textColor, size: 12),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              '${crimeType['name']} • ${distance}m',
-              style: TextStyle(
-                color: textColor,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (_nearbyHotspots.length > 1)
-            Text(
-              '+${_nearbyHotspots.length - 1}',
-              style: TextStyle(color: textColor.withOpacity(0.7), fontSize: 10),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCompactHeatmapAlert() {
-    if (_nearbyHeatmapClusters.isEmpty) return const SizedBox.shrink();
-
-    final closestCluster = _nearbyHeatmapClusters.first;
-    final distanceToCenter = _calculateDistance(
-      _currentPosition!,
-      closestCluster.center,
-    );
-    final distanceToEdge = distanceToCenter - closestCluster.radius;
-    final isInside = distanceToCenter <= closestCluster.radius;
-    final level = closestCluster.dominantSeverity;
-
-    Color alertColor = _getAlertColor(level);
-    Color textColor = level == 'low' ? Colors.black87 : Colors.white;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: alertColor.withOpacity(0.9),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: alertColor, width: 1.5),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isInside ? Icons.dangerous : Icons.shield_outlined,
-            color: textColor,
-            size: 12,
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              isInside
-                  ? 'Danger! Crime hotzone • ${closestCluster.crimeCount} crimes' // CHANGED
-                  : 'Danger zone nearby • ${distanceToEdge.round().abs()}m',
-              style: TextStyle(
-                color: textColor,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (_nearbyHeatmapClusters.length > 1)
-            Text(
-              '+${_nearbyHeatmapClusters.length - 1}',
-              style: TextStyle(color: textColor.withOpacity(0.7), fontSize: 10),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // Helper: Centralized color logic
-  Color _getAlertColor(String level) {
-    switch (level) {
-      case 'critical':
-        return const Color.fromARGB(255, 247, 26, 10);
-      case 'high':
-        return const Color.fromARGB(255, 223, 106, 11);
-      case 'medium':
-        return const Color.fromARGB(155, 202, 130, 49);
-      case 'low':
-        return const Color.fromARGB(255, 216, 187, 23);
-      default:
-        return Colors.orange;
-    }
-  }
-
-  // ============================================
-  // NEW: Build heatmap-specific alert
-  // FIXED: Better distance display logic
-  // ============================================
-  Widget _buildHeatmapAlert() {
-    if (_nearbyHeatmapClusters.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    final closestCluster = _nearbyHeatmapClusters.first;
-    final distanceToCenter = _calculateDistance(
-      _currentPosition!,
-      closestCluster.center,
-    );
-    final distanceToEdge = distanceToCenter - closestCluster.radius;
-    final isInside = distanceToCenter <= closestCluster.radius;
-
-    // Determine alert severity based on cluster's dominant severity
-    final dominantSeverity = closestCluster.dominantSeverity;
-
-    Color alertColor;
-    IconData alertIcon;
-    Color textColor = Colors.white;
-    String alertEmoji;
-    String alertText;
-
-    switch (dominantSeverity) {
-      case 'critical':
-        alertColor = const Color.fromARGB(255, 247, 26, 10);
-        alertIcon = isInside ? Icons.dangerous_rounded : Icons.warning_rounded;
-        alertEmoji = isInside ? '🚨' : '⚠️';
-        break;
-      case 'high':
-        alertColor = const Color.fromARGB(255, 223, 106, 11);
-        alertIcon = isInside ? Icons.error_rounded : Icons.warning_rounded;
-        alertEmoji = isInside ? '🚨' : '⚠️';
-        break;
-      case 'medium':
-        alertColor = const Color.fromARGB(155, 202, 130, 49);
-        alertIcon = Icons.info_rounded;
-        alertEmoji = '⚠️';
-        break;
-      case 'low':
-        alertColor = const Color.fromARGB(255, 216, 187, 23);
-        alertIcon = Icons.info_outline_rounded;
-        alertEmoji = '⚠️';
-        textColor = Colors.black87;
-        break;
-      default:
-        alertColor = Colors.orange;
-        alertIcon = Icons.warning_outlined;
-        alertEmoji = '⚠️';
-    }
-
-    // Build alert text with accurate distance
-    if (isInside) {
-      // CHANGED: Remove "Inside" wording, show crime count
-      alertText =
-          'Danger! Crime hotzone • ${closestCluster.crimeCount} incidents';
-    } else {
-      // Keep approaching alert as is
-      final metersAway = distanceToEdge.round().abs();
-      alertText = 'Approaching crime zone • ${metersAway}m away';
-    }
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      decoration: BoxDecoration(
-        color: alertColor,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: alertColor.withOpacity(0.4),
-            blurRadius: 10,
-            spreadRadius: 1,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => _showHeatmapDetails(closestCluster),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Icon with pulsing animation if inside
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.25),
-                    shape: BoxShape.circle,
-                  ),
-                  child: isInside
-                      ? TweenAnimationBuilder<double>(
-                          duration: const Duration(milliseconds: 1000),
-                          tween: Tween(begin: 0.5, end: 1.0),
-                          curve: Curves.easeInOut,
-                          builder: (context, scale, child) {
-                            return Transform.scale(
-                              scale: scale,
-                              child: Icon(
-                                alertIcon,
-                                color: textColor,
-                                size: 14,
-                              ),
-                            );
-                          },
-                          onEnd: () {
-                            if (mounted) setState(() {});
-                          },
-                        )
-                      : Icon(alertIcon, color: textColor, size: 14),
-                ),
-
-                const SizedBox(width: 8),
-
-                // Content
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            alertEmoji,
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              alertText,
-                              style: TextStyle(
-                                color: textColor,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      // Show top crime types
-                      if (closestCluster.topCrimeTypes.isNotEmpty)
-                        Text(
-                          closestCluster.topCrimeTypes.take(2).join(', '),
-                          style: TextStyle(
-                            color: textColor.withOpacity(0.8),
-                            fontSize: 10,
-                            fontStyle: FontStyle.italic,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-
-                      // Additional zones nearby
-                      if (_nearbyHeatmapClusters.length > 1)
-                        Text(
-                          '+${_nearbyHeatmapClusters.length - 1} more danger zones nearby',
-                          style: TextStyle(
-                            color: textColor.withOpacity(0.8),
-                            fontSize: 10,
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-
-                // Chevron
-                Icon(
-                  Icons.chevron_right,
-                  color: textColor.withOpacity(0.7),
-                  size: 16,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   // ============================================
@@ -24513,21 +22828,12 @@ class _MapScreenState extends State<MapScreen> {
   // UPGRADED: Animated alert wrapper
   // ============================================
   Widget _buildAnimatedProximityAlert() {
-    if (_proximityAlertType == 'none') {
+    if (!_showProximityAlert) {
       return const SizedBox.shrink();
     }
 
-    // Use stronger animation if inside a heatmap zone
-    final isInsideHeatmap =
-        _nearbyHeatmapClusters.isNotEmpty &&
-        _calculateDistance(
-              _currentPosition!,
-              _nearbyHeatmapClusters.first.center,
-            ) <=
-            _nearbyHeatmapClusters.first.radius;
-
     return TweenAnimationBuilder<double>(
-      duration: Duration(milliseconds: isInsideHeatmap ? 1500 : 2000),
+      duration: Duration(milliseconds: 2000),
       tween: Tween(begin: -3.0, end: 3.0),
       curve: Curves.easeInOut,
       builder: (context, translateY, child) {
@@ -24625,7 +22931,11 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
             _buildFloatingDurationWidget(),
-            if (isDesktop) const MiniLegend(),
+            if (isDesktop)
+              MiniLegend(
+                heatmapStats: _heatmapStats,
+                isHeatmapVisible: _showHeatmap,
+              ),
           ],
         );
 
@@ -24695,7 +23005,10 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ),
                   ),
-                  const MiniLegend(),
+                  MiniLegend(
+                    heatmapStats: _heatmapStats,
+                    isHeatmapVisible: _showHeatmap,
+                  ),
                 ],
               )
             : QuickAccessScreen(
@@ -24783,7 +23096,10 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ),
                   ),
-                  const MiniLegend(),
+                  MiniLegend(
+                    heatmapStats: _heatmapStats,
+                    isHeatmapVisible: _showHeatmap,
+                  ),
                 ],
               )
             : _buildNotificationsScreen();
@@ -24934,7 +23250,10 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ),
                   ),
-                  const MiniLegend(),
+                  MiniLegend(
+                    heatmapStats: _heatmapStats,
+                    isHeatmapVisible: _showHeatmap,
+                  ),
                 ],
               )
             : SavePointScreen(
@@ -25069,7 +23388,10 @@ class _MapScreenState extends State<MapScreen> {
         children: [
           _buildMap(),
           // Add the Mini Legend here for profile screen
-          const MiniLegend(),
+          MiniLegend(
+            heatmapStats: _heatmapStats,
+            isHeatmapVisible: _showHeatmap,
+          ),
           if (_isLoading && _currentPosition == null)
             const Center(child: CircularProgressIndicator()),
           Positioned(
@@ -25202,2037 +23524,6 @@ class _MapScreenState extends State<MapScreen> {
               ),
       ),
     );
-  }
-
-  //HEAT MAP
-
-  // ============================================
-  // HEATMAP HELPER: Validate if crime is within time window
-  // ============================================
-
-  bool _isWithinHeatmapTimeWindow(Map<String, dynamic> crime) {
-    try {
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-      final crimeTime = parseStoredDateTime(crime['time']);
-
-      // ✅ If filter dates are set, use those instead of severity-based windows
-      if (filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null) {
-        bool isAfterStart =
-            filterService.crimeStartDate == null ||
-            crimeTime.isAfter(filterService.crimeStartDate!) ||
-            crimeTime.isAtSameMomentAs(filterService.crimeStartDate!);
-
-        bool isBeforeEnd =
-            filterService.crimeEndDate == null ||
-            crimeTime.isBefore(filterService.crimeEndDate!) ||
-            crimeTime.isAtSameMomentAs(filterService.crimeEndDate!);
-
-        return isAfterStart && isBeforeEnd;
-      }
-
-      // ✅ Otherwise, use severity-based time windows (live mode)
-      final level = crime['crime_type']['level'] ?? 'low';
-      final daysWindow = _severityTimeWindows[level] ?? 30;
-      final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
-
-      return crimeTime.isAfter(cutoffDate);
-    } catch (e) {
-      print('Error parsing crime time: $e');
-      return false;
-    }
-  }
-
-  // ============================================
-  // HEATMAP HELPER: Format crime with proper structure
-  // ============================================
-
-  Map<String, dynamic> _formatCrimeForHeatmap(Map<String, dynamic> crime) {
-    final crimeType = crime['crime_type'] ?? {};
-    return {
-      ...crime,
-      'crime_type': {
-        'id': crimeType['id'] ?? crime['type_id'],
-        'name': crimeType['name'] ?? 'Unknown',
-        'level': crimeType['level'] ?? 'unknown',
-        'category': crimeType['category'] ?? 'General',
-        'description': crimeType['description'],
-      },
-    };
-  }
-
-  // ============================================
-  // MODIFIED: Load heatmap data with proper filtering
-  // ============================================
-  Future<void> _loadHeatmapData() async {
-    try {
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-
-      final hasCustomDateRange =
-          filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null;
-
-      DateTime cutoffDate;
-
-      if (hasCustomDateRange) {
-        // ✅ Use custom start date if provided
-        cutoffDate =
-            filterService.crimeStartDate ??
-            DateTime(2000); // Very old date as fallback
-        print('📅 Loading crimes from custom date: $cutoffDate');
-      } else {
-        // ✅ Use severity-based time window for live mode
-        final maxTimeWindow = _severityTimeWindows.values.reduce(
-          (a, b) => a > b ? a : b,
-        );
-        cutoffDate = DateTime.now().subtract(Duration(days: maxTimeWindow));
-        print('🔴 Loading crimes from last $maxTimeWindow days');
-      }
-
-      // Build query
-      var query = Supabase.instance.client
-          .from('hotspot')
-          .select('''
-          id,
-          type_id,
-          location,
-          time,
-          status,
-          active_status,
-          created_by,
-          reported_by,
-          created_at,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-          .eq('status', 'approved')
-          .gte('time', cutoffDate.toIso8601String());
-
-      // Add end date filter if specified
-      if (filterService.crimeEndDate != null) {
-        // ✅ Include the entire end date (23:59:59.999)
-        final endOfDay = DateTime(
-          filterService.crimeEndDate!.year,
-          filterService.crimeEndDate!.month,
-          filterService.crimeEndDate!.day,
-          23,
-          59,
-          59,
-          999,
-        );
-        query = query.lte('time', endOfDay.toIso8601String());
-      }
-
-      final response = await query;
-
-      setState(() {
-        _heatmapCrimes = (response as List)
-            .map((crime) => _formatCrimeForHeatmap(crime))
-            .toList();
-      });
-
-      print(
-        '✅ Loaded ${_heatmapCrimes.length} crimes for heatmap '
-        '${hasCustomDateRange ? "(historical range)" : "(recent)"}',
-      );
-    } catch (e) {
-      print('Error loading heatmap data: $e');
-    }
-  }
-
-  // ============================================
-  // LOAD PERSISTENT CLUSTERS FROM DATABASE
-  // ============================================
-  Future<void> _loadPersistentClusters({int retryCount = 0}) async {
-    try {
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-
-      final hasCustomDateRange =
-          filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null;
-
-      var query = Supabase.instance.client.from('heatmap_clusters').select('''
-          *,
-          heatmap_cluster_crimes!inner(
-            hotspot_id,
-            is_still_active,
-            was_renewal_trigger,
-            added_at
-          )
-        ''');
-
-      if (hasCustomDateRange) {
-        // ✅ Load ALL clusters (active + inactive) that might contain crimes in the date range
-        query = query.or('status.eq.active,status.eq.inactive');
-      } else {
-        query = query.eq('status', 'active');
-      }
-
-      // ✅ Add timeout
-      final clustersResponse = await query.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw TimeoutException('Cluster load timeout'),
-      );
-
-      final clusters = clustersResponse as List;
-      final processedClusters = <Map<String, dynamic>>[];
-
-      for (final clusterData in clusters) {
-        final crimeLinks = clusterData['heatmap_cluster_crimes'] as List;
-        final hotspotIds = crimeLinks
-            .map((link) => link['hotspot_id'])
-            .toList();
-
-        if (hotspotIds.isEmpty) continue;
-
-        var crimeQuery = Supabase.instance.client
-            .from('hotspot')
-            .select('''
-            id,
-            type_id,
-            location,
-            time,
-            status,
-            active_status,
-            created_by,
-            reported_by,
-            created_at,
-            crime_type: type_id (id, name, level, category, description)
-          ''')
-            .inFilter('id', hotspotIds);
-
-        if (hasCustomDateRange) {
-          if (filterService.crimeStartDate != null) {
-            crimeQuery = crimeQuery.gte(
-              'time',
-              filterService.crimeStartDate!.toIso8601String(),
-            );
-          }
-          if (filterService.crimeEndDate != null) {
-            // ✅ Include the entire end date (23:59:59.999)
-            final endOfDay = DateTime(
-              filterService.crimeEndDate!.year,
-              filterService.crimeEndDate!.month,
-              filterService.crimeEndDate!.day,
-              23,
-              59,
-              59,
-              999,
-            );
-            crimeQuery = crimeQuery.lte('time', endOfDay.toIso8601String());
-          }
-        }
-
-        final crimesResponse = await crimeQuery.timeout(
-          const Duration(seconds: 10),
-        );
-
-        final crimes = (crimesResponse as List)
-            .map((crime) => _formatCrimeForHeatmap(crime))
-            .toList();
-
-        if (crimes.isEmpty) continue;
-
-        for (final crime in crimes) {
-          final link = crimeLinks.firstWhere(
-            (l) => l['hotspot_id'] == crime['id'],
-            orElse: () => {},
-          );
-          crime['is_still_active_in_cluster'] = link['is_still_active'] ?? true;
-          crime['was_renewal_trigger'] = link['was_renewal_trigger'] ?? false;
-        }
-
-        processedClusters.add({...clusterData, 'crimes': crimes});
-      }
-
-      // ✅ Only update if we got valid data
-      if (processedClusters.isNotEmpty || clusters.isEmpty) {
-        setState(() {
-          _persistentClusters = processedClusters;
-        });
-
-        print(
-          '✅ Loaded ${_persistentClusters.length} clusters '
-          '${hasCustomDateRange ? "(historical + active)" : "(active only)"}',
-        );
-      } else {
-        print(
-          '⚠️ Got empty response but expected data - keeping existing clusters',
-        );
-      }
-    } on TimeoutException catch (e) {
-      print('⏱️ Timeout loading clusters: $e');
-
-      // ✅ Retry once on timeout
-      if (retryCount < 1 && mounted) {
-        print('🔄 Retrying cluster load...');
-        await Future.delayed(const Duration(seconds: 2));
-        return _loadPersistentClusters(retryCount: retryCount + 1);
-      }
-    } catch (e) {
-      print('❌ Error loading persistent clusters: $e');
-
-      // ✅ Don't clear existing data on error
-      if (_persistentClusters.isNotEmpty) {
-        print('ℹ️ Keeping existing ${_persistentClusters.length} clusters');
-      }
-    }
-  }
-  // ============================================
-  // MODIFIED: Cleanup with persistent cluster awareness
-  // ============================================
-
-  void _cleanupExpiredHeatmapCrimes() async {
-    // ✅ CRITICAL FIX: Don't cleanup when user has custom date filter active
-    final filterService = Provider.of<HotspotFilterService>(
-      context,
-      listen: false,
-    );
-
-    final hasCustomDateRange =
-        filterService.crimeStartDate != null ||
-        filterService.crimeEndDate != null;
-
-    if (hasCustomDateRange) {
-      print('⏸️ Skipping crime cleanup - custom date range active');
-      return; // Early exit - preserve historical data
-    }
-
-    final beforeCount = _heatmapCrimes.length;
-
-    // Don't remove crimes that are in persistent clusters
-    final crimesInClusters = <int>{};
-
-    try {
-      final clusterCrimes = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id');
-
-      for (final link in clusterCrimes as List) {
-        crimesInClusters.add(link['hotspot_id']);
-      }
-    } catch (e) {
-      print('Error fetching cluster crimes: $e');
-    }
-
-    setState(() {
-      _heatmapCrimes.removeWhere((crime) {
-        // Keep if in a cluster OR still within time window
-        return !crimesInClusters.contains(crime['id']) &&
-            !_isWithinHeatmapTimeWindow(crime);
-      });
-    });
-
-    final removedCount = beforeCount - _heatmapCrimes.length;
-
-    if (removedCount > 0) {
-      print(
-        '🧹 Cleaned up $removedCount expired crimes (preserved cluster crimes)',
-      );
-      _scheduleHeatmapUpdate();
-    }
-  }
-
-  // ============================================
-  // MODIFIED: Calculation with persistent cluster logic
-  // ============================================
-
-  Future<void> _calculateHeatmap() async {
-    if (_isCalculatingHeatmap) return;
-
-    setState(() => _isCalculatingHeatmap = true);
-
-    try {
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-
-      final hasCustomDateRange =
-          filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null;
-
-      // ✅ ALWAYS process new crimes first (even in historical mode)
-      final validCrimes = _heatmapCrimes.where((crime) {
-        return crime['status'] == 'approved';
-      }).toList();
-
-      if (validCrimes.isNotEmpty) {
-        await _processCrimesAgainstPersistentClusters(validCrimes);
-      }
-
-      // ✅ Reload clusters after processing new crimes
-      await _loadPersistentClusters();
-
-      if (hasCustomDateRange) {
-        // ✅ HISTORICAL MODE: Display all clusters from date range
-        final displayClusters = _persistentClusters
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
-
-        setState(() {
-          _heatmapClusters = displayClusters;
-        });
-
-        print(
-          '✅ Historical heatmap displayed: ${displayClusters.length} clusters',
-        );
-      } else {
-        // ✅ LIVE MODE: Display only active clusters
-        final displayClusters = _persistentClusters
-            .where((pc) => pc['status'] == 'active')
-            .map((pc) => _convertPersistentToDisplayCluster(pc))
-            .toList();
-
-        setState(() {
-          _heatmapClusters = displayClusters;
-        });
-
-        print(
-          '✅ Live heatmap updated: ${displayClusters.length} active clusters',
-        );
-      }
-    } catch (e) {
-      print('Heatmap calculation error: $e');
-    } finally {
-      setState(() => _isCalculatingHeatmap = false);
-    }
-  }
-
-  // ============================================
-  // PROCESS CRIMES AGAINST PERSISTENT CLUSTERS
-  // ============================================
-  Future<void> _processCrimesAgainstPersistentClusters(
-    List<Map<String, dynamic>> crimes,
-  ) async {
-    if (crimes.isEmpty) return;
-
-    // Get existing crime IDs that are already in clusters
-    final existingCrimeIds = <int>{};
-    try {
-      final links = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id');
-
-      for (final link in links as List) {
-        existingCrimeIds.add(link['hotspot_id']);
-      }
-    } catch (e) {
-      print('Error fetching existing cluster crimes: $e');
-    }
-
-    final newCrimes = crimes
-        .where((c) => !existingCrimeIds.contains(c['id']))
-        .toList();
-
-    if (newCrimes.isEmpty) {
-      print('✅ No new crimes to process');
-      return;
-    }
-
-    print('🔄 Processing ${newCrimes.length} new crimes');
-
-    for (final crime in newCrimes) {
-      final crimePoint = LatLng(
-        crime['location']['coordinates'][1].toDouble(),
-        crime['location']['coordinates'][0].toDouble(),
-      );
-
-      // ⭐ Check if we're in historical mode (date filter active)
-      final filterService = Provider.of<HotspotFilterService>(
-        context,
-        listen: false,
-      );
-      final hasCustomDateRange =
-          filterService.crimeStartDate != null ||
-          filterService.crimeEndDate != null;
-
-      // ⭐ Only validate time window in LIVE mode
-      if (!hasCustomDateRange) {
-        final crimeTime = parseStoredDateTime(crime['time']);
-        final level = crime['crime_type']['level'] ?? 'low';
-        final daysWindow = _severityTimeWindows[level] ?? 30;
-        final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
-
-        final isCrimeValid = crimeTime.isAfter(cutoffDate);
-
-        if (!isCrimeValid) {
-          print(
-            '⚠️ Crime ${crime['id']} outside time window (${crime['time']}), skipping cluster assignment',
-          );
-          continue; // Skip this crime entirely in live mode
-        }
-      }
-
-      bool foundCluster = false;
-
-      // ⭐ ONLY check against ACTIVE clusters
-      final activeClusters = _persistentClusters
-          .where((c) => c['status'] == 'active')
-          .toList();
-
-      print(
-        '📍 Crime location: ${crimePoint.latitude}, ${crimePoint.longitude}',
-      );
-      print('🔍 Checking against ${activeClusters.length} active clusters...');
-
-      for (final cluster in activeClusters) {
-        final clusterCenter = LatLng(
-          cluster['center_lat'],
-          cluster['center_lng'],
-        );
-        final distance = _calculateDistance(clusterCenter, crimePoint);
-
-        print(
-          '   Active Cluster ${cluster['id']}: ${distance.toStringAsFixed(2)}m away',
-        );
-
-        if (distance <= _clusterMergeDistance) {
-          await _addCrimeToExistingCluster(cluster['id'], crime);
-          foundCluster = true;
-          print('✅ Added valid crime to active cluster ${cluster['id']}');
-          break;
-        }
-      }
-
-      // ⭐ NEW LOGIC: Check if we're in an expired cluster's territory
-      if (!foundCluster) {
-        final expiredClusters = _persistentClusters
-            .where((c) => c['status'] == 'inactive')
-            .toList();
-
-        bool isInExpiredClusterZone = false;
-
-        for (final expiredCluster in expiredClusters) {
-          final clusterCenter = LatLng(
-            expiredCluster['center_lat'],
-            expiredCluster['center_lng'],
-          );
-          final distance = _calculateDistance(clusterCenter, crimePoint);
-
-          if (distance <= _clusterMergeDistance) {
-            isInExpiredClusterZone = true;
-            print(
-              '🚫 Crime is within expired cluster ${expiredCluster['id']} territory (${distance.toStringAsFixed(2)}m)',
-            );
-            print(
-              '   Cannot create new cluster without sufficient nearby crimes',
-            );
-            break;
-          }
-        }
-
-        if (isInExpiredClusterZone) {
-          // ⭐ In expired cluster zone - need MORE crimes to justify new cluster
-          print(
-            '🔍 Checking if enough NEW crimes exist to override expired cluster zone...',
-          );
-          await _checkAndCreateNewClusterNearExpired(crime, crimes);
-        } else {
-          // ⭐ Not in any cluster zone - normal cluster creation rules
-          print(
-            '🆕 No nearby clusters (active or expired), attempting normal cluster creation...',
-          );
-          await _checkAndCreateNewCluster(crime, crimes);
-        }
-      }
-    }
-
-    await _updateAffectedClusters(newCrimes);
-  }
-
-  // ============================================
-  // NEW: Create cluster near expired cluster - stricter rules
-  // ============================================
-  Future<void> _checkAndCreateNewClusterNearExpired(
-    Map<String, dynamic> primaryCrime,
-    List<Map<String, dynamic>> allCrimes,
-  ) async {
-    try {
-      final primaryPoint = LatLng(
-        primaryCrime['location']['coordinates'][1].toDouble(),
-        primaryCrime['location']['coordinates'][0].toDouble(),
-      );
-
-      // Find nearby NEW crimes within merge distance
-      final nearbyCrimes = allCrimes.where((crime) {
-        if (crime['id'] == primaryCrime['id']) return true;
-
-        final crimePoint = LatLng(
-          crime['location']['coordinates'][1].toDouble(),
-          crime['location']['coordinates'][0].toDouble(),
-        );
-
-        final distance = _calculateDistance(primaryPoint, crimePoint);
-        return distance <= _clusterMergeDistance;
-      }).toList();
-
-      // ⭐ Filter: Only crimes with overlapping time windows
-      final validCrimes = _getCrimesWithOverlappingTimeWindows(nearbyCrimes);
-
-      // ⭐ Filter: Exclude crimes that are already in OTHER clusters
-      final existingLinks = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id')
-          .inFilter('hotspot_id', validCrimes.map((c) => c['id']).toList());
-
-      final crimesInClusters = (existingLinks as List)
-          .map((link) => link['hotspot_id'])
-          .toSet();
-
-      final availableCrimes = validCrimes
-          .where((c) => !crimesInClusters.contains(c['id']))
-          .toList();
-
-      if (availableCrimes.isEmpty) {
-        print('🚫 No available crimes near expired cluster');
-        return;
-      }
-
-      // ⭐ STRICTER RULES: Need MORE crimes to create cluster in expired zone
-      final criticalCount = availableCrimes
-          .where((c) => c['crime_type']['level'] == 'critical')
-          .length;
-      final highCount = availableCrimes
-          .where((c) => c['crime_type']['level'] == 'high')
-          .length;
-
-      bool canFormCluster = false;
-
-      // Rule 1: 1 critical + at least 1 other crime
-      if (criticalCount >= 1 && availableCrimes.length >= 2) {
-        canFormCluster = true;
-        print(
-          '✅ Cluster formation allowed: 1 critical + ${availableCrimes.length - criticalCount} other crime(s)',
-        );
-      }
-      // Rule 2: 2+ high-level crimes
-      else if (highCount >= 2) {
-        canFormCluster = true;
-        print('✅ Cluster formation allowed: $highCount high-level crimes');
-      }
-      // Rule 3: 3+ crimes of any level
-      else if (availableCrimes.length >= 3) {
-        canFormCluster = true;
-        print(
-          '✅ Cluster formation allowed: ${availableCrimes.length} crimes (minimum 3)',
-        );
-      }
-
-      if (!canFormCluster) {
-        print(
-          '🚫 NOT enough crimes to override expired cluster zone:\n'
-          '   Found: ${availableCrimes.length} crime(s), $criticalCount critical, $highCount high\n'
-          '   Need: 1 critical+1 other, OR 2 high, OR 3+ any level',
-        );
-        return;
-      }
-
-      // ✅ Create new cluster with stricter requirements met
-      final clusterData = _calculateClusterProperties(availableCrimes);
-
-      final clusterResponse = await Supabase.instance.client
-          .from('heatmap_clusters')
-          .insert({
-            'center_lat': clusterData['center'].latitude,
-            'center_lng': clusterData['center'].longitude,
-            'current_radius': clusterData['radius'],
-            'dominant_severity': clusterData['dominantSeverity'],
-            'intensity': clusterData['intensity'],
-            'active_crime_count': availableCrimes.length,
-            'total_crime_count': availableCrimes.length,
-            'status': 'active',
-            'first_crime_at': availableCrimes
-                .map((c) => DateTime.parse(c['time']))
-                .reduce((a, b) => a.isBefore(b) ? a : b)
-                .toIso8601String(),
-            'last_crime_at': availableCrimes
-                .map((c) => DateTime.parse(c['time']))
-                .reduce((a, b) => a.isAfter(b) ? a : b)
-                .toIso8601String(),
-            'deactivated_at': null,
-          })
-          .select()
-          .single();
-
-      final clusterId = clusterResponse['id'];
-
-      // Link all crimes
-      final crimeLinks = availableCrimes
-          .map(
-            (crime) => {
-              'cluster_id': clusterId,
-              'hotspot_id': crime['id'],
-              'is_still_active': true,
-              'was_renewal_trigger': false,
-            },
-          )
-          .toList();
-
-      await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .insert(crimeLinks);
-
-      print(
-        '✅ Created NEW cluster $clusterId NEAR expired cluster with ${availableCrimes.length} valid crimes\n'
-        '   (Override rules met)',
-      );
-    } catch (e) {
-      print('Error creating cluster near expired zone: $e');
-    }
-  }
-
-  // ============================================
-  // NEW: Update only clusters that were affected
-  // ============================================
-
-  Future<void> _updateAffectedClusters(
-    List<Map<String, dynamic>> affectedCrimes,
-  ) async {
-    if (affectedCrimes.isEmpty) return;
-
-    try {
-      // Get cluster IDs that contain these crimes
-      final crimeIds = affectedCrimes.map((c) => c['id']).toList();
-
-      final links = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('cluster_id')
-          .inFilter('hotspot_id', crimeIds);
-
-      final affectedClusterIds = (links as List)
-          .map((link) => link['cluster_id'])
-          .toSet()
-          .toList();
-
-      if (affectedClusterIds.isEmpty) return;
-
-      print('🔧 Updating ${affectedClusterIds.length} affected clusters');
-
-      // Update only these clusters
-      for (final clusterId in affectedClusterIds) {
-        final cluster = _persistentClusters.firstWhere(
-          (c) => c['id'] == clusterId,
-          orElse: () => {},
-        );
-
-        if (cluster.isEmpty) continue;
-
-        await _updateSingleCluster(clusterId, cluster);
-      }
-    } catch (e) {
-      print('Error updating affected clusters: $e');
-    }
-  }
-
-  // ============================================
-  // NEW: Update a single cluster
-  // ============================================
-
-  Future<void> _updateSingleCluster(
-    String clusterId,
-    Map<String, dynamic> cluster,
-  ) async {
-    try {
-      final crimes = cluster['crimes'] as List<Map<String, dynamic>>;
-
-      if (crimes.isEmpty) {
-        await Supabase.instance.client
-            .from('heatmap_clusters')
-            .update({
-              'status': 'inactive',
-              'deactivated_at': DateTime.now().toIso8601String(),
-              'active_crime_count': 0,
-            })
-            .eq('id', clusterId);
-        return;
-      }
-
-      // Count active crimes
-      int activeCrimeCount = 0;
-      for (final crime in crimes) {
-        final isActive = _isWithinHeatmapTimeWindow(crime);
-        if (isActive) activeCrimeCount++;
-      }
-
-      if (activeCrimeCount == 0) {
-        await Supabase.instance.client
-            .from('heatmap_clusters')
-            .update({
-              'status': 'inactive',
-              'deactivated_at': DateTime.now().toIso8601String(),
-              'active_crime_count': 0,
-            })
-            .eq('id', clusterId);
-        return;
-      }
-
-      // Recalculate properties
-      final activeCrimes = crimes
-          .where((c) => _isWithinHeatmapTimeWindow(c))
-          .toList();
-      final clusterData = _calculateClusterProperties(activeCrimes);
-
-      final reductionFactor = activeCrimeCount / crimes.length;
-      final adjustedRadius = (clusterData['radius'] * reductionFactor).clamp(
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['min']!, // ⭐ CHANGED
-        _severityRadiusConfig[clusterData['dominantSeverity']]!['max']!, // ⭐ CHANGED
-      );
-
-      await Supabase.instance.client
-          .from('heatmap_clusters')
-          .update({
-            'current_radius': adjustedRadius,
-            'dominant_severity': clusterData['dominantSeverity'],
-            'intensity': clusterData['intensity'],
-            'active_crime_count': activeCrimeCount,
-            'last_recalculated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', clusterId);
-    } catch (e) {
-      print('Error updating single cluster: $e');
-    }
-  }
-
-  // ============================================
-  // REFRESH SETTINGS (call after admin updates)
-  // ============================================
-  Future<void> refreshHeatmapSettings() async {
-    _heatmapSettings.clearCache();
-    await _loadHeatmapSettings();
-
-    // Recalculate heatmap with new settings
-    await _calculateHeatmap();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Heatmap settings updated successfully'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
-  // ============================================
-  // MODIFIED: Add crime and recalculate cluster properties
-  // ============================================
-
-  Future<void> _addCrimeToExistingCluster(
-    String clusterId,
-    Map<String, dynamic> crime,
-  ) async {
-    try {
-      // Check if crime already exists in cluster
-      final existingLink = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select()
-          .eq('cluster_id', clusterId)
-          .eq('hotspot_id', crime['id'])
-          .maybeSingle();
-
-      if (existingLink != null) {
-        // Crime already in cluster, just update its active status
-        final isActive = _isWithinHeatmapTimeWindow(crime);
-
-        await Supabase.instance.client
-            .from('heatmap_cluster_crimes')
-            .update({'is_still_active': isActive})
-            .eq('cluster_id', clusterId)
-            .eq('hotspot_id', crime['id']);
-
-        print('Updated existing crime ${crime['id']} in cluster $clusterId');
-        return;
-      }
-
-      // Add new crime to cluster
-      final isActive = _isWithinHeatmapTimeWindow(crime);
-      final isRenewal = !isActive; // If crime is outside window, it's renewal
-
-      await Supabase.instance.client.from('heatmap_cluster_crimes').insert({
-        'cluster_id': clusterId,
-        'hotspot_id': crime['id'],
-        'is_still_active': isActive,
-        'was_renewal_trigger': isRenewal,
-      });
-
-      // ⭐ NEW: Fetch ALL crimes in this cluster to recalculate properties
-      final clusterCrimesResponse = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('hotspot_id')
-          .eq('cluster_id', clusterId);
-
-      final allHotspotIds = (clusterCrimesResponse as List)
-          .map((link) => link['hotspot_id'])
-          .toList();
-
-      final allCrimesResponse = await Supabase.instance.client
-          .from('hotspot')
-          .select('''
-          id,
-          type_id,
-          location,
-          time,
-          status,
-          active_status,
-          created_by,
-          reported_by,
-          created_at,
-          crime_type: type_id (id, name, level, category, description)
-        ''')
-          .inFilter('id', allHotspotIds);
-
-      final allCrimes = (allCrimesResponse as List)
-          .map((c) => _formatCrimeForHeatmap(c))
-          .toList();
-
-      // Get only active crimes for property calculation
-      final activeCrimes = allCrimes
-          .where((c) => _isWithinHeatmapTimeWindow(c))
-          .toList();
-
-      if (activeCrimes.isEmpty) {
-        print(
-          '⚠️ No active crimes in cluster after addition, this should not happen',
-        );
-        return;
-      }
-
-      // Recalculate cluster properties with ALL active crimes
-      final clusterData = _calculateClusterProperties(activeCrimes);
-
-      final reductionFactor = activeCrimes.length / allCrimes.length;
-
-      // Get current cluster radius from database
-      final currentClusterData = await Supabase.instance.client
-          .from('heatmap_clusters')
-          .select('current_radius')
-          .eq('id', clusterId)
-          .single();
-
-      final currentRadius = currentClusterData['current_radius'].toDouble();
-
-      // Allow radius to expand beyond current radius if new crimes justify it
-      final calculatedRadius = clusterData['radius'] * reductionFactor;
-      final newRadius = calculatedRadius.clamp(
-        SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['min']!,
-        SEVERITY_RADIUS_CONFIG[clusterData['dominantSeverity']]!['max']!,
-      );
-
-      // Take the LARGER of current radius or newly calculated radius
-      final finalRadius = newRadius > currentRadius ? newRadius : currentRadius;
-
-      await Supabase.instance.client
-          .from('heatmap_clusters')
-          .update({
-            'center_lat': clusterData['center'].latitude,
-            'center_lng': clusterData['center'].longitude,
-            'current_radius': finalRadius, // Changed from newRadius
-            'dominant_severity': clusterData['dominantSeverity'],
-            'intensity': clusterData['intensity'],
-            'active_crime_count': activeCrimes.length,
-            'total_crime_count': allCrimes.length,
-            'last_crime_at': crime['time'],
-            'last_recalculated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', clusterId);
-
-      print('✅ Added crime ${crime['id']} to cluster $clusterId');
-      print(
-        '   Updated: ${activeCrimes.length} active/${allCrimes.length} total, radius: ${finalRadius.toStringAsFixed(0)}m',
-      );
-    } catch (e) {
-      print('Error adding crime to cluster: $e');
-    }
-  }
-
-  // ============================================
-  // CHECK AND CREATE NEW CLUSTER
-  // ============================================
-
-  Future<void> _checkAndCreateNewCluster(
-    Map<String, dynamic> primaryCrime,
-    List<Map<String, dynamic>> allCrimes,
-  ) async {
-    try {
-      final primaryPoint = LatLng(
-        primaryCrime['location']['coordinates'][1].toDouble(),
-        primaryCrime['location']['coordinates'][0].toDouble(),
-      );
-
-      // Find nearby crimes within merge distance
-      final nearbyCrimes = allCrimes.where((crime) {
-        if (crime['id'] == primaryCrime['id']) return true;
-
-        final crimePoint = LatLng(
-          crime['location']['coordinates'][1].toDouble(),
-          crime['location']['coordinates'][0].toDouble(),
-        );
-
-        final distance = _calculateDistance(primaryPoint, crimePoint);
-        return distance <= _clusterMergeDistance;
-      }).toList();
-
-      // ⭐ NEW LOGIC: Check time window overlap
-      // Crimes must have OVERLAPPING time windows to form a cluster
-      final validCrimes = _getCrimesWithOverlappingTimeWindows(nearbyCrimes);
-
-      if (validCrimes.isEmpty) {
-        print('⚠️ No crimes with overlapping time windows');
-        return;
-      }
-
-      // ⭐ Count only VALID crimes for cluster formation rules
-      final criticalCount = validCrimes
-          .where((c) => c['crime_type']['level'] == 'critical')
-          .length;
-      final highCount = validCrimes
-          .where((c) => c['crime_type']['level'] == 'high')
-          .length;
-
-      bool canFormCluster = false;
-
-      if (validCrimes.length >= _minCrimesForCluster) {
-        canFormCluster = true;
-      } else if (criticalCount >= 1 && validCrimes.length >= 2) {
-        canFormCluster = true;
-      } else if (highCount >= 2) {
-        canFormCluster = true;
-      }
-
-      if (!canFormCluster) {
-        print(
-          '⚠️ Not enough crimes to form cluster (${validCrimes.length} crimes with overlapping windows)',
-        );
-        return;
-      }
-
-      // Check if these crimes already belong to another cluster
-      final crimeIds = validCrimes.map((c) => c['id']).toList();
-      final existingLinks = await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .select('cluster_id')
-          .inFilter('hotspot_id', crimeIds);
-
-      if ((existingLinks as List).isNotEmpty) {
-        print('⚠️ Crimes already belong to existing clusters, skipping');
-        return;
-      }
-
-      // Calculate cluster properties with valid crimes
-      final clusterData = _calculateClusterProperties(validCrimes);
-
-      // ⭐ FIXED: Properly determine if crimes are currently active
-      // Check if ANY crime in the cluster is still within its time window FROM NOW
-      int activeCrimeCount = 0;
-      final now = DateTime.now();
-
-      for (final crime in validCrimes) {
-        final crimeTime = parseStoredDateTime(crime['time']);
-        final level = crime['crime_type']['level'] ?? 'low';
-        final daysWindow = _severityTimeWindows[level] ?? 30;
-        final expirationDate = crimeTime.add(Duration(days: daysWindow));
-
-        // Check if crime is still valid TODAY
-        if (now.isBefore(expirationDate)) {
-          activeCrimeCount++;
-        }
-      }
-
-      final clusterStatus = activeCrimeCount > 0 ? 'active' : 'inactive';
-
-      print(
-        '📊 Cluster status check: $activeCrimeCount/${validCrimes.length} crimes still active TODAY',
-      );
-
-      // Create new persistent cluster
-      final clusterResponse = await Supabase.instance.client
-          .from('heatmap_clusters')
-          .insert({
-            'center_lat': clusterData['center'].latitude,
-            'center_lng': clusterData['center'].longitude,
-            'current_radius': clusterData['radius'],
-            'dominant_severity': clusterData['dominantSeverity'],
-            'intensity': clusterData['intensity'],
-            'active_crime_count': activeCrimeCount,
-            'total_crime_count': validCrimes.length,
-            'status': clusterStatus,
-            'first_crime_at': validCrimes
-                .map((c) => DateTime.parse(c['time']))
-                .reduce((a, b) => a.isBefore(b) ? a : b)
-                .toIso8601String(),
-            'last_crime_at': validCrimes
-                .map((c) => DateTime.parse(c['time']))
-                .reduce((a, b) => a.isAfter(b) ? a : b)
-                .toIso8601String(),
-            'deactivated_at': clusterStatus == 'inactive'
-                ? now.toIso8601String()
-                : null,
-          })
-          .select()
-          .single();
-
-      final clusterId = clusterResponse['id'];
-
-      // Link all valid crimes with proper active status
-      final crimeLinks = validCrimes.map((crime) {
-        final crimeTime = parseStoredDateTime(crime['time']);
-        final level = crime['crime_type']['level'] ?? 'low';
-        final daysWindow = _severityTimeWindows[level] ?? 30;
-        final expirationDate = crimeTime.add(Duration(days: daysWindow));
-        final isStillActive = now.isBefore(expirationDate);
-
-        return {
-          'cluster_id': clusterId,
-          'hotspot_id': crime['id'],
-          'is_still_active': isStillActive,
-          'was_renewal_trigger': false,
-        };
-      }).toList();
-
-      await Supabase.instance.client
-          .from('heatmap_cluster_crimes')
-          .insert(crimeLinks);
-
-      print(
-        '✅ Created $clusterStatus cluster $clusterId with ${validCrimes.length} crimes '
-        '($activeCrimeCount active) - overlapping time windows verified',
-      );
-    } catch (e) {
-      print('Error creating new cluster: $e');
-    }
-  }
-
-  // ============================================
-  // NEW: Get crimes that have overlapping time windows
-  // ============================================
-  List<Map<String, dynamic>> _getCrimesWithOverlappingTimeWindows(
-    List<Map<String, dynamic>> crimes,
-  ) {
-    if (crimes.isEmpty) return [];
-
-    // Calculate time window for each crime (start time -> end of validity)
-    final crimeWindows = crimes.map((crime) {
-      final crimeTime = parseStoredDateTime(crime['time']);
-      final level = crime['crime_type']['level'] ?? 'low';
-      final daysWindow = _severityTimeWindows[level] ?? 30;
-
-      return {
-        'crime': crime,
-        'startTime': crimeTime,
-        'endTime': crimeTime.add(Duration(days: daysWindow)),
-      };
-    }).toList();
-
-    // Sort by start time
-    crimeWindows.sort(
-      (a, b) =>
-          (a['startTime'] as DateTime).compareTo(b['startTime'] as DateTime),
-    );
-
-    // Find the largest group of crimes with overlapping windows
-    final groups = <List<Map<String, dynamic>>>[];
-
-    for (var i = 0; i < crimeWindows.length; i++) {
-      final currentCrime = crimeWindows[i];
-      final currentStart = currentCrime['startTime'] as DateTime;
-      final currentEnd = currentCrime['endTime'] as DateTime;
-
-      // Start a new group with this crime
-      final group = [currentCrime['crime'] as Map<String, dynamic>];
-
-      // Find all crimes that overlap with this crime's window
-      for (var j = 0; j < crimeWindows.length; j++) {
-        if (i == j) continue;
-
-        final otherCrime = crimeWindows[j];
-        final otherStart = otherCrime['startTime'] as DateTime;
-        final otherEnd = otherCrime['endTime'] as DateTime;
-
-        // Check if windows overlap
-        // Two windows overlap if: start1 < end2 AND start2 < end1
-        final overlaps =
-            currentStart.isBefore(otherEnd) && otherStart.isBefore(currentEnd);
-
-        if (overlaps && !group.contains(otherCrime['crime'])) {
-          group.add(otherCrime['crime'] as Map<String, dynamic>);
-        }
-      }
-
-      groups.add(group);
-    }
-
-    // Return the largest group (most crimes with overlapping windows)
-    if (groups.isEmpty) return [];
-
-    groups.sort((a, b) => b.length.compareTo(a.length));
-    final largestGroup = groups.first;
-
-    print(
-      '🔍 Time window analysis: ${largestGroup.length}/${crimes.length} crimes have overlapping windows',
-    );
-
-    // Log the time windows for debugging
-    for (final crime in largestGroup) {
-      final crimeTime = parseStoredDateTime(crime['time']);
-      final level = crime['crime_type']['level'] ?? 'low';
-      final daysWindow = _severityTimeWindows[level] ?? 30;
-      final endTime = crimeTime.add(Duration(days: daysWindow));
-
-      print(
-        '   Crime ${crime['id']} ($level): ${crimeTime.toString().split('.')[0]} -> ${endTime.toString().split('.')[0]}',
-      );
-    }
-
-    return largestGroup;
-  }
-
-  // ============================================
-  // CALCULATE CLUSTER PROPERTIES
-  // ============================================
-
-  Map<String, dynamic> _calculateClusterProperties(
-    List<Map<String, dynamic>> crimes,
-  ) {
-    double totalLat = 0;
-    double totalLng = 0;
-    double totalWeight = 0;
-    final breakdown = <String, int>{
-      'critical': 0,
-      'high': 0,
-      'medium': 0,
-      'low': 0,
-    };
-    double intensity = 0.0;
-
-    String dominantSeverity = 'low';
-    int maxSeverityCount = 0;
-
-    for (final crime in crimes) {
-      final coords = crime['location']['coordinates'];
-      final point = LatLng(coords[1].toDouble(), coords[0].toDouble());
-      final level = crime['crime_type']['level'] ?? 'low';
-      final weight = _severityWeights[level] ?? 0.25;
-
-      totalLat += point.latitude * weight;
-      totalLng += point.longitude * weight;
-      totalWeight += weight;
-      intensity += weight;
-
-      breakdown[level] = (breakdown[level] ?? 0) + 1;
-
-      if (breakdown[level]! > maxSeverityCount) {
-        maxSeverityCount = breakdown[level]!;
-        dominantSeverity = level;
-      }
-
-      if (level == 'critical') {
-        dominantSeverity = 'critical';
-      }
-    }
-
-    final center = LatLng(totalLat / totalWeight, totalLng / totalWeight);
-
-    // Calculate radius
-    double maxDistance = 0;
-    for (final crime in crimes) {
-      final coords = crime['location']['coordinates'];
-      final point = LatLng(coords[1].toDouble(), coords[0].toDouble());
-      final distance = _calculateDistance(center, point);
-      if (distance > maxDistance) maxDistance = distance;
-    }
-
-    final config = SEVERITY_RADIUS_CONFIG[dominantSeverity]!;
-    final baseRadius = config['base']!;
-    final countMultiplier = crimes.length * config['countMultiplier']!;
-    final intensityMultiplier = intensity * config['intensityMultiplier']!;
-
-    final calculatedRadius =
-        maxDistance + baseRadius + countMultiplier + intensityMultiplier;
-    final radius = calculatedRadius.clamp(config['min']!, config['max']!);
-
-    return {
-      'center': center,
-      'radius': radius,
-      'intensity': intensity,
-      'dominantSeverity': dominantSeverity,
-      'breakdown': breakdown,
-    };
-  }
-
-  // ============================================
-  // CONVERT PERSISTENT CLUSTER TO DISPLAY CLUSTER
-  // ============================================
-
-  HeatmapCluster _convertPersistentToDisplayCluster(
-    Map<String, dynamic> persistentCluster,
-  ) {
-    final crimes = persistentCluster['crimes'] as List<Map<String, dynamic>>;
-
-    // Separate active and inactive crimes
-    crimes.where((c) => c['is_still_active_in_cluster'] == true).toList();
-
-    // Build breakdown from ALL crimes (for historical reference)
-    final breakdown = <String, int>{
-      'critical': 0,
-      'high': 0,
-      'medium': 0,
-      'low': 0,
-    };
-
-    for (final crime in crimes) {
-      final level = crime['crime_type']['level'] ?? 'low';
-      breakdown[level] = (breakdown[level] ?? 0) + 1;
-    }
-
-    // Get top crime types from ALL crimes
-    final crimeTypeCount = <String, int>{};
-    for (final crime in crimes) {
-      final crimeType = crime['crime_type']['name'] ?? 'Unknown';
-      crimeTypeCount[crimeType] = (crimeTypeCount[crimeType] ?? 0) + 1;
-    }
-
-    final sortedTypes = crimeTypeCount.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final topTypes = sortedTypes.take(3).map((e) => e.key).toList();
-
-    return HeatmapCluster(
-      center: LatLng(
-        persistentCluster['center_lat'],
-        persistentCluster['center_lng'],
-      ),
-      radius: persistentCluster['current_radius'].toDouble(),
-      intensity: persistentCluster['intensity'].toDouble(),
-      crimeCount: crimes.length, // Total crimes (historical + active)
-      crimeBreakdown: breakdown,
-      topCrimeTypes: topTypes,
-      crimes: crimes, // ALL crimes (for historical reference)
-      dominantSeverity: persistentCluster['dominant_severity'],
-      status: persistentCluster['status'] ?? 'active',
-    );
-  }
-
-  // ============================================
-  // SEVERITY-BASED RADIUS RANGES
-  // ============================================
-  static const Map<String, Map<String, double>> SEVERITY_RADIUS_CONFIG = {
-    'critical': {
-      'base': 200.0,
-      'min': 250.0,
-      'max': 1200.0,
-      'countMultiplier': 15.0,
-      'intensityMultiplier': 50.0,
-    },
-    'high': {
-      'base': 150.0,
-      'min': 200.0,
-      'max': 900.0,
-      'countMultiplier': 10.0,
-      'intensityMultiplier': 30.0,
-    },
-    'medium': {
-      'base': 100.0,
-      'min': 150.0,
-      'max': 600.0,
-      'countMultiplier': 8.0,
-      'intensityMultiplier': 25.0,
-    },
-    'low': {
-      'base': 80.0,
-      'min': 100.0,
-      'max': 400.0,
-      'countMultiplier': 5.0,
-      'intensityMultiplier': 20.0,
-    },
-  };
-
-  // Calculate distance between two points (Haversine formula)
-
-  // ============================================
-  // HEATMAP VISUALIZATION
-  // ============================================
-
-  // Color gradient for heatmap - UPDATED for better color distribution
-  Color _getHeatmapColor(double intensity) {
-    // Normalize intensity to 0-1 range for better color distribution
-    final normalized = (intensity / 5.0).clamp(
-      0.0,
-      1.0,
-    ); // Assuming max intensity ~5
-
-    if (normalized < 0.25) {
-      return Color.lerp(Colors.yellow, Colors.orange, normalized * 4)!;
-    } else if (normalized < 0.5) {
-      return Color.lerp(
-        Colors.orange,
-        Colors.deepOrange,
-        (normalized - 0.25) * 4,
-      )!;
-    } else if (normalized < 0.75) {
-      return Color.lerp(Colors.deepOrange, Colors.red, (normalized - 0.5) * 4)!;
-    } else {
-      return Color.lerp(
-        Colors.red,
-        Colors.red.shade900,
-        (normalized - 0.75) * 4,
-      )!;
-    }
-  }
-
-  // ============================================
-  // IMPROVED: Heatmap visualization with better visibility for expired clusters
-  // ============================================
-  Widget _buildHeatmapLayer() {
-    if (!_showHeatmap || _heatmapClusters.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    double fillOpacity;
-    double borderOpacity;
-    double radiusMultiplier;
-    double borderWidth;
-    bool useTripleLayer = false;
-
-    if (_currentZoom < 8.0) {
-      fillOpacity = 0.55;
-      borderOpacity = 0.75;
-      radiusMultiplier = 3.0;
-      borderWidth = 4;
-      useTripleLayer = true;
-    } else if (_currentZoom < 10.0) {
-      fillOpacity = 0.5;
-      borderOpacity = 0.7;
-      radiusMultiplier = 2.2;
-      borderWidth = 3.5;
-      useTripleLayer = true;
-    } else if (_currentZoom < 12.5) {
-      fillOpacity = 0.45;
-      borderOpacity = 0.65;
-      radiusMultiplier = 1.4;
-      borderWidth = 3;
-    } else if (_currentZoom < 13.0) {
-      fillOpacity = 0.35;
-      borderOpacity = 0.55;
-      radiusMultiplier = 0.85;
-      borderWidth = 2;
-    } else {
-      fillOpacity = 0.3;
-      borderOpacity = 0.5;
-      radiusMultiplier = 0.7;
-      borderWidth = 2;
-    }
-
-    return Stack(
-      children: [
-        // Outer glow layer
-        if (useTripleLayer)
-          CircleLayer(
-            circles: _heatmapClusters.map((cluster) {
-              final isExpired = _isClusterExpired(cluster);
-              final color = isExpired
-                  ? Colors
-                        .blueGrey
-                        .shade400 // ⭐ Alternative: Blue-grey for historical
-                  : _getHeatmapColor(cluster.intensity);
-
-              return CircleMarker(
-                point: cluster.center,
-                radius: cluster.radius * radiusMultiplier * 1.3,
-                color: color.withOpacity(
-                  fillOpacity * (isExpired ? 0.28 : 0.2),
-                ),
-                borderColor: Colors.transparent,
-                borderStrokeWidth: 0,
-                useRadiusInMeter: true,
-              );
-            }).toList(),
-          ),
-
-        // Middle glow layer
-        if (useTripleLayer)
-          CircleLayer(
-            circles: _heatmapClusters.map((cluster) {
-              final isExpired = _isClusterExpired(cluster);
-              final color = isExpired
-                  ? Colors.blueGrey.shade500
-                  : _getHeatmapColor(cluster.intensity);
-
-              return CircleMarker(
-                point: cluster.center,
-                radius: cluster.radius * radiusMultiplier * 1.15,
-                color: color.withOpacity(
-                  fillOpacity * (isExpired ? 0.38 : 0.35),
-                ),
-                borderColor: Colors.transparent,
-                borderStrokeWidth: 0,
-                useRadiusInMeter: true,
-              );
-            }).toList(),
-          ),
-
-        // Main heatmap layer
-        CircleLayer(
-          circles: _heatmapClusters.map((cluster) {
-            final isExpired = _isClusterExpired(cluster);
-            final fillColor = isExpired
-                ? Colors.blueGrey.shade600
-                : _getHeatmapColor(cluster.intensity);
-            final borderColor = isExpired
-                ? _getSeverityColor(
-                    cluster,
-                  ) // ⭐ Severity-based border for expired
-                : _getHeatmapColor(cluster.intensity);
-
-            return CircleMarker(
-              point: cluster.center,
-              radius: cluster.radius * radiusMultiplier,
-              color: fillColor.withOpacity(
-                fillOpacity * (isExpired ? 0.5 : 1.0),
-              ),
-              borderColor: borderColor.withOpacity(
-                borderOpacity * (isExpired ? 0.8 : 1.0),
-              ),
-              borderStrokeWidth: isExpired ? borderWidth * 1.0 : borderWidth,
-              useRadiusInMeter: true,
-            );
-          }).toList(),
-        ),
-      ],
-    );
-  }
-
-  // ============================================
-  // NEW: Check if cluster is expired (all crimes outside time windows)
-  // ============================================
-  bool _isClusterExpired(HeatmapCluster cluster) {
-    // Find corresponding persistent cluster
-    for (final pc in _persistentClusters) {
-      final pcCenter = LatLng(pc['center_lat'], pc['center_lng']);
-      if (_calculateDistance(cluster.center, pcCenter) < 10.0) {
-        return pc['status'] == 'inactive';
-      }
-    }
-    return false;
-  }
-
-  // ============================================
-  // NEW: Get severity color for expired clusters
-  // ============================================
-  Color _getSeverityColor(HeatmapCluster cluster) {
-    // Use the cluster's dominantSeverity directly
-    final severity = cluster.dominantSeverity;
-
-    switch (severity.toLowerCase()) {
-      case 'critical':
-        return Colors.red.shade900;
-      case 'high':
-        return Colors.deepOrange;
-      case 'medium':
-        return Colors.orange;
-      case 'low':
-        return Colors.yellow.shade700;
-      default:
-        return Colors.blueGrey.shade700;
-    }
-  }
-
-  Widget _buildHeatmapMarkers() {
-    if (!_showHeatmap || _heatmapClusters.isEmpty || _currentZoom < 13.0) {
-      return const SizedBox.shrink();
-    }
-
-    return MarkerLayer(
-      markers: _heatmapClusters.map((cluster) {
-        final isExpired = _isClusterExpired(cluster);
-        final fillColor = isExpired
-            ? Colors.blueGrey.shade700
-            : _getHeatmapColor(cluster.intensity);
-        final borderColor = isExpired
-            ? _getSeverityColor(cluster) // ⭐ Severity-based border for expired
-            : _getHeatmapColor(cluster.intensity);
-
-        return Marker(
-          point: cluster.center,
-          width: 60,
-          height: 60,
-          child: GestureDetector(
-            onTap: () => _showHeatmapDetails(cluster),
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: fillColor.withOpacity(isExpired ? 0.15 : 0.1),
-                border: Border.all(color: borderColor, width: 2),
-              ),
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      '${cluster.crimeCount}',
-                      style: TextStyle(
-                        color: fillColor,
-                        fontWeight: isExpired
-                            ? FontWeight.w600
-                            : FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    if (isExpired)
-                      Icon(
-                        Icons.history,
-                        size: 12,
-                        color: fillColor.withOpacity(0.8),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  // ============================================
-  // FIXED: Responsive Heatmap details with proper parsing
-  // ============================================
-
-  void _showHeatmapDetails(HeatmapCluster cluster) {
-    // Find corresponding persistent cluster
-    Map<String, dynamic>? persistentCluster;
-    for (final pc in _persistentClusters) {
-      final pcCenter = LatLng(pc['center_lat'], pc['center_lng']);
-      if (_calculateDistance(cluster.center, pcCenter) < 10.0) {
-        persistentCluster = pc;
-        break;
-      }
-    }
-
-    final isExpiredCluster = persistentCluster?['status'] == 'inactive';
-
-    // ⭐ FIXED: Categorize crimes based on individual time windows
-    final activeCrimes = <Map<String, dynamic>>[];
-    final historicalCrimes = <Map<String, dynamic>>[];
-
-    for (final crime in cluster.crimes) {
-      final crimeTime = parseStoredDateTime(crime['time']);
-      final level = crime['crime_type']['level'] ?? 'low';
-      final daysWindow = _severityTimeWindows[level] ?? 30;
-      final cutoffDate = DateTime.now().subtract(Duration(days: daysWindow));
-
-      if (crimeTime.isAfter(cutoffDate) && !isExpiredCluster) {
-        activeCrimes.add(crime);
-      } else {
-        historicalCrimes.add(crime);
-      }
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        // Get screen size
-        final screenWidth = MediaQuery.of(context).size.width;
-        final screenHeight = MediaQuery.of(context).size.height;
-        final isMobile = screenWidth < 600;
-
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(isMobile ? 20 : 16),
-          ),
-          insetPadding: isMobile
-              ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
-              : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
-          child: Container(
-            width: isMobile ? double.infinity : 400,
-            constraints: BoxConstraints(
-              maxHeight: isMobile ? screenHeight * 0.85 : screenHeight * 0.8,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Container(
-                  padding: EdgeInsets.all(isMobile ? 16 : 20),
-                  decoration: BoxDecoration(
-                    color: isExpiredCluster
-                        ? Colors.grey.shade100
-                        : Colors.white,
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(isMobile ? 20 : 16),
-                      topRight: Radius.circular(isMobile ? 20 : 16),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        isExpiredCluster ? Icons.history : Icons.whatshot,
-                        size: isMobile ? 28 : 24,
-                        color: isExpiredCluster
-                            ? Colors.grey.shade600
-                            : _getHeatmapColor(cluster.intensity),
-                      ),
-                      SizedBox(width: isMobile ? 12 : 8),
-                      Expanded(
-                        child: Text(
-                          isExpiredCluster
-                              ? 'Historical Heatmap'
-                              : 'Crime Heatmap',
-                          style: TextStyle(
-                            fontSize: isMobile ? 22 : 20,
-                            fontWeight: FontWeight.bold,
-                            color: isExpiredCluster
-                                ? Colors.grey.shade700
-                                : null,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.close, size: isMobile ? 28 : 24),
-                        onPressed: () => Navigator.pop(context),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1),
-
-                // Content
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.all(isMobile ? 16 : 20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Status indicator with severity level
-                        if (isExpiredCluster)
-                          Container(
-                            width: double.infinity,
-                            padding: EdgeInsets.symmetric(
-                              horizontal: isMobile ? 14 : 12,
-                              vertical: isMobile ? 10 : 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(
-                                isMobile ? 10 : 8,
-                              ),
-                              border: Border.all(
-                                color: _getSeverityColor(cluster),
-                                width: 2,
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.info_outline,
-                                      size: isMobile ? 18 : 16,
-                                      color: Colors.grey.shade700,
-                                    ),
-                                    SizedBox(width: isMobile ? 8 : 6),
-                                    Expanded(
-                                      child: Text(
-                                        'All crimes expired - Historical data only',
-                                        style: TextStyle(
-                                          fontSize: isMobile ? 13 : 12,
-                                          color: Colors.grey.shade700,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(height: isMobile ? 8 : 6),
-                                Container(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: isMobile ? 10 : 8,
-                                    vertical: isMobile ? 6 : 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: _getSeverityColor(
-                                      cluster,
-                                    ).withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(
-                                      color: _getSeverityColor(cluster),
-                                      width: 1.5,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.warning_amber_rounded,
-                                        size: isMobile ? 16 : 14,
-                                        color: _getSeverityColor(cluster),
-                                      ),
-                                      SizedBox(width: isMobile ? 6 : 4),
-                                      Text(
-                                        'Previous Severity: ${cluster.dominantSeverity.toUpperCase()}',
-                                        style: TextStyle(
-                                          fontSize: isMobile ? 12 : 11,
-                                          color: _getSeverityColor(cluster),
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                        SizedBox(height: isMobile ? 16 : 12),
-
-                        Text(
-                          '${cluster.crimeCount} total crime${cluster.crimeCount != 1 ? 's' : ''}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: isMobile ? 18 : 16,
-                          ),
-                        ),
-                        if (activeCrimes.isNotEmpty && !isExpiredCluster)
-                          Text(
-                            '${activeCrimes.length} active, ${historicalCrimes.length} historical',
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: isMobile ? 13 : 12,
-                            ),
-                          ),
-                        Text(
-                          'Within ${cluster.radius.round()}m radius',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: isMobile ? 13 : 12,
-                          ),
-                        ),
-                        SizedBox(height: isMobile ? 20 : 16),
-
-                        // Crime breakdown
-                        Text(
-                          'Crime Severity Breakdown:',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: isMobile ? 16 : 14,
-                          ),
-                        ),
-                        SizedBox(height: isMobile ? 12 : 8),
-                        ...cluster.crimeBreakdown.entries
-                            .where((e) => e.value > 0)
-                            .map((entry) {
-                              return Padding(
-                                padding: EdgeInsets.symmetric(
-                                  vertical: isMobile ? 6 : 3,
-                                ),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      '${entry.key.toUpperCase()}:',
-                                      style: TextStyle(
-                                        fontSize: isMobile ? 15 : 14,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${entry.value}',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: isMobile ? 15 : 14,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
-
-                        // Active crimes (only if not expired cluster)
-                        if (activeCrimes.isNotEmpty && !isExpiredCluster) ...[
-                          SizedBox(height: isMobile ? 20 : 16),
-                          Text(
-                            'Recent Crimes:',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.red,
-                              fontSize: isMobile ? 16 : 14,
-                            ),
-                          ),
-                          SizedBox(height: isMobile ? 12 : 8),
-                          ..._buildCrimeList(
-                            activeCrimes,
-                            isActive: true,
-                            isMobile: isMobile,
-                          ),
-                        ],
-
-                        // Historical crimes
-                        if (historicalCrimes.isNotEmpty) ...[
-                          SizedBox(height: isMobile ? 20 : 16),
-                          Row(
-                            children: [
-                              Text(
-                                'Past Incidents:',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: isMobile ? 16 : 14,
-                                ),
-                              ),
-                              SizedBox(width: isMobile ? 6 : 4),
-                              Icon(
-                                Icons.history,
-                                size: isMobile ? 18 : 16,
-                                color: Colors.grey[600],
-                              ),
-                            ],
-                          ),
-                          SizedBox(height: isMobile ? 12 : 8),
-                          ..._buildCrimeList(
-                            historicalCrimes,
-                            isActive: false,
-                            isMobile: isMobile,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // ============================================
-  // HELPER: Build crime list for dialog
-  // ============================================
-
-  List<Widget> _buildCrimeList(
-    List<Map<String, dynamic>> crimes, {
-    required bool isActive,
-    required bool isMobile,
-  }) {
-    // Group by crime type
-    final groupedCrimes = <String, List<Map<String, dynamic>>>{};
-
-    for (final crime in crimes) {
-      final crimeType = crime['crime_type']['name'] ?? 'Unknown';
-      if (!groupedCrimes.containsKey(crimeType)) {
-        groupedCrimes[crimeType] = [];
-      }
-      groupedCrimes[crimeType]!.add(crime);
-    }
-
-    // Sort groups by count (descending)
-    final sortedTypes = groupedCrimes.entries.toList()
-      ..sort((a, b) => b.value.length.compareTo(a.value.length));
-
-    return sortedTypes.map((entry) {
-      final crimeType = entry.key;
-      final crimesOfType = entry.value;
-
-      // Sort by time (most recent first)
-      crimesOfType.sort((a, b) {
-        final timeA = parseStoredDateTime(a['time']);
-        final timeB = parseStoredDateTime(b['time']);
-        return timeB.compareTo(timeA);
-      });
-
-      final mostRecentTime = parseStoredDateTime(crimesOfType.first['time']);
-      final timeAgo = _getTimeAgo(mostRecentTime, compact: true);
-
-      final crimeLevel = crimesOfType.first['crime_type']['level'] ?? 'unknown';
-      final levelCapitalized =
-          crimeLevel[0].toUpperCase() + crimeLevel.substring(1);
-
-      final count = crimesOfType.length;
-      final wasRenewalTrigger = crimesOfType.any(
-        (c) => c['was_renewal_trigger'] == true,
-      );
-
-      return Container(
-        margin: EdgeInsets.only(bottom: isMobile ? 10 : 6),
-        padding: EdgeInsets.symmetric(
-          horizontal: isMobile ? 14 : 12,
-          vertical: isMobile ? 12 : 8,
-        ),
-        decoration: BoxDecoration(
-          color: isActive ? Colors.red.shade50 : Colors.grey[100],
-          borderRadius: BorderRadius.circular(isMobile ? 10 : 8),
-          border: wasRenewalTrigger
-              ? Border.all(color: Colors.orange, width: isMobile ? 2.5 : 2)
-              : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '• $crimeType${count > 1 ? ' ($count)' : ''}',
-                          style: TextStyle(
-                            fontSize: isMobile ? 15 : 14,
-                            fontWeight: FontWeight.w500,
-                            color: isActive
-                                ? Colors.red.shade900
-                                : Colors.grey[700],
-                          ),
-                        ),
-                      ),
-                      if (wasRenewalTrigger) ...[
-                        SizedBox(width: isMobile ? 6 : 4),
-                        Icon(
-                          Icons.refresh,
-                          size: isMobile ? 16 : 14,
-                          color: Colors.orange,
-                        ),
-                      ],
-                    ],
-                  ),
-                  SizedBox(height: isMobile ? 4 : 2),
-                  Text(
-                    '($levelCapitalized)',
-                    style: TextStyle(
-                      fontSize: isMobile ? 12 : 11,
-                      color: isActive ? Colors.red.shade700 : Colors.grey[600],
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(width: isMobile ? 12 : 8),
-            Text(
-              timeAgo,
-              style: TextStyle(
-                fontSize: isMobile ? 13 : 12,
-                color: isActive ? Colors.red.shade700 : Colors.grey[700],
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      );
-    }).toList();
   }
 
   Future<List<LocationSuggestion>> _searchLocations(String query) async {
@@ -27587,133 +23878,6 @@ class _MapScreenState extends State<MapScreen> {
     print('✅ Chat subscription setup complete');
   }
 
-  // ============================================
-  // ⭐ UPDATED: Handle real-time settings changes with debouncing
-  // ============================================
-  void _onHeatmapSettingsChanged(Map<String, dynamic> newSettings) async {
-    if (!mounted) return;
-
-    print('🔄 Heatmap settings changed, debouncing update...');
-
-    // ⭐ Cancel previous timer if exists
-    _settingsUpdateDebouncer?.cancel();
-
-    // ⭐ Wait for 1 second of no updates before processing
-    _settingsUpdateDebouncer = Timer(
-      const Duration(milliseconds: 1000),
-      () async {
-        if (!mounted) return;
-
-        print('🔄 Processing batched settings update...');
-
-        setState(() {
-          // Update all dynamic settings
-          _clusterMergeDistance =
-              newSettings['cluster_merge_distance']?.toDouble() ?? 50.0;
-          _minCrimesForCluster = newSettings['min_crimes_for_cluster'] ?? 3;
-          _proximityAlertDistance =
-              newSettings['proximity_alert_distance']?.toDouble() ?? 500.0;
-
-          _severityTimeWindows = {
-            'critical': newSettings['time_window_critical'] ?? 120,
-            'high': newSettings['time_window_high'] ?? 90,
-            'medium': newSettings['time_window_medium'] ?? 60,
-            'low': newSettings['time_window_low'] ?? 30,
-          };
-
-          _severityWeights = {
-            'critical': newSettings['weight_critical']?.toDouble() ?? 1.0,
-            'high': newSettings['weight_high']?.toDouble() ?? 0.75,
-            'medium': newSettings['weight_medium']?.toDouble() ?? 0.5,
-            'low': newSettings['weight_low']?.toDouble() ?? 0.25,
-          };
-
-          _severityRadiusConfig = {
-            'critical': {
-              'base': newSettings['radius_critical_base']?.toDouble() ?? 200.0,
-              'min': newSettings['radius_critical_min']?.toDouble() ?? 250.0,
-              'max': newSettings['radius_critical_max']?.toDouble() ?? 1200.0,
-              'countMultiplier':
-                  newSettings['radius_critical_count_multiplier']?.toDouble() ??
-                  15.0,
-              'intensityMultiplier':
-                  newSettings['radius_critical_intensity_multiplier']
-                      ?.toDouble() ??
-                  50.0,
-            },
-            'high': {
-              'base': newSettings['radius_high_base']?.toDouble() ?? 150.0,
-              'min': newSettings['radius_high_min']?.toDouble() ?? 200.0,
-              'max': newSettings['radius_high_max']?.toDouble() ?? 900.0,
-              'countMultiplier':
-                  newSettings['radius_high_count_multiplier']?.toDouble() ??
-                  10.0,
-              'intensityMultiplier':
-                  newSettings['radius_high_intensity_multiplier']?.toDouble() ??
-                  30.0,
-            },
-            'medium': {
-              'base': newSettings['radius_medium_base']?.toDouble() ?? 100.0,
-              'min': newSettings['radius_medium_min']?.toDouble() ?? 150.0,
-              'max': newSettings['radius_medium_max']?.toDouble() ?? 600.0,
-              'countMultiplier':
-                  newSettings['radius_medium_count_multiplier']?.toDouble() ??
-                  8.0,
-              'intensityMultiplier':
-                  newSettings['radius_medium_intensity_multiplier']
-                      ?.toDouble() ??
-                  25.0,
-            },
-            'low': {
-              'base': newSettings['radius_low_base']?.toDouble() ?? 80.0,
-              'min': newSettings['radius_low_min']?.toDouble() ?? 100.0,
-              'max': newSettings['radius_low_max']?.toDouble() ?? 400.0,
-              'countMultiplier':
-                  newSettings['radius_low_count_multiplier']?.toDouble() ?? 5.0,
-              'intensityMultiplier':
-                  newSettings['radius_low_intensity_multiplier']?.toDouble() ??
-                  20.0,
-            },
-          };
-        });
-
-        print('✅ Settings updated in memory');
-        print('   Cluster merge distance: $_clusterMergeDistance m');
-        print('   Min crimes for cluster: $_minCrimesForCluster');
-        print('   Proximity alert distance: $_proximityAlertDistance m');
-
-        // Recalculate heatmap with new settings
-        await _calculateHeatmap();
-
-        // ⭐ Show notification ONCE after all updates
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(Icons.settings, color: Colors.white, size: 20),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'Heatmap settings updated by administrator',
-                      style: TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                  ),
-                ],
-              ),
-              backgroundColor: const Color(0xFF6366F1),
-              duration: const Duration(seconds: 3),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          );
-        }
-      },
-    );
-  }
-
   Future<void> _updateHotspotStatus(int hotspotId, String newStatus) async {
     try {
       final updateData = {
@@ -28015,6 +24179,22 @@ class _MapScreenState extends State<MapScreen> {
       _loadUnreadThreadCount();
     });
   }
+
+  void _setupUnreadCountSubscription() {
+    if (_userProfile == null) return;
+
+    _threadService.subscribeToUnreadCountUpdates(
+      _userProfile!['id'] as String,
+      (newCount) {
+        if (mounted) {
+          setState(() {
+            _unreadThreadCount = newCount;
+          });
+          print('🔔 Unread thread count updated: $newCount');
+        }
+      },
+    );
+  }
 }
 
 class CoordinateParseResult {
@@ -28027,79 +24207,6 @@ class CoordinateParseResult {
     required this.lon,
     required this.isValid,
   });
-}
-
-class HeatmapCluster {
-  final LatLng center; // Weighted center of the cluster
-  final double radius; // Actual radius covering all crimes
-  final double intensity; // 0.0 to 1.0
-  final int crimeCount;
-  final Map<String, int> crimeBreakdown;
-  final List<String> topCrimeTypes;
-  final List<Map<String, dynamic>> crimes; // Individual crimes in this cluster
-  final String dominantSeverity; // Dominant severity level
-  final String status; // ⭐ ADD THIS LINE - 'active' or 'inactive'
-
-  HeatmapCluster({
-    required this.center,
-    required this.radius,
-    required this.intensity,
-    required this.crimeCount,
-    required this.crimeBreakdown,
-    required this.topCrimeTypes,
-    required this.crimes,
-    required this.dominantSeverity,
-    this.status = 'active', // ⭐ ADD THIS LINE - Default to 'active'
-  });
-}
-
-extension on MapController {}
-
-class PersistentCluster {
-  final String id;
-  final LatLng center;
-  final double currentRadius;
-  final String dominantSeverity;
-  final double intensity;
-  final int activeCrimeCount;
-  final int totalCrimeCount;
-  final String status;
-  final DateTime firstCrimeAt;
-  final DateTime lastCrimeAt;
-  final List<Map<String, dynamic>> allCrimes; // Historical + active
-
-  PersistentCluster({
-    required this.id,
-    required this.center,
-    required this.currentRadius,
-    required this.dominantSeverity,
-    required this.intensity,
-    required this.activeCrimeCount,
-    required this.totalCrimeCount,
-    required this.status,
-    required this.firstCrimeAt,
-    required this.lastCrimeAt,
-    required this.allCrimes,
-  });
-
-  factory PersistentCluster.fromDatabase(
-    Map<String, dynamic> data,
-    List<Map<String, dynamic>> crimes,
-  ) {
-    return PersistentCluster(
-      id: data['id'],
-      center: LatLng(data['center_lat'], data['center_lng']),
-      currentRadius: data['current_radius'].toDouble(),
-      dominantSeverity: data['dominant_severity'],
-      intensity: data['intensity'].toDouble(),
-      activeCrimeCount: data['active_crime_count'],
-      totalCrimeCount: data['total_crime_count'],
-      status: data['status'],
-      firstCrimeAt: DateTime.parse(data['first_crime_at']),
-      lastCrimeAt: DateTime.parse(data['last_crime_at']),
-      allCrimes: crimes,
-    );
-  }
 }
 
 class LocationSuggestion {

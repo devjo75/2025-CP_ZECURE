@@ -362,6 +362,37 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                       ],
                     ),
 
+                    // Warning for incomplete date range
+                    if ((filterService.startDate != null &&
+                            filterService.endDate == null) ||
+                        (filterService.startDate == null &&
+                            filterService.endDate != null)) ...[
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.info_outline,
+                              size: 16,
+                              color: Colors.orange.shade600,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Please select both start and end dates to apply filter',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.orange.shade600,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
                     // Year preset buttons
                     const SizedBox(height: 12),
                     Padding(
@@ -384,7 +415,133 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
 
                     // Dynamic content based on toggle
                     if (isShowingCrimes) ...[
-                      // CRIMES FILTERS
+                      // ✅ HEATMAP INFO CARD (FIXED - No Consumer needed)
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 8.0),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Colors.red.shade50, Colors.orange.shade50],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.red.shade200,
+                            width: 1,
+                          ),
+                        ),
+                        child: Builder(
+                          builder: (context) {
+                            final bool heatmapEnabled =
+                                filterService.crimeStartDate != null &&
+                                filterService.crimeEndDate != null;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        Icons.whatshot,
+                                        size: 20,
+                                        color: Colors.red.shade700,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Crime Heatmap',
+                                            style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.red.shade900,
+                                            ),
+                                          ),
+                                          Text(
+                                            heatmapEnabled
+                                                ? 'Shows density of crimes in selected date range'
+                                                : 'Select a date range to enable heatmap',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.grey.shade700,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (heatmapEnabled) ...[
+                                  const SizedBox(height: 10),
+                                  // Heatmap legend preview
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceEvenly,
+                                    children: [
+                                      _buildMiniLegendItem('Low', Colors.blue),
+                                      _buildMiniLegendItem('', Colors.cyan),
+                                      _buildMiniLegendItem(
+                                        'Med',
+                                        Colors.yellow,
+                                      ),
+                                      _buildMiniLegendItem('', Colors.orange),
+                                      _buildMiniLegendItem('High', Colors.red),
+                                    ],
+                                  ),
+                                ] else ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange.shade100,
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: Colors.orange.shade300,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.info_outline,
+                                          size: 14,
+                                          color: Colors.orange.shade700,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            'Complete the date range above to activate heatmap visualization',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color: Colors.orange.shade900,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // CRIMES FILTERS (existing code continues here)
                       // Severity filters
                       const Padding(
                         padding: EdgeInsets.only(left: 8.0),
@@ -790,6 +947,30 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildMiniLegendItem(String label, Color color) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.7),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.grey.shade300, width: 0.5),
+          ),
+        ),
+        if (label.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(fontSize: 8, color: Colors.grey.shade700),
+          ),
+        ],
+      ],
     );
   }
 }

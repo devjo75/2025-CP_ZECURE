@@ -12,8 +12,7 @@ class ThreadListScreen extends StatefulWidget {
   final String userId;
   final LatLng? userLocation;
 
-  const ThreadListScreen({Key? key, required this.userId, this.userLocation})
-    : super(key: key);
+  const ThreadListScreen({super.key, required this.userId, this.userLocation});
 
   @override
   State<ThreadListScreen> createState() => _ThreadListScreenState();
@@ -314,7 +313,7 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
             ),
           ),
 
-          // Thread list
+          // ✅ NEW: Sectioned Thread list (Unread/Read)
           Expanded(
             child: _isLoading
                 ? Center(child: CircularProgressIndicator())
@@ -322,14 +321,7 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
                 ? _buildEmptyState()
                 : RefreshIndicator(
                     onRefresh: _loadThreads,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: _filteredThreads.length,
-                      itemBuilder: (context, index) {
-                        final thread = _filteredThreads[index];
-                        return _buildThreadCard(thread);
-                      },
-                    ),
+                    child: _buildSectionedThreadList(),
                   ),
           ),
         ],
@@ -358,40 +350,303 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
     );
   }
 
-  Widget _buildThreadCard(ReportThread thread) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      elevation: thread.unreadCount > 0 ? 2 : 1, // ✅ Elevate unread threads
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () async {
-          // ✅ Navigate and refresh on return
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) =>
-                  ThreadDetailScreen(thread: thread, userId: widget.userId),
-            ),
-          );
+  // lib/thread/thread_list_screen.dart
+  // UPDATED: Enhanced unread message indicators
 
-          // ✅ Refresh threads after returning
-          _loadThreads();
-        },
-        child: Container(
-          // ✅ Add indicator border for unread threads
-          decoration: thread.unreadCount > 0
-              ? BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.blue.shade300, width: 2),
-                )
-              : null,
+  // ✅ NEW: Build sectioned thread list with Unread/Read sections
+  Widget _buildSectionedThreadList() {
+    final unreadThreads = _filteredThreads
+        .where((t) => t.unreadCount > 0)
+        .toList();
+    final readThreads = _filteredThreads
+        .where((t) => t.unreadCount == 0)
+        .toList();
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      children: [
+        // ✅ UNREAD SECTION
+        if (unreadThreads.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(left: 12, bottom: 8, top: 4),
+            child: Row(
+              children: [
+                Text(
+                  'Unread (${unreadThreads.length})',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[700],
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[100],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'NEW',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[700],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ...unreadThreads.map((thread) => _buildUnreadThreadCard(thread)),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Divider(color: Colors.grey[300], thickness: 1),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        // ✅ READ SECTION
+        if (readThreads.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(left: 12, bottom: 8, top: 8),
+            child: Text(
+              'Earlier',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[600],
+                letterSpacing: 0.3,
+              ),
+            ),
+          ),
+          ...readThreads.map((thread) => _buildReadThreadCard(thread)),
+        ],
+      ],
+    );
+  }
+
+  // ✅ NEW: Unread thread card (blue background, prominent styling)
+  Widget _buildUnreadThreadCard(ReportThread thread) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.blue[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue[200]!, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) =>
+                    ThreadDetailScreen(thread: thread, userId: widget.userId),
+              ),
+            );
+            _loadThreads();
+          },
+          borderRadius: BorderRadius.circular(12),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Crime severity badge + status
+                // Header row
+                Row(
+                  children: [
+                    // Blue dot indicator
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: Colors.blue[600],
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildSeverityBadge(thread.crimeLevel),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: thread.activeStatus == 'active'
+                            ? Colors.green.shade100
+                            : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        thread.activeStatus.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: thread.activeStatus == 'active'
+                              ? Colors.green.shade700
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    // Unread count badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade600,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.red.withOpacity(0.4),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        '${thread.unreadCount}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Title
+                Text(
+                  thread.title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.black,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
+
+                // Crime info
+                Text(
+                  '${thread.crimeType} • ${thread.crimeCategory}',
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Stats row
+                Row(
+                  children: [
+                    Icon(Icons.message, size: 16, color: Colors.blue.shade600),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${thread.messageCount}',
+                      style: TextStyle(
+                        color: Colors.blue.shade600,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Icon(Icons.people, size: 16, color: Colors.blue.shade600),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${thread.participantCount}',
+                      style: TextStyle(
+                        color: Colors.blue.shade600,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _getTimeAgo(thread.lastMessageAt ?? thread.createdAt),
+                        style: TextStyle(
+                          color: Colors.blue.shade700,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ✅ NEW: Read thread card (white background, normal styling)
+  Widget _buildReadThreadCard(ReportThread thread) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) =>
+                    ThreadDetailScreen(thread: thread, userId: widget.userId),
+              ),
+            );
+            _loadThreads();
+          },
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header row
                 Row(
                   children: [
                     _buildSeverityBadge(thread.crimeLevel),
@@ -419,28 +674,7 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
                       ),
                     ),
                     const Spacer(),
-                    // ✅ NEW: Unread badge
-                    if (thread.unreadCount > 0)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.red,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '${thread.unreadCount} new',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    if (thread.distanceFromUser != null) ...[
-                      if (thread.unreadCount > 0) const SizedBox(width: 8),
+                    if (thread.distanceFromUser != null)
                       Row(
                         children: [
                           Icon(
@@ -458,30 +692,24 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
                           ),
                         ],
                       ),
-                    ],
                   ],
                 ),
                 const SizedBox(height: 12),
 
-                // Title with bold indicator if unread
+                // Title
                 Text(
                   thread.title,
                   style: TextStyle(
                     fontSize: 16,
-                    fontWeight: thread.unreadCount > 0
-                        ? FontWeight
-                              .w900 // ✅ Bolder if unread
-                        : FontWeight.bold,
-                    color: thread.unreadCount > 0
-                        ? Colors.black
-                        : Colors.grey.shade800,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade800,
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 8),
 
-                // Crime type and category
+                // Crime info
                 Text(
                   '${thread.crimeType} • ${thread.crimeCategory}',
                   style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
@@ -514,15 +742,8 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
                     Text(
                       _getTimeAgo(thread.lastMessageAt ?? thread.createdAt),
                       style: TextStyle(
-                        color: thread.unreadCount > 0
-                            ? Colors
-                                  .blue
-                                  .shade600 // ✅ Blue if unread
-                            : Colors.grey.shade500,
+                        color: Colors.grey.shade500,
                         fontSize: 12,
-                        fontWeight: thread.unreadCount > 0
-                            ? FontWeight.bold
-                            : FontWeight.normal,
                       ),
                     ),
                   ],

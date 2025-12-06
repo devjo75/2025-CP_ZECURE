@@ -12,6 +12,7 @@ class ThreadService {
   // Real-time subscriptions
   RealtimeChannel? _threadsChannel;
   RealtimeChannel? _messagesChannel;
+  RealtimeChannel? _participantsChannel;
 
   Future<List<ReportThread>> fetchThreads({
     LatLng? userLocation,
@@ -115,6 +116,35 @@ class ThreadService {
       print('Stack trace: $stackTrace');
       rethrow;
     }
+  }
+
+  void subscribeToUnreadCountUpdates(
+    String userId,
+    Function(int unreadThreadCount) onUnreadCountChange,
+  ) {
+    _participantsChannel?.unsubscribe();
+
+    _participantsChannel = _supabase
+        .channel('thread_participants_$userId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'thread_participants',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: userId,
+          ),
+          callback: (payload) async {
+            print('🔔 Participant update received for user: $userId');
+            // Refetch unread count whenever participant data changes
+            final count = await getUnreadThreadCount(userId);
+            onUnreadCountChange(count);
+          },
+        )
+        .subscribe();
+
+    print('✅ Subscribed to unread count updates for user: $userId');
   }
 
   Future<List<ThreadMessage>> fetchThreadMessages(
@@ -255,7 +285,9 @@ class ThreadService {
     }
   }
 
-  /// Fetch threads with unread counts for current user
+  // lib/thread/thread_service.dart
+  // UPDATE the fetchThreadsWithUnreadInfo method:
+
   Future<List<ReportThread>> fetchThreadsWithUnreadInfo({
     required String userId,
     LatLng? userLocation,
@@ -270,7 +302,7 @@ class ThreadService {
           .toUtc()
           .toIso8601String();
 
-      // Fetch threads with participant info
+      // Fetch threads with participant info - LEFT JOIN to include threads user hasn't joined
       var query = _supabase
           .from('report_threads')
           .select('''
@@ -291,6 +323,7 @@ class ThreadService {
             )
           ),
           participant:thread_participants!thread_participants_thread_id_fkey (
+            user_id,
             unread_count,
             last_read_at,
             is_following
@@ -316,21 +349,31 @@ class ThreadService {
         try {
           var thread = ReportThread.fromJson(json);
 
-          // Add unread info from participant data
+          // ✅ FIXED: Check if user is a participant
           final participantData = json['participant'];
+          bool isParticipant = false;
+          int unreadCount = 0;
+          bool isFollowing = false;
+
           if (participantData is List && participantData.isNotEmpty) {
-            final participant = participantData.firstWhere(
+            // Find this user's participant record
+            final userParticipant = participantData.firstWhere(
               (p) => p['user_id'] == userId,
               orElse: () => null,
             );
 
-            if (participant != null) {
-              thread = thread.copyWith(
-                unreadCount: participant['unread_count'] as int? ?? 0,
-                isFollowing: participant['is_following'] as bool? ?? false,
-              );
+            if (userParticipant != null) {
+              isParticipant = true;
+              unreadCount = userParticipant['unread_count'] as int? ?? 0;
+              isFollowing = userParticipant['is_following'] as bool? ?? false;
             }
           }
+
+          // ✅ If user is not a participant, isFollowing = false (shows as NEW)
+          thread = thread.copyWith(
+            unreadCount: unreadCount,
+            isFollowing: isParticipant ? isFollowing : false,
+          );
 
           if (userLocation != null) {
             final distance = _calculateDistance(userLocation, thread.location);
@@ -350,8 +393,25 @@ class ThreadService {
     }
   }
 
-  /// Get unread count for all threads
+  /// Get count of threads that have unread messages (not total unread messages)
   Future<int> getUnreadThreadCount(String userId) async {
+    try {
+      final response = await _supabase
+          .from('thread_participants')
+          .select('thread_id')
+          .eq('user_id', userId)
+          .gt('unread_count', 0);
+
+      // Count how many threads have unread messages
+      return response.length;
+    } catch (e) {
+      print('Error getting unread thread count: $e');
+      return 0;
+    }
+  }
+
+  /// Get total unread message count across all threads
+  Future<int> getTotalUnreadMessageCount(String userId) async {
     try {
       final response = await _supabase
           .from('thread_participants')
@@ -365,7 +425,7 @@ class ThreadService {
       }
       return total;
     } catch (e) {
-      print('Error getting unread count: $e');
+      print('Error getting total unread message count: $e');
       return 0;
     }
   }
@@ -480,6 +540,7 @@ class ThreadService {
   void dispose() {
     _threadsChannel?.unsubscribe();
     _messagesChannel?.unsubscribe();
+    _participantsChannel?.unsubscribe();
   }
 
   /// Helper: Calculate distance between two coordinates (in kilometers)

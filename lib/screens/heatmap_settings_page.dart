@@ -498,9 +498,9 @@ class _HeatmapSettingsPageState extends State<HeatmapSettingsPage> {
               try {
                 // Reset to default values (you can customize these)
                 final defaultUpdates = [
-                  {'key': 'cluster_merge_distance', 'value': '500'},
+                  {'key': 'cluster_merge_distance', 'value': '20'},
                   {'key': 'min_crimes_for_cluster', 'value': '3'},
-                  {'key': 'proximity_alert_distance', 'value': '500'},
+                  {'key': 'proximity_alert_distance', 'value': '250'},
                   {'key': 'time_window_critical', 'value': '120'},
                   {'key': 'time_window_high', 'value': '90'},
                   {'key': 'time_window_medium', 'value': '60'},

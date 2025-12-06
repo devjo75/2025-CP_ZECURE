@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 class HotspotFilterService with ChangeNotifier {
   bool get hasCustomDateRange =>
-      _crimeStartDate != null || _crimeEndDate != null;
+      (_crimeStartDate != null && _crimeEndDate != null) ||
+      (_safeSpotStartDate != null && _safeSpotEndDate != null);
   // Severity filters
   bool _showCritical = true;
   bool _showHigh = true;
@@ -93,6 +94,22 @@ class HotspotFilterService with ChangeNotifier {
 
   bool get showVerifiedSafeSpots => _showVerifiedSafeSpots;
   bool get showUnverifiedSafeSpots => _showUnverifiedSafeSpots;
+
+  // Check if crime date range is complete
+  bool get hasCrimeStartDateOnly =>
+      _crimeStartDate != null && _crimeEndDate == null;
+  bool get hasCrimeEndDateOnly =>
+      _crimeStartDate == null && _crimeEndDate != null;
+  bool get hasCompleteCrimeDateRange =>
+      _crimeStartDate != null && _crimeEndDate != null;
+
+  // Check if safe spot date range is complete
+  bool get hasSafeSpotStartDateOnly =>
+      _safeSpotStartDate != null && _safeSpotEndDate == null;
+  bool get hasSafeSpotEndDateOnly =>
+      _safeSpotStartDate == null && _safeSpotEndDate != null;
+  bool get hasCompleteSafeSpotDateRange =>
+      _safeSpotStartDate != null && _safeSpotEndDate != null;
 
   // Separate Time Frame getters
   DateTime? get crimeStartDate => _crimeStartDate;
@@ -381,7 +398,8 @@ class HotspotFilterService with ChangeNotifier {
         incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
 
     // Time frame filtering - use crime dates
-    if (_crimeStartDate != null || _crimeEndDate != null) {
+    // Only apply date filter if BOTH dates are set
+    if (_crimeStartDate != null && _crimeEndDate != null) {
       final hotspotDateStr =
           hotspot['time'] ?? hotspot['created_at'] ?? hotspot['date'];
       if (hotspotDateStr != null) {
@@ -394,38 +412,30 @@ class HotspotFilterService with ChangeNotifier {
             hotspotDate.day,
           );
 
-          if (_crimeStartDate != null) {
-            final startDateOnly = DateTime(
-              _crimeStartDate!.year,
-              _crimeStartDate!.month,
-              _crimeStartDate!.day,
-            );
-            if (hotspotDateOnly.isBefore(startDateOnly)) {
-              return false;
-            }
+          final startDateOnly = DateTime(
+            _crimeStartDate!.year,
+            _crimeStartDate!.month,
+            _crimeStartDate!.day,
+          );
+          if (hotspotDateOnly.isBefore(startDateOnly)) {
+            return false;
           }
 
-          if (_crimeEndDate != null) {
-            final endDateOnly = DateTime(
-              _crimeEndDate!.year,
-              _crimeEndDate!.month,
-              _crimeEndDate!.day,
-            );
-            // Use isAfter with end of day (23:59:59)
-            final endOfDay = endDateOnly.add(const Duration(days: 1));
-            if (hotspotDateOnly.isAfter(endOfDay) ||
-                hotspotDateOnly.isAtSameMomentAs(endOfDay)) {
-              return false;
-            }
+          final endDateOnly = DateTime(
+            _crimeEndDate!.year,
+            _crimeEndDate!.month,
+            _crimeEndDate!.day,
+          );
+          // Use isAfter with end of day (23:59:59)
+          final endOfDay = endDateOnly.add(const Duration(days: 1));
+          if (hotspotDateOnly.isAfter(endOfDay) ||
+              hotspotDateOnly.isAtSameMomentAs(endOfDay)) {
+            return false;
           }
         }
       }
-
-      // ✅ When date filter is active: Let the _visibleHotspots and Consumer
-      // handle the zoom-based and cluster-based filtering
-      // Here we only filter by date range and category/severity
     } else {
-      // ✅ NO custom date range: Apply strict 30-day filter for approved crimes
+      // NO custom date range or incomplete range: Apply strict 30-day filter for approved crimes
       if (status == 'approved' && !isRecent) {
         return false; // Don't show approved crimes older than 30 days
       }
@@ -491,7 +501,8 @@ class HotspotFilterService with ChangeNotifier {
   // Updated safe spot filtering logic
   bool shouldShowSafeSpot(Map<String, dynamic> safeSpot) {
     // Time frame filtering - use safe spot dates
-    if (_safeSpotStartDate != null || _safeSpotEndDate != null) {
+    // Only apply date filter if BOTH dates are set
+    if (_safeSpotStartDate != null && _safeSpotEndDate != null) {
       final safeSpotDateStr = safeSpot['created_at'] ?? safeSpot['date'];
       if (safeSpotDateStr != null) {
         final safeSpotDate = DateTime.tryParse(safeSpotDateStr);
@@ -503,28 +514,24 @@ class HotspotFilterService with ChangeNotifier {
             safeSpotDate.day,
           );
 
-          if (_safeSpotStartDate != null) {
-            final startDateOnly = DateTime(
-              _safeSpotStartDate!.year,
-              _safeSpotStartDate!.month,
-              _safeSpotStartDate!.day,
-            );
-            if (safeSpotDateOnly.isBefore(startDateOnly)) {
-              return false;
-            }
+          final startDateOnly = DateTime(
+            _safeSpotStartDate!.year,
+            _safeSpotStartDate!.month,
+            _safeSpotStartDate!.day,
+          );
+          if (safeSpotDateOnly.isBefore(startDateOnly)) {
+            return false;
           }
 
-          if (_safeSpotEndDate != null) {
-            final endDateOnly = DateTime(
-              _safeSpotEndDate!.year,
-              _safeSpotEndDate!.month,
-              _safeSpotEndDate!.day,
-            );
-            final endOfDay = endDateOnly.add(const Duration(days: 1));
-            if (safeSpotDateOnly.isAfter(endOfDay) ||
-                safeSpotDateOnly.isAtSameMomentAs(endOfDay)) {
-              return false;
-            }
+          final endDateOnly = DateTime(
+            _safeSpotEndDate!.year,
+            _safeSpotEndDate!.month,
+            _safeSpotEndDate!.day,
+          );
+          final endOfDay = endDateOnly.add(const Duration(days: 1));
+          if (safeSpotDateOnly.isAfter(endOfDay) ||
+              safeSpotDateOnly.isAtSameMomentAs(endOfDay)) {
+            return false;
           }
         }
       }
