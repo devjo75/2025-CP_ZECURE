@@ -22,7 +22,7 @@ class ReportThread {
   final String activeStatus;
   final double? distanceFromUser;
 
-  // ✅ NEW: Participant info
+  // Participant info
   final int unreadCount;
   final bool isFollowing;
 
@@ -43,15 +43,15 @@ class ReportThread {
     required this.incidentTime,
     required this.activeStatus,
     this.distanceFromUser,
-    this.unreadCount = 0, // ✅ NEW
-    this.isFollowing = false, // ✅ NEW
+    this.unreadCount = 0,
+    this.isFollowing = false,
   });
 
   factory ReportThread.fromJson(Map<String, dynamic> json) {
     final hotspot = json['hotspot'] ?? {};
     final crimeTypeData = hotspot['crime_type'] ?? {};
 
-    // ✅ FIXED: Parse location - it can be either a string or an object
+    // Parse location - it can be either a string or an object
     LatLng location;
     final locationData = hotspot['location'];
 
@@ -77,7 +77,6 @@ class ReportThread {
         location = LatLng(0, 0);
       }
     } else {
-      // Fallback
       location = LatLng(0, 0);
     }
 
@@ -124,8 +123,8 @@ class ReportThread {
       incidentTime: incidentTime,
       activeStatus: activeStatus,
       distanceFromUser: distanceFromUser ?? this.distanceFromUser,
-      unreadCount: unreadCount ?? this.unreadCount, // ✅ NEW
-      isFollowing: isFollowing ?? this.isFollowing, // ✅ NEW
+      unreadCount: unreadCount ?? this.unreadCount,
+      isFollowing: isFollowing ?? this.isFollowing,
     );
   }
 }
@@ -173,7 +172,53 @@ class ThreadMessage {
   });
 
   factory ThreadMessage.fromJson(Map<String, dynamic> json) {
-    final userData = json['user'] ?? {};
+    // ✅ FIXED: Handle null user data gracefully
+    final userData = json['user'];
+
+    // Extract user info with proper null handling
+    String fullName = 'Unknown User';
+    String? profilePicture;
+    String role = 'user';
+
+    if (userData != null && userData is Map<String, dynamic>) {
+      fullName = userData['full_name'] as String? ?? 'Unknown User';
+      profilePicture = userData['profile_picture_url'] as String?;
+      role = userData['role'] as String? ?? 'user';
+    }
+
+    // ✅ FIXED: Handle reply_to data with null safety
+    ThreadMessage? replyToMessage;
+    final replyToData = json['reply_to'];
+
+    if (replyToData != null && replyToData is Map<String, dynamic>) {
+      try {
+        // Parse nested user data for reply
+        final replyUserData = replyToData['user'];
+        String replyUserName = 'Unknown User';
+
+        if (replyUserData != null && replyUserData is Map<String, dynamic>) {
+          replyUserName =
+              replyUserData['full_name'] as String? ?? 'Unknown User';
+        }
+
+        replyToMessage = ThreadMessage(
+          id: replyToData['id'] as String? ?? '',
+          threadId: json['thread_id'] as String? ?? '',
+          userId: '',
+          message: replyToData['message'] as String? ?? '',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          isEdited: false,
+          isDeleted: false,
+          messageType: 'comment',
+          userFullName: replyUserName,
+          userRole: 'user',
+        );
+      } catch (e) {
+        print('Error parsing reply_to message: $e');
+        replyToMessage = null;
+      }
+    }
 
     return ThreadMessage(
       id: json['id'] as String,
@@ -188,12 +233,10 @@ class ThreadMessage {
       attachmentUrl: json['attachment_url'] as String?,
       attachmentType: json['attachment_type'] as String?,
       messageType: json['message_type'] as String? ?? 'comment',
-      userFullName: userData['full_name'] as String? ?? 'Unknown User',
-      userProfilePicture: userData['profile_picture_url'] as String?,
-      userRole: userData['role'] as String? ?? 'user',
-      replyToMessage: json['reply_to'] != null
-          ? ThreadMessage.fromJson(json['reply_to'])
-          : null,
+      userFullName: fullName,
+      userProfilePicture: profilePicture,
+      userRole: role,
+      replyToMessage: replyToMessage,
     );
   }
 

@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -111,37 +114,44 @@ class CrimeHeatmapService {
   }
 
   /// Gets heatmap configuration based on zoom level
-  /// Adjusts radius and blur for better visualization at different scales
-  static HeatmapConfig getConfigForZoom(double zoom) {
+  static HeatmapConfig getConfigForZoom(double zoom, {bool? reducedQuality}) {
+    // Auto-detect mobile if not specified
+    final isMobile =
+        reducedQuality ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
+
+    // Reduce blur significantly on mobile devices for better performance
+    final blurMultiplier = isMobile ? 0.5 : 1.0;
+    final radiusMultiplier = isMobile ? 0.8 : 1.0;
+
     if (zoom >= 16) {
       // High zoom - tight, focused heat spots
       return HeatmapConfig(
-        radius: 25,
-        blur: 20,
+        radius: (25 * radiusMultiplier).toDouble(),
+        blur: (15 * blurMultiplier).toDouble(), // Reduced from 20
         maxOpacity: 0.7,
         minOpacity: 0.1,
       );
     } else if (zoom >= 14) {
       // Medium zoom - balanced visualization
       return HeatmapConfig(
-        radius: 30,
-        blur: 25,
+        radius: (30 * radiusMultiplier).toDouble(),
+        blur: (20 * blurMultiplier).toDouble(), // Reduced from 25
         maxOpacity: 0.6,
         minOpacity: 0.1,
       );
     } else if (zoom >= 12) {
       // Lower zoom - broader heat areas
       return HeatmapConfig(
-        radius: 40,
-        blur: 30,
+        radius: (40 * radiusMultiplier).toDouble(),
+        blur: (22 * blurMultiplier).toDouble(), // Reduced from 30
         maxOpacity: 0.5,
         minOpacity: 0.1,
       );
     } else {
       // Very low zoom - wide area coverage
       return HeatmapConfig(
-        radius: 50,
-        blur: 35,
+        radius: (50 * radiusMultiplier).toDouble(),
+        blur: (25 * blurMultiplier).toDouble(), // Reduced from 35
         maxOpacity: 0.4,
         minOpacity: 0.1,
       );

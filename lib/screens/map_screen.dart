@@ -26,6 +26,7 @@ import 'package:zecure/chatbox/chat_service.dart';
 import 'package:zecure/chatbox/chat_desktop_screen.dart';
 import 'package:zecure/desktop/desktop_mini_legends.dart';
 import 'package:zecure/desktop/hotlines_desktop.dart';
+import 'package:zecure/desktop/hotspot_drawing_desktop.dart';
 import 'package:zecure/desktop/quick_access_desktop.dart';
 import 'package:zecure/main.dart';
 import 'package:zecure/savepoint/add_save_point.dart';
@@ -34,6 +35,9 @@ import 'package:zecure/quick_access/quick_access_screen.dart';
 import 'package:zecure/savepoint/save_point.dart';
 import 'package:zecure/savepoint/save_point_details.dart';
 import 'package:zecure/screens/crime_heatmap_layer.dart';
+import 'package:zecure/screens/hotspot_details_form.dart';
+import 'package:zecure/screens/hotspot_drawing_controls.dart';
+import 'package:zecure/screens/hotspot_zone_details.dart';
 import 'package:zecure/screens/welcome_message_first_timer.dart';
 import 'package:zecure/screens/welcome_message_screen.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
@@ -45,8 +49,9 @@ import 'package:zecure/desktop/location_options_dialog_desktop.dart';
 import 'package:zecure/desktop/desktop_sidebar.dart';
 import 'package:zecure/desktop/save_point_desktop.dart';
 import 'package:zecure/services/crime_heatmap_service.dart';
+import 'package:zecure/services/crime_hotspot_model.dart';
+import 'package:zecure/services/crime_hotspot_service.dart';
 import 'package:zecure/services/firebase_service.dart';
-import 'package:zecure/services/heatmap_settings_service.dart';
 import 'package:zecure/services/hotspot_support_service.dart';
 import 'package:zecure/services/photo_upload_service.dart';
 import 'package:zecure/services/pulsing_hotspot_marker.dart';
@@ -233,15 +238,22 @@ class _MapScreenState extends State<MapScreen> {
     minOpacity: 0.1,
   );
 
-  // HEATMAP SETTINGS SERVICE
-  final HeatmapSettingsService _heatmapSettings = HeatmapSettingsService();
-  Timer? _settingsUpdateDebouncer;
+  // ✅ Crime Hotspot Zone state
+  List<CrimeHotspot> _crimeHotspots = [];
+  final CrimeHotspotService _hotspotService = CrimeHotspotService();
+  CrimeHotspot? _selectedHotspotZone; // Currently selected zone
+  bool _isEditingHotspotZone = false; // Edit mode flag
+  RealtimeChannel? _hotspotZonesChannel;
 
-  // PERSISTENT HEATMAP CLUSTERS
-  List<Map<String, dynamic>> _persistentClusters = [];
-  RealtimeChannel? _clustersChannel;
-  Timer? _clusterUpdateDebouncer;
-  bool _hasPendingClusterUpdate = false;
+  // ✅ Polygon drawing state
+  bool _isDrawingHotspot = false;
+  String _hotspotDrawingMode = 'idle'; // 'idle', 'circular', 'polygon'
+  List<LatLng> _hotspotVertices = [];
+  Polygon? _draftHotspotPolygon;
+
+  // ✅ Circular hotspot state
+  LatLng? _circularHotspotCenter;
+  double _circularHotspotRadius = 200.0; // meters
 
   // NOTIFICATIONS
   List<Map<String, dynamic>> _notifications = [];
@@ -655,12 +667,14 @@ class _MapScreenState extends State<MapScreen> {
           context,
           listen: false,
         );
-
-        // Use ONLY ONE listener
         filterService.addListener(_onFiltersChanged);
       }
     });
   }
+
+  // ============================================
+  // UPDATE: _onFiltersChanged() Method
+  // ============================================
 
   void _onFiltersChanged() async {
     if (!mounted) return;
@@ -694,7 +708,13 @@ class _MapScreenState extends State<MapScreen> {
 
       if (!mounted) return;
 
-      // ✅ NOW generate heatmap with the freshly loaded data
+      // ✅ NEW: Recalculate crimes in zones after hotspots load
+      print('📍 Calculating crimes in zones...');
+      await _calculateCrimesInAllZones();
+
+      if (!mounted) return;
+
+      // ✅ Generate heatmap with the freshly loaded data
       print('🔥 Generating heatmap...');
       _generateHeatmap();
 
@@ -708,6 +728,28 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // ============================================
+  // NEW METHOD: _setupZoneFilterListener()
+  // ============================================
+
+  /// Setup listener for zone calculations when filters change
+  void _setupZoneFilterListener() {
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: false,
+    );
+
+    _filterListener = () {
+      if (!mounted) return;
+      print('🔄 Zone filter changed, recalculating...');
+      _calculateCrimesInAllZones();
+    };
+
+    filterService.addListener(_filterListener!);
+    print('✅ Zone filter listener setup complete');
+  }
+
+  VoidCallback? _filterListener;
   bool _isReloadingData = false;
   bool _authListenerSetup = false; // Prevent duplicate listeners
   bool _isLoadingProfile = false; // Prevent duplicate profile loads
@@ -840,33 +882,37 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // Helper method to clean up channels safely
   void _cleanupChannels() {
-    _notificationsChannel?.unsubscribe();
-    _notificationsChannel = null;
+    print('🧹 Cleaning up all real-time channels...');
+
     _hotspotsChannel?.unsubscribe();
     _hotspotsChannel = null;
+
+    _notificationsChannel?.unsubscribe();
+    _notificationsChannel = null;
+
     _safeSpotsChannel?.unsubscribe();
     _safeSpotsChannel = null;
 
-    if (_clustersChannel != null) {
-      _clustersChannel!.unsubscribe();
-      _clustersChannel = null;
-    }
+    _hotspotZonesChannel?.unsubscribe();
+    _hotspotZonesChannel = null;
 
-    // Remove filter listener
+    // Remove filter listeners
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
         listen: false,
       );
-
-      // ✅ Use the NEW consolidated listener name
       filterService.removeListener(_onFiltersChanged);
 
-      print('Removed filter listener');
+      if (_filterListener != null) {
+        filterService.removeListener(_filterListener!);
+        _filterListener = null;
+      }
+
+      print('✅ All channels and listeners cleaned up');
     } catch (e) {
-      print('Error removing filter listener: $e');
+      print('⚠️ Error removing filter listeners: $e');
     }
   }
 
@@ -897,7 +943,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  bool _deferredInitialized = false; // Prevent multiple deferred loads
+  bool _deferredInitialized = false;
   void _deferredInitialization() async {
     if (!mounted || _deferredInitialized) return;
     _deferredInitialized = true;
@@ -934,6 +980,18 @@ class _MapScreenState extends State<MapScreen> {
       await _loadHotspots();
       if (!mounted) return;
     }
+
+    // ✅ NEW: Load crime hotspot zones and calculate crimes
+    await _loadCrimeHotspots();
+    if (!mounted) return;
+
+    if (_hotspotZonesChannel == null) {
+      print('Setting up hotspot zones realtime...');
+      _setupHotspotZonesRealtime();
+    }
+
+    // ✅ NEW: Setup zone filter listener
+    _setupZoneFilterListener();
 
     await Future.delayed(Duration(milliseconds: 200));
     if (!mounted) return;
@@ -1049,63 +1107,58 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  // OPTIMIZED: Enhanced dispose with timer cleanup
   @override
   void dispose() {
-    _positionStream?.cancel();
-    _searchController.dispose();
-    _profileScreen.disposeControllers();
+    // ✅ Unsubscribe from all channels FIRST
     _hotspotsChannel?.unsubscribe();
+    _hotspotsChannel = null;
+
     _notificationsChannel?.unsubscribe();
+    _notificationsChannel = null;
+
+    _hotspotZonesChannel?.unsubscribe();
+    _hotspotZonesChannel = null;
+
+    _safeSpotsChannel?.unsubscribe();
+    _safeSpotsChannel = null;
+
+    _chatUpdatesSubscription?.unsubscribe();
+    _chatUpdatesSubscription = null;
+
+    // Cancel timers
+    _positionStream?.cancel();
     _reconnectionTimer?.cancel();
     _routeUpdateTimer?.cancel();
     _proximityCheckTimer?.cancel();
     _deferredLoadTimer?.cancel();
-    _chatUpdatesSubscription?.unsubscribe();
-
-    if (_safeSpotsChannel != null) {
-      print('Unsubscribing from safe spots real-time channel...');
-      _safeSpotsChannel!.unsubscribe();
-      _safeSpotsChannel = null;
-    }
+    _timeUpdateTimer?.cancel();
 
     for (final timer in _updateTimers.values) {
       timer.cancel();
     }
 
-    if (_clustersChannel != null) {
-      print('Unsubscribing from clusters real-time channel...');
-      _clustersChannel!.unsubscribe();
-      _clustersChannel = null;
-    }
-    _persistentClusters.clear();
-    _clusterUpdateDebouncer?.cancel();
+    // Dispose controllers
+    _searchController.dispose();
+    _profileScreen.disposeControllers();
 
-    _updateTimers.clear();
-    _updateDebounceTimer?.cancel();
-    _processedUpdateIds.clear();
-    _savePoints.clear();
-    _timeUpdateTimer?.cancel();
-    _settingsUpdateDebouncer?.cancel();
-
-    // ✅ FIXED: Remove the consolidated filter listener
+    // Remove listeners
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
         listen: false,
       );
+      filterService.removeListener(_onFiltersChanged);
 
-      filterService.removeListener(
-        _onFiltersChanged,
-      ); // Changed from _onFilterChanged
+      if (_filterListener != null) {
+        filterService.removeListener(_filterListener!);
+      }
 
-      print('Removed filter listener');
+      print('✅ Removed all filter listeners');
     } catch (e) {
-      print('Error removing filter listener in dispose: $e');
+      print('⚠️ Error removing filter listeners in dispose: $e');
     }
 
     _threadService.dispose();
-
     super.dispose();
   }
 
@@ -3119,6 +3172,10 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _loadHotspots() async {
     try {
       final currentUserId = _userProfile?['id'];
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
 
       // Step 1: Get IDs of hotspots the user has supported (if not admin)
       Set<int> supportedHotspotIds = {};
@@ -3142,10 +3199,29 @@ class _MapScreenState extends State<MapScreen> {
       }
 
       // Step 2: Build the main query
-      final query = Supabase.instance.client.from('hotspot').select('''
+      var query = Supabase.instance.client.from('hotspot').select('''
       *,
       crime_type: type_id (id, name, level, category, description)
     ''');
+
+      // ✅ NEW: Apply date filter at database level if both dates are set
+      if (filterService.crimeStartDate != null &&
+          filterService.crimeEndDate != null) {
+        final startIso = filterService.crimeStartDate!
+            .toUtc()
+            .toIso8601String();
+        // Add 1 day to end date to include the entire end day
+        final endIso = filterService.crimeEndDate!
+            .add(const Duration(days: 1))
+            .toUtc()
+            .toIso8601String();
+
+        query = query.gte('time', startIso).lt('time', endIso);
+
+        print('📅 Applying DB-level date filter: $startIso to $endIso');
+      }
+      // ✅ REMOVED: The else block that was creating the unused thirtyDaysAgo variable
+      // The 30-day filter is already handled in the OR conditions below for non-admin users
 
       PostgrestFilterBuilder filteredQuery;
 
@@ -3182,8 +3258,15 @@ class _MapScreenState extends State<MapScreen> {
         filteredQuery = query;
       }
 
-      final orderedQuery = filteredQuery.order('time', ascending: false);
+      final orderedQuery = filteredQuery
+          .order('time', ascending: false)
+          .limit(
+            10000,
+          ); // ✅ Added safety limit to prevent hitting default 1000 row limit
+
       final response = await orderedQuery;
+
+      print('✅ Loaded ${response.length} hotspots from database');
 
       // Step 3: Fetch support counts for all hotspots
       List<int> hotspotIds = [];
@@ -3245,11 +3328,12 @@ class _MapScreenState extends State<MapScreen> {
             });
           }
 
-          print('Loaded ${_hotspots.length} hotspots with support data');
+          print('✅ Loaded ${_hotspots.length} hotspots with support data');
         });
+        await _calculateCrimesInAllZones();
       }
     } catch (e) {
-      print('Error loading hotspots: $e');
+      print('❌ Error loading hotspots: $e');
       if (mounted) {
         _showSnackBar('Error loading hotspots: ${e.toString()}');
       }
@@ -3307,24 +3391,17 @@ class _MapScreenState extends State<MapScreen> {
     // ✅ Get config for current zoom
     final config = CrimeHeatmapService.getConfigForZoom(_currentZoom);
 
-    // ✅ Generate heatmap points
-    CrimeHeatmapService.generateHeatmapPoints(fullyFilteredCrimes);
-
     // ✅ Calculate stats
     final stats = CrimeHeatmapService.calculateStats(points);
-
-    // ✅ Get config for current zoom
-    CrimeHeatmapService.getConfigForZoom(_currentZoom);
 
     setState(() {
       _heatmapPoints = points;
       _heatmapConfig = config;
       _showHeatmap = points.isNotEmpty;
-      _heatmapStats = stats; // ✅ Store stats
+      _heatmapStats = stats;
     });
 
     // ✅ Print detailed stats
-    CrimeHeatmapService.calculateStats(points);
     print('🔥 Heatmap generated: ${stats.summary}');
 
     if (points.isEmpty) {
@@ -3334,6 +3411,603 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  bool _isCalculatingZones = false;
+  Future<void> _calculateCrimesInAllZones() async {
+    // ✅ Prevent concurrent calculations
+    if (_isCalculatingZones) {
+      print('⚠️ Zone calculation already in progress, skipping...');
+      return;
+    }
+
+    if (!mounted || _crimeHotspots.isEmpty) return;
+
+    _isCalculatingZones = true;
+
+    try {
+      final filterService = Provider.of<HotspotFilterService>(
+        context,
+        listen: false,
+      );
+
+      // ✅ PASS 1: Get ALL crimes (for date range calculation)
+      final allCrimes = _hotspots.toList();
+
+      // ✅ PASS 2: Get FILTERED crimes (for visible count)
+      final filteredCrimes = allCrimes.where((crime) {
+        return filterService.shouldShowHotspot(crime);
+      }).toList();
+
+      print(
+        '🔍 Calculating zones: ${allCrimes.length} total crimes, ${filteredCrimes.length} visible crimes',
+      );
+
+      List<CrimeHotspot> updatedZones = [];
+      bool needsDatabaseUpdate = false;
+
+      for (var zone in _crimeHotspots) {
+        int totalCount = 0;
+        int visibleCount = 0;
+        DateTime? firstCrimeDate;
+        DateTime? lastCrimeDate;
+
+        // ✅ Calculate TOTAL count and date range (from all crimes)
+        for (var crime in allCrimes) {
+          try {
+            final coords = crime['location']['coordinates'];
+            final crimeLocation = LatLng(coords[1], coords[0]);
+
+            bool isInZone = false;
+
+            if (zone.geometryType == GeometryType.circle) {
+              isInZone = _hotspotService.isCrimeInCircularHotspot(
+                crimeLocation: crimeLocation,
+                hotspotCenter: zone.center!,
+                radiusMeters: zone.radiusMeters!,
+              );
+            } else if (zone.geometryType == GeometryType.polygon) {
+              isInZone = _hotspotService.isCrimeInPolygonHotspot(
+                crimeLocation: crimeLocation,
+                polygonPoints: zone.polygonPoints!,
+              );
+            }
+
+            if (isInZone) {
+              totalCount++;
+
+              // Track date range
+              final crimeTimeStr = crime['time'] ?? crime['created_at'];
+              if (crimeTimeStr != null) {
+                final crimeDate = DateTime.tryParse(crimeTimeStr);
+                if (crimeDate != null) {
+                  if (firstCrimeDate == null ||
+                      crimeDate.isBefore(firstCrimeDate)) {
+                    firstCrimeDate = crimeDate;
+                  }
+                  if (lastCrimeDate == null ||
+                      crimeDate.isAfter(lastCrimeDate)) {
+                    lastCrimeDate = crimeDate;
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        // ✅ Calculate VISIBLE count (from filtered crimes only)
+        for (var crime in filteredCrimes) {
+          try {
+            final coords = crime['location']['coordinates'];
+            final crimeLocation = LatLng(coords[1], coords[0]);
+
+            bool isInZone = false;
+
+            if (zone.geometryType == GeometryType.circle) {
+              isInZone = _hotspotService.isCrimeInCircularHotspot(
+                crimeLocation: crimeLocation,
+                hotspotCenter: zone.center!,
+                radiusMeters: zone.radiusMeters!,
+              );
+            } else if (zone.geometryType == GeometryType.polygon) {
+              isInZone = _hotspotService.isCrimeInPolygonHotspot(
+                crimeLocation: crimeLocation,
+                polygonPoints: zone.polygonPoints!,
+              );
+            }
+
+            if (isInZone) {
+              visibleCount++;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        // ✅ Check what changed
+        final countChanged = totalCount != zone.crimeCount;
+        final datesChanged =
+            firstCrimeDate != zone.firstCrimeDate ||
+            lastCrimeDate != zone.lastCrimeDate;
+        final _ = visibleCount != zone.visibleCrimeCount;
+
+        // ✅ Update zone with BOTH counts
+        updatedZones.add(
+          zone.copyWith(
+            crimeCount: totalCount,
+            visibleCrimeCount: visibleCount,
+            firstCrimeDate: firstCrimeDate,
+            lastCrimeDate: lastCrimeDate,
+          ),
+        );
+
+        if (totalCount > 0) {
+          print(
+            '📍 Zone "${zone.name}": $totalCount total, $visibleCount visible '
+            '(${firstCrimeDate?.toString().split(' ')[0]} to ${lastCrimeDate?.toString().split(' ')[0]})',
+          );
+        }
+
+        // ✅ Only update database if TOTAL count or dates changed (not visible count)
+        if ((countChanged || datesChanged) &&
+            (firstCrimeDate != null || lastCrimeDate != null)) {
+          needsDatabaseUpdate = true;
+          await _hotspotService.updateHotspot(zone.id, {
+            'first_crime_date': firstCrimeDate?.toIso8601String(),
+            'last_crime_date': lastCrimeDate?.toIso8601String(),
+            'crime_count': totalCount,
+          }, 'system');
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _crimeHotspots = updatedZones;
+        });
+        print(
+          '✅ Zone calculations complete (DB updated: $needsDatabaseUpdate)',
+        );
+      }
+    } catch (e) {
+      print('❌ Error calculating crimes in zones: $e');
+    } finally {
+      _isCalculatingZones = false;
+    }
+  }
+
+  /// Determine if a hotspot zone should be visible based on filters and user role
+  bool _shouldShowHotspotZone(CrimeHotspot zone) {
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: false,
+    );
+
+    // ✅ Check user role for inactive hotspots
+    final userRole = _userProfile?['role'] as String?;
+    final isAdminOrOfficer =
+        userRole == 'admin' || userRole == 'officer' || userRole == 'tanod';
+
+    // ✅ Inactive zones: only visible to admin/officer/tanod, then apply date rules
+    if (zone.status != HotspotStatus.active) {
+      if (!isAdminOrOfficer) {
+        return false; // Hide from public
+      }
+      // Admin/officer can see inactive zones, but still need to pass date filtering below
+    }
+
+    // ✅ Check if we have a custom date range filter
+    final hasCustomDateRange =
+        filterService.crimeStartDate != null &&
+        filterService.crimeEndDate != null;
+
+    if (hasCustomDateRange) {
+      // ✅ Custom date filter is active - use intersection logic
+
+      // If hotspot has no dates, don't show it when filtering
+      if (zone.firstCrimeDate == null || zone.lastCrimeDate == null) {
+        return false;
+      }
+
+      // Use the intersection logic from the model (applies to both active and inactive)
+      return zone.intersectsWithDateRange(
+        filterService.crimeStartDate!,
+        filterService.crimeEndDate!,
+      );
+    } else {
+      // ✅ NO custom date filter - apply default 30-day rule to ALL zones
+
+      // If hotspot has no dates, don't show it
+      if (zone.lastCrimeDate == null) {
+        return false;
+      }
+
+      // Calculate 30 days ago
+      final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
+
+      // ✅ Apply 30-day rule to both active and inactive zones
+      return zone.lastCrimeDate!.isAfter(thirtyDaysAgo);
+    }
+  }
+
+  // ============================================
+  // NEW METHOD: _calculatePolygonCenter()
+  // ============================================
+
+  /// Calculate the center point (centroid) of a polygon
+  LatLng _calculatePolygonCenter(List<LatLng> points) {
+    if (points.isEmpty) {
+      return const LatLng(0, 0);
+    }
+
+    double lat = 0;
+    double lng = 0;
+
+    for (var point in points) {
+      lat += point.latitude;
+      lng += point.longitude;
+    }
+
+    return LatLng(lat / points.length, lng / points.length);
+  }
+
+  // ============================================
+  // UPDATE: _loadCrimeHotspots() Method
+  // ============================================
+
+  /// Load crime hotspot zones and calculate crimes within them
+  Future<void> _loadCrimeHotspots() async {
+    try {
+      // ✅ FIX: Admin/officer/tanod should see ALL hotspots (including inactive)
+      final includeInactive = _isAdmin || _isOfficer || _isTanod;
+
+      final hotspots = await _hotspotService.fetchHotspots(
+        includeInactive: includeInactive,
+      );
+
+      if (mounted) {
+        setState(() {
+          _crimeHotspots = hotspots;
+        });
+
+        print(
+          '✅ Loaded ${_crimeHotspots.length} crime hotspot zones (includeInactive: $includeInactive)',
+        );
+
+        // ✅ Auto-calculate crimes in each zone based on current filters
+        await _calculateCrimesInAllZones();
+      }
+    } catch (e) {
+      print('❌ Error loading crime hotspots: $e');
+    }
+  }
+
+  /// Start hotspot creation flow
+  void _startHotspotCreation(LatLng position) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isDesktop = screenWidth >= 600; // Adjust breakpoint as needed
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        // Auto-detect and show appropriate dialog
+        if (isDesktop) {
+          return HotspotCreationModeDialogDesktop(
+            onModeSelected: (mode) {
+              if (mode == 'circular') {
+                _startCircularHotspot(position);
+              } else if (mode == 'polygon') {
+                _startPolygonHotspot();
+              }
+            },
+          );
+        } else {
+          return HotspotCreationModeDialog(
+            onModeSelected: (mode) {
+              if (mode == 'circular') {
+                _startCircularHotspot(position);
+              } else if (mode == 'polygon') {
+                _startPolygonHotspot();
+              }
+            },
+          );
+        }
+      },
+    );
+  }
+
+  /// Start circular hotspot mode
+  void _startCircularHotspot(LatLng center) {
+    setState(() {
+      _isDrawingHotspot = true;
+      _hotspotDrawingMode = 'circular';
+      _circularHotspotCenter = center;
+      _circularHotspotRadius = 200.0;
+    });
+
+    _showCircularHotspotDialog();
+  }
+
+  /// Start polygon drawing mode
+  void _startPolygonHotspot() {
+    setState(() {
+      _isDrawingHotspot = true;
+      _hotspotDrawingMode = 'polygon';
+      _hotspotVertices = [];
+      _draftHotspotPolygon = null;
+    });
+
+    _showSnackBar('Tap on map to add boundary points (min. 3 required)');
+  }
+
+  /// Add vertex to polygon
+  void _addPolygonVertex(LatLng point) {
+    if (!_isDrawingHotspot || _hotspotDrawingMode != 'polygon') return;
+
+    setState(() {
+      _hotspotVertices.add(point);
+
+      // ✅ Create draft polygon preview starting from 2 points (line) instead of 3
+      if (_hotspotVertices.length >= 2) {
+        _draftHotspotPolygon = Polygon(
+          points: _hotspotVertices,
+          color: _hotspotVertices.length >= 3
+              ? Colors.red.withOpacity(0.3) // Filled when 3+ points
+              : Colors.transparent, // No fill for just 2 points (line only)
+          borderColor: Colors.red.shade600,
+          borderStrokeWidth: 3,
+          isFilled: _hotspotVertices.length >= 3, // Only fill when 3+ points
+        );
+      }
+    });
+
+    print('Added vertex ${_hotspotVertices.length}: $point');
+  }
+
+  /// Complete polygon and show details form
+  void _completePolygonHotspot() {
+    if (_hotspotVertices.length < 3) {
+      _showSnackBar('Need at least 3 points to create a hotspot zone');
+      return;
+    }
+
+    _showHotspotDetailsForm(
+      geometryType: GeometryType.polygon,
+      polygonPoints: _hotspotVertices,
+    );
+  }
+
+  /// Show details form (mobile sheet or desktop dialog)
+  void _showHotspotDetailsForm({
+    required GeometryType geometryType,
+    List<LatLng>? polygonPoints,
+    LatLng? center,
+    double? radius,
+  }) {
+    final isDesktop = MediaQuery.of(context).size.width >= 600;
+
+    if (isDesktop) {
+      // Desktop: Show modal dialog
+      showDialog(
+        context: context,
+        builder: (context) => HotspotDetailsFormDialog(
+          geometryType: geometryType,
+          polygonPoints: polygonPoints,
+          center: center,
+          radius: radius,
+          onSave: (hotspotData) async {
+            await _createHotspot(hotspotData);
+          },
+        ),
+      );
+    } else {
+      // Mobile: Show draggable bottom sheet
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => HotspotDetailsFormSheet(
+          geometryType: geometryType,
+          polygonPoints: polygonPoints,
+          center: center,
+          radius: radius,
+          onSave: (hotspotData) async {
+            await _createHotspot(hotspotData);
+          },
+        ),
+      );
+    }
+  }
+
+  /// Show circular hotspot radius selector
+  void _showCircularHotspotDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text('Circular Hotspot Zone'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Adjust the radius: ${_circularHotspotRadius.toInt()}m'),
+                Slider(
+                  value: _circularHotspotRadius,
+                  min: 100,
+                  max: 1000,
+                  divisions: 18,
+                  label: '${_circularHotspotRadius.toInt()}m',
+                  onChanged: (value) {
+                    setDialogState(() {
+                      _circularHotspotRadius = value;
+                    });
+                    setState(() {
+                      _circularHotspotRadius = value;
+                    });
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _cancelHotspotDrawing();
+                },
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _showHotspotDetailsForm(
+                    geometryType: GeometryType.circle,
+                    center: _circularHotspotCenter,
+                    radius: _circularHotspotRadius,
+                  );
+                },
+                child: const Text('Continue'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// Create hotspot in database with automatic date range calculation
+  Future<void> _createHotspot(Map<String, dynamic> hotspotData) async {
+    try {
+      // Add created_by
+      hotspotData['created_by'] = _userProfile?['id'];
+
+      // ✅ Calculate initial date range from crimes in the drawn zone
+      DateTime? firstCrimeDate;
+      DateTime? lastCrimeDate;
+      int initialCrimeCount = 0;
+
+      // Determine geometry type
+      final geometryType = GeometryType.fromString(
+        hotspotData['geometry_type'],
+      );
+
+      // Get center or polygon points
+      LatLng? center;
+      if (hotspotData['center_lat'] != null) {
+        center = LatLng(hotspotData['center_lat'], hotspotData['center_lng']);
+      }
+
+      List<LatLng>? polygonPoints;
+      if (hotspotData['polygon_coordinates'] != null) {
+        polygonPoints = (hotspotData['polygon_coordinates'] as List)
+            .map((p) => LatLng(p['lat'], p['lng']))
+            .toList();
+      }
+
+      // ✅ Find all crimes within this zone to establish date range
+      for (var crime in _hotspots) {
+        try {
+          final coords = crime['location']['coordinates'];
+          final crimeLocation = LatLng(coords[1], coords[0]);
+
+          bool isInZone = false;
+
+          if (geometryType == GeometryType.circle && center != null) {
+            isInZone = _hotspotService.isCrimeInCircularHotspot(
+              crimeLocation: crimeLocation,
+              hotspotCenter: center,
+              radiusMeters: hotspotData['radius_meters'],
+            );
+          } else if (geometryType == GeometryType.polygon &&
+              polygonPoints != null) {
+            isInZone = _hotspotService.isCrimeInPolygonHotspot(
+              crimeLocation: crimeLocation,
+              polygonPoints: polygonPoints,
+            );
+          }
+
+          if (isInZone) {
+            initialCrimeCount++;
+
+            // Track date range
+            final crimeTimeStr = crime['time'] ?? crime['created_at'];
+            if (crimeTimeStr != null) {
+              final crimeDate = DateTime.tryParse(crimeTimeStr);
+              if (crimeDate != null) {
+                if (firstCrimeDate == null ||
+                    crimeDate.isBefore(firstCrimeDate)) {
+                  firstCrimeDate = crimeDate;
+                }
+                if (lastCrimeDate == null || crimeDate.isAfter(lastCrimeDate)) {
+                  lastCrimeDate = crimeDate;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+
+      // ✅ Add calculated dates to hotspot data
+      hotspotData['first_crime_date'] = firstCrimeDate?.toIso8601String();
+      hotspotData['last_crime_date'] = lastCrimeDate?.toIso8601String();
+      hotspotData['crime_count'] = initialCrimeCount;
+
+      final hotspot = CrimeHotspot(
+        id: '', // Will be generated
+        name: hotspotData['name'],
+        description: hotspotData['description'],
+        detectionType: DetectionType.manual,
+        geometryType: geometryType,
+        center: center,
+        radiusMeters: hotspotData['radius_meters'],
+        polygonPoints: polygonPoints,
+        crimeCount: initialCrimeCount,
+        status: HotspotStatus.active,
+        visibility: HotspotVisibility.fromString(hotspotData['visibility']),
+        riskAssessment: RiskAssessment.fromString(
+          hotspotData['risk_assessment'],
+        ),
+        policeNotes: hotspotData['police_notes'],
+        firstCrimeDate: firstCrimeDate,
+        lastCrimeDate: lastCrimeDate,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        createdBy: _userProfile?['id'],
+      );
+
+      final created = await _hotspotService.createHotspot(hotspot);
+
+      if (created != null) {
+        if (initialCrimeCount > 0) {
+          _showSnackBar(
+            '✅ Hotspot created with $initialCrimeCount crimes '
+            '(${firstCrimeDate?.toString().split(' ')[0]} to ${lastCrimeDate?.toString().split(' ')[0]})',
+          );
+        } else {
+          _showSnackBar('✅ Hotspot created (no crimes in this zone yet)');
+        }
+
+        await _loadCrimeHotspots();
+        _cancelHotspotDrawing();
+      } else {
+        _showSnackBar('❌ Failed to create hotspot zone');
+      }
+    } catch (e) {
+      print('Error creating hotspot: $e');
+      _showSnackBar('Error: ${e.toString()}');
+    }
+  }
+
+  /// Cancel drawing
+  void _cancelHotspotDrawing() {
+    setState(() {
+      _isDrawingHotspot = false;
+      _hotspotDrawingMode = 'idle';
+      _hotspotVertices = [];
+      _draftHotspotPolygon = null;
+      _circularHotspotCenter = null;
+    });
+  }
   // Alternative safer approach - separate queries for different cases
 
   void _moveToCurrentLocation() {
@@ -4970,7 +5644,6 @@ class _MapScreenState extends State<MapScreen> {
             onReportHotspot: () => _showReportHotspotForm(position),
             onAddHotspot: () => _showAddHotspotForm(position),
             onAddSafeSpot: () => _navigateToSafeSpotForm(position),
-            // Add this callback for save points
             onCreateSavePoint: () {
               AddSavePointScreen.showAddSavePointForm(
                 context: context,
@@ -4978,11 +5651,20 @@ class _MapScreenState extends State<MapScreen> {
                 initialLocation: position,
                 onUpdate: () {
                   print('onUpdate: Reloading save points...');
-                  _loadSavePoints(); // Reload save points to update _savePoints
-                  setState(() {}); // Ensure the UI rebuilds
+                  _loadSavePoints();
+                  setState(() {});
                 },
               );
             },
+            // ✅ ADD THIS: Pass the hotspot zone callback
+            onCreateHotspotZone: _hasAdminPermissions
+                ? () {
+                    setState(() {
+                      _tempPinnedLocation = null;
+                    });
+                    _startHotspotCreation(position);
+                  }
+                : null,
           );
         },
       );
@@ -5099,6 +5781,23 @@ class _MapScreenState extends State<MapScreen> {
                         _tempPinnedLocation = null; // Clear temp pin
                       });
                       _navigateToSafeSpotForm(position);
+                    },
+                  ),
+
+                if (_hasAdminPermissions)
+                  ListTile(
+                    leading: const Icon(
+                      Icons.pentagon_outlined,
+                      color: Colors.red,
+                    ),
+                    title: const Text('Create Hotspot Zone'),
+                    subtitle: const Text('Draw a danger area on the map'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        _tempPinnedLocation = null;
+                      });
+                      _startHotspotCreation(position);
                     },
                   ),
 
@@ -9983,6 +10682,18 @@ class _MapScreenState extends State<MapScreen> {
         print('Notifications channel disconnected, attempting reconnection...');
         _setupNotificationsRealtime();
       }
+
+      // ✅ FIXED: Check hotspot zones connection using null check
+      if (_hotspotZonesChannel == null) {
+        print('Hotspot zones channel disconnected, attempting reconnection...');
+        _setupHotspotZonesRealtime();
+      }
+
+      // ✅ FIXED: Check safe spots connection using null check
+      if (_safeSpotsChannel == null) {
+        print('Safe spots channel disconnected, attempting reconnection...');
+        _setupSafeSpotsRealtime();
+      }
     }
   }
 
@@ -10454,7 +11165,31 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _logout() async {
     isLoggingOut = true; // Set the flag
+
+    // ✅ Clean up all channels and listeners BEFORE signing out
+    _cleanupChannels();
+
+    // ✅ Cancel all timers
+    _positionStream?.cancel();
+    _reconnectionTimer?.cancel();
+    _routeUpdateTimer?.cancel();
+    _proximityCheckTimer?.cancel();
+    _deferredLoadTimer?.cancel();
+    _timeUpdateTimer?.cancel();
+
+    for (final timer in _updateTimers.values) {
+      timer.cancel();
+    }
+    _updateTimers.clear();
+
+    // ✅ Clear user profile to prevent real-time callbacks
+    setState(() {
+      _userProfile = null;
+    });
+
+    // ✅ Now sign out
     await _authService.signOut();
+
     if (mounted) {
       Navigator.pushReplacement(
         context,
@@ -12895,7 +13630,6 @@ class _MapScreenState extends State<MapScreen> {
 
               const SizedBox(width: 4),
 
-              // Chat button - for desktop
               // Thread button - for desktop
               if (_userProfile != null) ...[
                 Stack(
@@ -12961,8 +13695,6 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
         ),
-
-        const SizedBox(width: 12),
 
         const SizedBox(width: 12),
 
@@ -13074,8 +13806,13 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // MOBILE VERSION - VERTICAL LAYOUT (ORIGINAL)
+  // MOBILE VERSION - VERTICAL LAYOUT (UPDATED)
   Widget _buildMobileFloatingActions() {
+    // ✅ Hide floating actions when drawing hotspot
+    if (_isDrawingHotspot) {
+      return const SizedBox.shrink();
+    }
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -13344,7 +14081,6 @@ class _MapScreenState extends State<MapScreen> {
                           });
                           _mapController.move(destination, 16.0);
                         },
-                        // ADD THIS NEW PARAMETER:
                         onGetSafeRouteAndClose: (location) {
                           Navigator.pop(context);
                           _getSafeRoute(location);
@@ -14964,6 +15700,13 @@ class _MapScreenState extends State<MapScreen> {
 
                 //ONE TAP FOR DESKTOP
                 onTap: (tapPosition, latLng) {
+                  // ✅ PRIORITY: Handle hotspot drawing mode
+                  if (_isDrawingHotspot && _hotspotDrawingMode == 'polygon') {
+                    _addPolygonVertex(latLng);
+                    return;
+                  }
+
+                  // Rest of your existing onTap code
                   if (_currentTab == MainTab.notifications) {
                     setState(() {
                       _currentTab = MainTab.map;
@@ -14977,11 +15720,11 @@ class _MapScreenState extends State<MapScreen> {
                     _selectedHotspot = null;
                     _selectedSafeSpot = null;
                     _selectedSavePoint = null;
+                    _selectedHotspotZone = null; // ✅ ADD THIS
                     _destinationFromSearch = false;
-                    // Only set temp pin for desktop/web on tap
+
                     if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
                       _tempPinnedLocation = latLng;
-                      // Clear _destination unless there's an active route
                       if (!_hasActiveRoute) {
                         _destination = null;
                       }
@@ -15068,6 +15811,140 @@ class _MapScreenState extends State<MapScreen> {
                   errorTileCallback: (tile, error, stackTrace) {
                     print('Tile loading error: $error');
                   },
+                ),
+
+                // ✅ ADD: Draft hotspot polygon preview (while drawing)
+                // ✅ ADD: Draft hotspot polygon preview (while drawing)
+                if (_draftHotspotPolygon != null)
+                  PolygonLayer(polygons: [_draftHotspotPolygon!]),
+
+                // ✅ NEW: Vertex markers for polygon drawing
+                if (_isDrawingHotspot &&
+                    _hotspotDrawingMode == 'polygon' &&
+                    _hotspotVertices.isNotEmpty)
+                  MarkerLayer(
+                    markers: _hotspotVertices.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final vertex = entry.value;
+                      final isFirst = index == 0;
+                      final isLast = index == _hotspotVertices.length - 1;
+
+                      return Marker(
+                        point: vertex,
+                        width: 30,
+                        height: 30,
+                        child: Transform.rotate(
+                          angle: -_currentMapRotation * pi / 180,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
+                              border: Border.all(
+                                color: isFirst
+                                    ? Colors.green.shade600
+                                    : Colors.red.shade600,
+                                width: 3,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.3),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Center(
+                              child: isFirst
+                                  ? Icon(
+                                      Icons.push_pin,
+                                      size: 14,
+                                      color: Colors.green.shade600,
+                                    )
+                                  : Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: isLast
+                                            ? Colors.red.shade600
+                                            : Colors.red.shade400,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+
+                // ✅ ADD: Circular hotspot preview (while drawing)
+                if (_isDrawingHotspot &&
+                    _hotspotDrawingMode == 'circular' &&
+                    _circularHotspotCenter != null)
+                  CircleLayer(
+                    circles: [
+                      CircleMarker(
+                        point: _circularHotspotCenter!,
+                        radius: _circularHotspotRadius,
+                        useRadiusInMeter: true,
+                        color: Colors.red.withOpacity(0.3),
+                        borderColor: Colors.red.shade600,
+                        borderStrokeWidth: 3,
+                      ),
+                    ],
+                  ),
+
+                // ✅ UPDATED: Polygon hotspot zones WITHOUT labels
+                PolygonLayer(
+                  polygons: _crimeHotspots
+                      .where((h) => h.geometryType == GeometryType.polygon)
+                      .where((h) => _shouldShowHotspotZone(h))
+                      .map((hotspot) {
+                        final isSelected =
+                            _selectedHotspotZone?.id == hotspot.id;
+                        final isInactive =
+                            hotspot.status != HotspotStatus.active;
+
+                        Color zoneColor = isInactive
+                            ? Colors.grey
+                            : _getHotspotColor(hotspot);
+
+                        return Polygon(
+                          points: hotspot.polygonPoints!,
+                          color: zoneColor.withOpacity(isSelected ? 0.4 : 0.25),
+                          borderColor: zoneColor,
+                          borderStrokeWidth: isSelected ? 3 : 2,
+                          isFilled: true,
+                        );
+                      })
+                      .toList(),
+                ),
+
+                // ✅ ADD: Existing saved circular hotspot zones
+                CircleLayer(
+                  circles: _crimeHotspots
+                      .where((h) => h.geometryType == GeometryType.circle)
+                      .where((h) => _shouldShowHotspotZone(h))
+                      .map((hotspot) {
+                        final isSelected =
+                            _selectedHotspotZone?.id == hotspot.id;
+                        final isInactive =
+                            hotspot.status != HotspotStatus.active;
+
+                        Color zoneColor = isInactive
+                            ? Colors.grey
+                            : _getHotspotColor(hotspot);
+
+                        return CircleMarker(
+                          point: hotspot.center!,
+                          radius: hotspot.radiusMeters!,
+                          useRadiusInMeter: true,
+                          color: zoneColor.withOpacity(isSelected ? 0.4 : 0.25),
+                          borderColor: zoneColor,
+                          borderStrokeWidth: isSelected ? 3 : 2,
+                        );
+                      })
+                      .toList(),
                 ),
 
                 if (_showHeatmap && _heatmapPoints.isNotEmpty)
@@ -15157,6 +16034,176 @@ class _MapScreenState extends State<MapScreen> {
                             : _buildEnhancedDestinationMarker(),
                       ),
                   ],
+                ),
+
+                MarkerLayer(
+                  markers: _crimeHotspots
+                      .where((h) => _shouldShowHotspotZone(h))
+                      .map((hotspot) {
+                        // Calculate center point for polygon or use existing center for circle
+                        final centerPoint =
+                            hotspot.geometryType == GeometryType.circle
+                            ? hotspot.center!
+                            : _calculatePolygonCenter(hotspot.polygonPoints!);
+
+                        final isInactive =
+                            hotspot.status != HotspotStatus.active;
+
+                        return Marker(
+                          point: centerPoint,
+                          width: 120, // ✅ Increased width to accommodate name
+                          height: isInactive
+                              ? 105
+                              : 90, // ✅ Increased height for name + count
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _selectedHotspotZone = hotspot;
+                                _selectedHotspot =
+                                    null; // Clear crime selection
+                                _selectedSafeSpot = null;
+                              });
+                              _showHotspotZoneDetails(hotspot);
+                            },
+                            child: Transform.rotate(
+                              angle: -_currentMapRotation * pi / 180,
+                              alignment: Alignment.center,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // ✅ Hotspot Name (replacing icon badge)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 3,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: isInactive
+                                          ? Colors.grey.withOpacity(0.95)
+                                          : _getHotspotColor(
+                                              hotspot,
+                                            ).withOpacity(0.95),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 2,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.3),
+                                          blurRadius: 6,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          hotspot.geometryType ==
+                                                  GeometryType.circle
+                                              ? Icons.circle_outlined
+                                              : Icons.pentagon_outlined,
+                                          color: Colors.white,
+                                          size: 14,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Flexible(
+                                          child: Text(
+                                            hotspot.name,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+
+                                  // ✅ Crime count badge
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: isInactive
+                                          ? Colors.grey.shade100
+                                          : Colors.white,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: isInactive
+                                            ? Colors.grey.shade400
+                                            : _getHotspotColor(hotspot),
+                                        width: 1.5,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.2),
+                                          blurRadius: 4,
+                                          offset: const Offset(0, 1),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.report_outlined,
+                                          size: 12,
+                                          color: isInactive
+                                              ? Colors.grey.shade600
+                                              : _getHotspotColor(hotspot),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '${hotspot.visibleCrimeCount}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: isInactive
+                                                ? Colors.grey.shade700
+                                                : _getHotspotColor(hotspot),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+
+                                  // ✅ "Inactive" label for deactivated zones
+                                  if (isInactive) ...[
+                                    const SizedBox(height: 2),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade200,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        'Inactive',
+                                        style: TextStyle(
+                                          fontSize: 8,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      })
+                      .toList(),
                 ),
 
                 Consumer<HotspotFilterService>(
@@ -15821,6 +16868,65 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
 
+        if (_isDrawingHotspot && _hotspotDrawingMode == 'polygon')
+          _isDesktopScreen()
+              ? HotspotDrawingControlsDesktop(
+                  vertexCount: _hotspotVertices.length,
+                  canComplete: _hotspotVertices.length >= 3,
+                  onUndo: () {
+                    if (_hotspotVertices.isNotEmpty) {
+                      setState(() {
+                        _hotspotVertices.removeLast();
+
+                        // ✅ UPDATED: Show line/polygon starting from 2 points
+                        if (_hotspotVertices.length >= 2) {
+                          _draftHotspotPolygon = Polygon(
+                            points: _hotspotVertices,
+                            color: _hotspotVertices.length >= 3
+                                ? Colors.red.withOpacity(0.3)
+                                : Colors.transparent, // No fill for 2 points
+                            borderColor: Colors.red.shade600,
+                            borderStrokeWidth: 3,
+                            isFilled: _hotspotVertices.length >= 3,
+                          );
+                        } else {
+                          _draftHotspotPolygon = null;
+                        }
+                      });
+                    }
+                  },
+                  onCancel: _cancelHotspotDrawing,
+                  onComplete: _completePolygonHotspot,
+                )
+              : HotspotDrawingControls(
+                  vertexCount: _hotspotVertices.length,
+                  canComplete: _hotspotVertices.length >= 3,
+                  onUndo: () {
+                    if (_hotspotVertices.isNotEmpty) {
+                      setState(() {
+                        _hotspotVertices.removeLast();
+
+                        // ✅ UPDATED: Show line/polygon starting from 2 points
+                        if (_hotspotVertices.length >= 2) {
+                          _draftHotspotPolygon = Polygon(
+                            points: _hotspotVertices,
+                            color: _hotspotVertices.length >= 3
+                                ? Colors.red.withOpacity(0.3)
+                                : Colors.transparent, // No fill for 2 points
+                            borderColor: Colors.red.shade600,
+                            borderStrokeWidth: 3,
+                            isFilled: _hotspotVertices.length >= 3,
+                          );
+                        } else {
+                          _draftHotspotPolygon = null;
+                        }
+                      });
+                    }
+                  },
+                  onCancel: _cancelHotspotDrawing,
+                  onComplete: _completePolygonHotspot,
+                ),
+
         // Cool overlay effects for map corners
         Positioned(
           top: 0,
@@ -16375,6 +17481,29 @@ class _MapScreenState extends State<MapScreen> {
         return Icons.group;
       default:
         return Icons.place;
+    }
+  }
+
+  Color _getHotspotColor(CrimeHotspot hotspot) {
+    // If inactive, return grey (this is a backup, main logic handles this above)
+    if (hotspot.status != HotspotStatus.active) {
+      return Colors.grey;
+    }
+
+    // Color based on risk assessment
+    if (hotspot.riskAssessment == null) {
+      return Colors.blue; // Default color if no risk assessment
+    }
+
+    switch (hotspot.riskAssessment!) {
+      case RiskAssessment.extreme:
+        return Colors.red.shade700;
+      case RiskAssessment.high:
+        return Colors.orange.shade600;
+      case RiskAssessment.moderate:
+        return Colors.yellow.shade700;
+      case RiskAssessment.low:
+        return Colors.green.shade600;
     }
   }
 
@@ -24194,6 +25323,401 @@ class _MapScreenState extends State<MapScreen> {
         }
       },
     );
+  }
+
+  void _showHotspotZoneDetails(CrimeHotspot hotspot) {
+    final isDesktop = MediaQuery.of(context).size.width >= 600;
+    final canDelete = _canDeleteHotspot(hotspot); // ✅ Calculate permission
+
+    if (isDesktop) {
+      // Desktop: Show dialog
+      showDialog(
+        context: context,
+        builder: (context) => HotspotZoneDetailsDialog(
+          hotspot: hotspot,
+          userProfile: _userProfile,
+          isAdmin: _hasAdminPermissions,
+          canDelete: canDelete, // ✅ Pass the permission
+          onEdit: () => _editHotspotZone(hotspot),
+          onDelete: () => _deleteHotspotZone(hotspot),
+          onViewCrimes: () => _viewCrimesInZone(hotspot),
+          onClose: () {
+            setState(() {
+              _selectedHotspotZone = null;
+            });
+          },
+        ),
+      );
+    } else {
+      // Mobile: Show bottom sheet
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => HotspotZoneDetailsSheet(
+          hotspot: hotspot,
+          userProfile: _userProfile,
+          isAdmin: _hasAdminPermissions,
+          canDelete: canDelete, // ✅ Pass the permission
+          onEdit: () => _editHotspotZone(hotspot),
+          onDelete: () => _deleteHotspotZone(hotspot),
+          onViewCrimes: () => _viewCrimesInZone(hotspot),
+          onClose: () {
+            setState(() {
+              _selectedHotspotZone = null;
+            });
+          },
+        ),
+      );
+    }
+  }
+
+  // ============================================
+  // PART 5: Edit Hotspot Zone
+  // ============================================
+
+  void _editHotspotZone(CrimeHotspot hotspot) {
+    final isDesktop = MediaQuery.of(context).size.width >= 600;
+    final canDelete = _canDeleteHotspot(hotspot);
+
+    if (isDesktop) {
+      // Desktop: Show modal dialog
+      showDialog(
+        context: context,
+        builder: (context) => EditHotspotZoneDialog(
+          hotspot: hotspot,
+          canDelete: canDelete,
+          onSave: (updatedData) async {
+            Navigator.pop(context); // ✅ Close edit dialog first
+
+            final success = await _hotspotService.updateHotspot(
+              hotspot.id,
+              updatedData,
+              _userProfile?['id'],
+            );
+
+            if (mounted) {
+              // ✅ Add mounted check
+              if (success) {
+                _showSnackBar('✅ Hotspot zone updated successfully');
+                await _loadCrimeHotspots();
+                setState(() {
+                  _selectedHotspotZone = null;
+                });
+              } else {
+                _showSnackBar('❌ Failed to update hotspot zone');
+              }
+            }
+          },
+        ),
+      );
+    } else {
+      // Mobile: Show draggable bottom sheet
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => EditHotspotZoneSheet(
+          hotspot: hotspot,
+          canDelete: canDelete,
+          onSave: (updatedData) async {
+            Navigator.pop(context); // ✅ Close edit sheet first
+
+            final success = await _hotspotService.updateHotspot(
+              hotspot.id,
+              updatedData,
+              _userProfile?['id'],
+            );
+
+            if (mounted) {
+              // ✅ Add mounted check
+              if (success) {
+                _showSnackBar('✅ Hotspot zone updated successfully');
+                await _loadCrimeHotspots();
+                setState(() {
+                  _selectedHotspotZone = null;
+                });
+              } else {
+                _showSnackBar('❌ Failed to update hotspot zone');
+              }
+            }
+          },
+        ),
+      );
+    }
+  }
+
+  bool _canDeleteHotspot(CrimeHotspot hotspot) {
+    final userId = _userProfile?['id'] as String?;
+    if (userId == null) return false;
+
+    // Admin can delete anything
+    if (_isAdmin) return true;
+
+    // Officer can only delete their own hotspots
+    if (_isOfficer) {
+      return hotspot.createdBy == userId;
+    }
+
+    return false;
+  }
+
+  // ============================================
+  // PART 6: Delete Hotspot Zone
+  // ============================================
+
+  void _deleteHotspotZone(CrimeHotspot hotspot) {
+    final isDesktop = MediaQuery.of(context).size.width >= 600;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        // ✅ Add insetPadding for mobile to expand width
+        insetPadding: isDesktop
+            ? const EdgeInsets.symmetric(horizontal: 40.0, vertical: 24.0)
+            : const EdgeInsets.symmetric(horizontal: 24.0, vertical: 24.0),
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red.shade600),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Delete Hotspot Zone?',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Are you sure you want to delete "${hotspot.name}"?'),
+            const SizedBox(height: 8),
+            Text(
+              'This action cannot be undone.',
+              style: TextStyle(
+                color: Colors.red.shade700,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context); // Close confirmation dialog
+
+              final success = await _hotspotService.deleteHotspot(
+                hotspot.id,
+                _userProfile?['id'],
+              );
+
+              if (mounted) {
+                // ✅ Add mounted check
+                if (success) {
+                  _showSnackBar('✅ Hotspot zone deleted successfully');
+                  await _loadCrimeHotspots();
+                  setState(() {
+                    _selectedHotspotZone = null;
+                  });
+                } else {
+                  _showSnackBar('❌ Failed to delete hotspot zone');
+                }
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================
+  // PART 7: View Crimes in Zone
+  // ============================================
+
+  void _viewCrimesInZone(CrimeHotspot hotspot) async {
+    // ✅ Don't pop here
+    // Navigator.pop(context); // REMOVE THIS LINE
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    // ✅ Use filtered crimes from memory
+    final filterService = Provider.of<HotspotFilterService>(
+      context,
+      listen: false,
+    );
+
+    final crimesInZone = _hotspots.where((crime) {
+      if (!filterService.shouldShowHotspot(crime)) return false;
+
+      final coords = crime['location']['coordinates'];
+      final crimeLocation = LatLng(coords[1], coords[0]);
+
+      if (hotspot.geometryType == GeometryType.circle) {
+        return _hotspotService.isCrimeInCircularHotspot(
+          crimeLocation: crimeLocation,
+          hotspotCenter: hotspot.center!,
+          radiusMeters: hotspot.radiusMeters!,
+        );
+      } else if (hotspot.geometryType == GeometryType.polygon) {
+        return _hotspotService.isCrimeInPolygonHotspot(
+          crimeLocation: crimeLocation,
+          polygonPoints: hotspot.polygonPoints!,
+        );
+      }
+      return false;
+    }).toList();
+
+    if (!mounted) return;
+    Navigator.pop(context); // Close loading dialog
+
+    if (crimesInZone.isEmpty) {
+      _showSnackBar(
+        'No crimes found in this zone within the selected date range',
+      );
+      return;
+    }
+
+    final isDesktop = MediaQuery.of(context).size.width >= 600;
+
+    if (isDesktop) {
+      // Desktop: Use dialog
+      showDialog(
+        context: context,
+        builder: (context) => CrimesInZoneDialog(
+          hotspot: hotspot,
+          crimes: crimesInZone,
+          onCrimeSelected: (crime) {
+            Navigator.pop(context); // Close crimes dialog
+            final coords = crime['location']['coordinates'];
+            final crimePoint = LatLng(coords[1], coords[0]);
+            _mapController.move(crimePoint, 17.0);
+            setState(() {
+              _selectedHotspot = crime;
+            });
+          },
+        ),
+      );
+    } else {
+      // Mobile: Use full-width bottom sheet
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => CrimesInZoneSheet(
+          hotspot: hotspot,
+          crimes: crimesInZone,
+          onCrimeSelected: (crime) {
+            Navigator.pop(context); // Close crimes sheet
+            final coords = crime['location']['coordinates'];
+            final crimePoint = LatLng(coords[1], coords[0]);
+            _mapController.move(crimePoint, 17.0);
+            setState(() {
+              _selectedHotspot = crime;
+            });
+          },
+        ),
+      );
+    }
+  }
+
+  void _setupHotspotZonesRealtime() {
+    // ✅ Cleanup existing channel first
+    if (_hotspotZonesChannel != null) {
+      print('⚠️ Cleaning up existing hotspot zones channel...');
+      _hotspotZonesChannel!.unsubscribe();
+      _hotspotZonesChannel = null;
+    }
+
+    try {
+      _hotspotZonesChannel = Supabase.instance.client
+          .channel('crime_hotspots_changes')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'crime_hotspots',
+            callback: (payload) async {
+              print('🔄 Hotspot zone change detected: ${payload.eventType}');
+
+              // ✅ CRITICAL: Check if widget is still mounted and user is still logged in
+              if (!mounted || _userProfile == null) {
+                print('⚠️ Widget disposed or user logged out, ignoring event');
+                return;
+              }
+
+              final eventType = payload.eventType;
+
+              if (eventType == PostgresChangeEvent.insert) {
+                final newData = payload.newRecord;
+                await _loadCrimeHotspots();
+                if (mounted) {
+                  _showSnackBar('New hotspot zone: ${newData['name']}');
+                }
+              } else if (eventType == PostgresChangeEvent.update) {
+                final newData = payload.newRecord;
+                final oldData = payload.oldRecord;
+
+                // ✅ Check if this was just a crime count recalculation (ignore these)
+                final updatedBy = newData['updated_by'];
+                final isAutoRecalculation =
+                    updatedBy == 'system' ||
+                    (oldData['crime_count'] != newData['crime_count'] &&
+                        oldData['status'] == newData['status'] &&
+                        oldData['name'] == newData['name']);
+
+                if (isAutoRecalculation) {
+                  // Just reload silently, don't show snackbar
+                  await _loadCrimeHotspots();
+                  return;
+                }
+
+                await _loadCrimeHotspots();
+
+                if (!mounted) return;
+
+                // Check if status changed (user action)
+                final oldStatus = oldData['status'];
+                final newStatus = newData['status'];
+
+                if (oldStatus != newStatus) {
+                  if (newStatus == 'inactive') {
+                    _showSnackBar('Hotspot deactivated: ${newData['name']}');
+                  } else if (newStatus == 'active') {
+                    _showSnackBar('Hotspot reactivated: ${newData['name']}');
+                  } else {
+                    _showSnackBar('Hotspot status updated: ${newData['name']}');
+                  }
+                } else {
+                  _showSnackBar('Hotspot updated: ${newData['name']}');
+                }
+              } else if (eventType == PostgresChangeEvent.delete) {
+                await _loadCrimeHotspots();
+                if (mounted) {
+                  _showSnackBar('Hotspot zone deleted');
+                }
+              }
+            },
+          )
+          .subscribe();
+
+      print('✅ Hotspot zones real-time subscription active');
+    } catch (e) {
+      print('❌ Error setting up hotspot zones real-time: $e');
+    }
   }
 }
 

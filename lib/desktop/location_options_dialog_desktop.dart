@@ -12,7 +12,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
   final VoidCallback onReportHotspot;
   final VoidCallback onAddHotspot;
   final VoidCallback onAddSafeSpot;
-  final VoidCallback onCreateSavePoint; 
+  final VoidCallback onCreateSavePoint;
+  final VoidCallback? onCreateHotspotZone; // ✅ ADD THIS
 
   const LocationOptionsDialogDesktop({
     super.key,
@@ -27,7 +28,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
     required this.onReportHotspot,
     required this.onAddHotspot,
     required this.onAddSafeSpot,
-    required this.onCreateSavePoint, 
+    required this.onCreateSavePoint,
+    this.onCreateHotspotZone, // ✅ ADD THIS
   });
 
   @override
@@ -46,13 +48,18 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 8.0),
                   child: Text(
                     locationName,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis,
                     maxLines: 3,
                   ),
                 ),
                 const Divider(),
+
+                // Get Regular Route
                 ListTile(
                   leading: const Icon(Icons.directions),
                   title: const Text('Get Regular Route'),
@@ -61,6 +68,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                     onGetDirections();
                   },
                 ),
+
+                // Get Safe Route
                 ListTile(
                   leading: const Icon(Icons.safety_check, color: Colors.green),
                   title: const Text('Get Safe Route'),
@@ -71,6 +80,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                   },
                 ),
 
+                // Report Crime (Non-admin users)
                 if (!isAdmin && userProfile != null)
                   ListTile(
                     leading: const Icon(Icons.report, color: Colors.orange),
@@ -81,6 +91,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                       onReportHotspot();
                     },
                   ),
+
+                // Add Crime Incident (Admin only)
                 if (isAdmin && userProfile != null)
                   ListTile(
                     leading: const Icon(Icons.add_location_alt),
@@ -91,7 +103,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                       onAddHotspot();
                     },
                   ),
-                // Add the safe spot option here
+
+                // Add Safe Spot
                 if (userProfile != null)
                   ListTile(
                     leading: const Icon(Icons.security, color: Colors.blue),
@@ -102,10 +115,29 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                       onAddSafeSpot();
                     },
                   ),
-                // Add the save point option here
+
+                // ✅ ADD THIS: Create Hotspot Zone (Admin only)
+                if (onCreateHotspotZone != null)
+                  ListTile(
+                    leading: const Icon(
+                      Icons.pentagon_outlined,
+                      color: Colors.red,
+                    ),
+                    title: const Text('Create Hotspot Zone'),
+                    subtitle: const Text('Draw a danger area on the map'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      onCreateHotspotZone!();
+                    },
+                  ),
+
+                // Save This Location
                 if (userProfile != null)
                   ListTile(
-                    leading: const Icon(Icons.bookmark_add, color: Colors.purple),
+                    leading: const Icon(
+                      Icons.bookmark_add,
+                      color: Colors.purple,
+                    ),
                     title: const Text('Save This Location'),
                     subtitle: const Text('Add to your personal save points'),
                     onTap: () {
@@ -114,6 +146,7 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                     },
                   ),
 
+                // Share Location
                 ListTile(
                   leading: const Icon(Icons.share),
                   title: const Text('Share Location'),
@@ -122,6 +155,8 @@ class LocationOptionsDialogDesktop extends StatelessWidget {
                     onShareLocation();
                   },
                 ),
+
+                // Distance/Duration Info
                 if (distance > 0)
                   Padding(
                     padding: const EdgeInsets.all(8.0),

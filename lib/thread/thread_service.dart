@@ -82,7 +82,7 @@ class ThreadService {
       print('   Raw response length: ${response.length}');
 
       if (response.isEmpty) {
-        print('⚠️  No data returned from query');
+        print('⚠️ No data returned from query');
         return [];
       }
 
@@ -101,7 +101,7 @@ class ThreadService {
           }
 
           threads.add(thread);
-          print('   ✓ Thread parsed successfully: ${thread.title}');
+          print('   ✔ Thread parsed successfully: ${thread.title}');
         } catch (e, stackTrace) {
           print('   ❌ Error parsing thread: $e');
           print('   Stack: $stackTrace');
@@ -153,6 +153,8 @@ class ThreadService {
     DateTime? before,
   }) async {
     try {
+      print('🔍 Fetching messages for thread: $threadId');
+
       var query = _supabase
           .from('thread_messages')
           .select('''
@@ -171,26 +173,46 @@ class ThreadService {
             )
           )
         ''')
-          .eq('thread_id', threadId)
-          .eq('is_deleted', false);
+          .eq('thread_id', threadId);
+
+      // ✅ IMPORTANT: Don't filter by is_deleted initially - let's see all messages
+      // We'll handle deleted messages in the UI
+      print('   Not filtering deleted messages yet');
 
       // ✅ Apply the 'before' filter using .lt() properly
       if (before != null) {
         query = query.lt('created_at', before.toIso8601String());
+        print('   Filtering messages before: $before');
       }
 
       // Apply ordering and limit after all filters
+      print('   Ordering by created_at DESC, limit: $limit');
       final response = await query
           .order('created_at', ascending: false)
           .limit(limit);
 
-      return response
+      print('✅ Query returned ${response.length} messages');
+
+      if (response.isNotEmpty) {
+        print('   First message ID: ${response.first['id']}');
+        print('   First message text: ${response.first['message']}');
+        print('   First message deleted: ${response.first['is_deleted']}');
+      }
+
+      // Parse messages and filter deleted ones
+      final messages = response
           .map((json) => ThreadMessage.fromJson(json))
+          .where((msg) => !msg.isDeleted) // Filter deleted messages here
           .toList()
           .reversed
           .toList();
-    } catch (e) {
-      print('Error fetching thread messages: $e');
+
+      print('✅ After filtering deleted: ${messages.length} messages');
+
+      return messages;
+    } catch (e, stackTrace) {
+      print('❌ Error fetching thread messages: $e');
+      print('Stack trace: $stackTrace');
       rethrow;
     }
   }
@@ -206,17 +228,30 @@ class ThreadService {
     String? attachmentType,
   }) async {
     try {
+      // ✅ Build insert data, only include non-null optional fields
+      final Map<String, dynamic> insertData = {
+        'thread_id': threadId,
+        'user_id': userId,
+        'message': message,
+        'message_type': messageType,
+      };
+
+      // Only add optional fields if they're not null
+      if (replyToMessageId != null) {
+        insertData['reply_to_message_id'] = replyToMessageId;
+      }
+      if (attachmentUrl != null) {
+        insertData['attachment_url'] = attachmentUrl;
+      }
+      if (attachmentType != null) {
+        insertData['attachment_type'] = attachmentType;
+      }
+
+      print('📤 Sending message with data: $insertData');
+
       final response = await _supabase
           .from('thread_messages')
-          .insert({
-            'thread_id': threadId,
-            'user_id': userId,
-            'message': message,
-            'message_type': messageType,
-            'reply_to_message_id': replyToMessageId,
-            'attachment_url': attachmentUrl,
-            'attachment_type': attachmentType,
-          })
+          .insert(insertData)
           .select('''
             *,
             user:user_id (
@@ -235,9 +270,48 @@ class ThreadService {
           ''')
           .single();
 
+      print('✅ Message sent successfully');
       return ThreadMessage.fromJson(response);
     } catch (e) {
-      print('Error sending message: $e');
+      print('❌ Error sending message: $e');
+      rethrow;
+    }
+  }
+
+  // ✅ NEW: Edit message
+  Future<void> editMessage(String messageId, String newMessage) async {
+    try {
+      await _supabase
+          .from('thread_messages')
+          .update({
+            'message': newMessage,
+            'is_edited': true,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', messageId);
+
+      print('✅ Message edited successfully: $messageId');
+    } catch (e) {
+      print('Error editing message: $e');
+      rethrow;
+    }
+  }
+
+  // ✅ NEW: Delete message (soft delete)
+  Future<void> deleteMessage(String messageId) async {
+    try {
+      await _supabase
+          .from('thread_messages')
+          .update({
+            'is_deleted': true,
+            'message': 'This message has been deleted',
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', messageId);
+
+      print('✅ Message deleted successfully: $messageId');
+    } catch (e) {
+      print('Error deleting message: $e');
       rethrow;
     }
   }
@@ -284,9 +358,6 @@ class ThreadService {
       }, onConflict: 'thread_id,user_id');
     }
   }
-
-  // lib/thread/thread_service.dart
-  // UPDATE the fetchThreadsWithUnreadInfo method:
 
   Future<List<ReportThread>> fetchThreadsWithUnreadInfo({
     required String userId,
@@ -349,11 +420,11 @@ class ThreadService {
         try {
           var thread = ReportThread.fromJson(json);
 
-          // ✅ FIXED: Check if user is a participant
+          // ✅ FIXED: Properly check participant data
           final participantData = json['participant'];
-          bool isParticipant = false;
           int unreadCount = 0;
           bool isFollowing = false;
+          bool hasJoined = false;
 
           if (participantData is List && participantData.isNotEmpty) {
             // Find this user's participant record
@@ -363,16 +434,21 @@ class ThreadService {
             );
 
             if (userParticipant != null) {
-              isParticipant = true;
+              hasJoined = true;
               unreadCount = userParticipant['unread_count'] as int? ?? 0;
               isFollowing = userParticipant['is_following'] as bool? ?? false;
             }
           }
 
-          // ✅ If user is not a participant, isFollowing = false (shows as NEW)
+          // ✅ CRITICAL FIX: Only show as unread if:
+          // 1. User has joined AND has unread messages (unreadCount > 0)
+          // 2. OR user hasn't joined at all (hasJoined = false)
+          // This prevents showing all threads as unread after sending a message
           thread = thread.copyWith(
             unreadCount: unreadCount,
-            isFollowing: isParticipant ? isFollowing : false,
+            isFollowing: hasJoined
+                ? isFollowing
+                : false, // false if not joined (shows as NEW)
           );
 
           if (userLocation != null) {
@@ -381,6 +457,14 @@ class ThreadService {
           }
 
           threads.add(thread);
+
+          // Debug log for the first few threads
+          if (threads.length <= 3) {
+            print('Thread: ${thread.title}');
+            print(
+              '  hasJoined: $hasJoined, unreadCount: $unreadCount, isFollowing: $isFollowing',
+            );
+          }
         } catch (e) {
           print('Error parsing thread: $e');
         }
@@ -389,6 +473,45 @@ class ThreadService {
       return threads;
     } catch (e) {
       print('❌ Error fetching threads: $e');
+      rethrow;
+    }
+  }
+
+  // lib/thread/thread_service.dart - ADD THIS METHOD
+
+  /// Join a thread explicitly
+  Future<void> joinThread(String threadId, String userId) async {
+    try {
+      print('🔵 Joining thread: $threadId for user: $userId');
+
+      await _supabase.from('thread_participants').upsert({
+        'thread_id': threadId,
+        'user_id': userId,
+        'is_following': true,
+        'joined_at': DateTime.now().toUtc().toIso8601String(),
+        'last_read_at': DateTime.now().toUtc().toIso8601String(),
+        'unread_count': 0,
+      }, onConflict: 'thread_id,user_id');
+
+      print('✅ Successfully joined thread: $threadId');
+    } catch (e) {
+      print('❌ Error joining thread: $e');
+      rethrow;
+    }
+  }
+
+  /// Leave a thread
+  Future<void> leaveThread(String threadId, String userId) async {
+    try {
+      await _supabase
+          .from('thread_participants')
+          .update({'is_following': false})
+          .eq('thread_id', threadId)
+          .eq('user_id', userId);
+
+      print('✅ Left thread: $threadId');
+    } catch (e) {
+      print('Error leaving thread: $e');
       rethrow;
     }
   }
@@ -469,10 +592,12 @@ class ThreadService {
   }
 
   /// Setup real-time subscription for messages in a specific thread
+  /// ✅ UPDATED: Now includes onUpdateMessage callback
   void subscribeToThreadMessages(
     String threadId,
     Function(ThreadMessage) onNewMessage,
     Function(String) onDeleteMessage,
+    Function(ThreadMessage) onUpdateMessage, // ✅ NEW parameter
   ) {
     _messagesChannel?.unsubscribe();
 
@@ -516,6 +641,54 @@ class ThreadService {
               onNewMessage(message);
             } catch (e) {
               print('Error fetching new message details: $e');
+            }
+          },
+        )
+        // ✅ NEW: Listen for UPDATE events
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'thread_messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'thread_id',
+            value: threadId,
+          ),
+          callback: (payload) async {
+            print('Message updated');
+            try {
+              // Fetch full updated message with user details
+              final response = await _supabase
+                  .from('thread_messages')
+                  .select('''
+                    *,
+                    user:user_id (
+                      id,
+                      full_name,
+                      profile_picture_url,
+                      role
+                    ),
+                    reply_to:reply_to_message_id (
+                      id,
+                      message,
+                      user:user_id (
+                        full_name
+                      )
+                    )
+                  ''')
+                  .eq('id', payload.newRecord['id'])
+                  .single();
+
+              final message = ThreadMessage.fromJson(response);
+
+              // If message was soft-deleted, call onDeleteMessage instead
+              if (message.isDeleted) {
+                onDeleteMessage(message.id);
+              } else {
+                onUpdateMessage(message);
+              }
+            } catch (e) {
+              print('Error fetching updated message details: $e');
             }
           },
         )

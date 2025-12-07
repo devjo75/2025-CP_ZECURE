@@ -10,11 +10,11 @@ class CrimeHeatmapLayer extends StatelessWidget {
   final double currentZoom;
 
   const CrimeHeatmapLayer({
-    Key? key,
+    super.key,
     required this.points,
     required this.config,
     required this.currentZoom,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -199,7 +199,7 @@ class _HeatmapCirclePainter extends CustomPainter {
 class HeatmapLegend extends StatelessWidget {
   final bool isVisible;
 
-  const HeatmapLegend({Key? key, required this.isVisible}) : super(key: key);
+  const HeatmapLegend({super.key, required this.isVisible});
 
   @override
   Widget build(BuildContext context) {

@@ -29,17 +29,91 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
   List<ThreadMessage> _messages = [];
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isJoined = false;
+  bool _isJoining = false;
   String _messageType = 'comment';
   ThreadMessage? _replyingTo;
+
+  // ✅ NEW: Track current thread ID to detect changes
+  String? _currentThreadId;
 
   @override
   void initState() {
     super.initState();
+    _currentThreadId = widget.thread.id;
+    _isJoined = widget.thread.isFollowing;
     _loadMessages();
     _setupRealtimeSubscription();
 
-    // ✅ Mark as read immediately when opening
-    _markAsRead();
+    // ✅ ONLY mark as read if already joined
+    if (_isJoined) {
+      _markAsRead();
+    }
+  }
+
+  // ✅ NEW: Detect when thread changes and reload
+  @override
+  void didUpdateWidget(ThreadDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.thread.id != widget.thread.id) {
+      print(
+        '🔄 Thread changed from ${oldWidget.thread.id} to ${widget.thread.id}',
+      );
+
+      _threadService.dispose();
+      _currentThreadId = widget.thread.id;
+      _isJoined = widget.thread.isFollowing; // Update join status
+
+      setState(() {
+        _messages = [];
+        _isLoading = true;
+        _replyingTo = null;
+      });
+
+      Future.delayed(Duration(milliseconds: 100), () {
+        if (mounted && _currentThreadId == widget.thread.id) {
+          _setupRealtimeSubscription();
+          _loadMessages();
+          if (_isJoined) {
+            _markAsRead();
+          }
+        }
+      });
+    }
+  }
+
+  Future<void> _joinThread() async {
+    setState(() => _isJoining = true);
+
+    try {
+      await _threadService.joinThread(widget.thread.id, widget.userId);
+
+      if (mounted) {
+        setState(() {
+          _isJoined = true;
+          _isJoining = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You joined this thread'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+
+        // Mark as read after joining
+        _markAsRead();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isJoining = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to join thread: $e')));
+      }
+    }
   }
 
   @override
@@ -51,22 +125,50 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
   }
 
   Future<void> _loadMessages() async {
+    if (!mounted) return;
+
     setState(() => _isLoading = true);
 
     try {
+      print('📥 Loading messages for thread: ${widget.thread.id}');
+      print('   Current thread ID: $_currentThreadId');
+
       final messages = await _threadService.fetchThreadMessages(
         widget.thread.id,
       );
 
-      setState(() {
-        _messages = messages;
-        _isLoading = false;
-      });
+      print('✅ Loaded ${messages.length} messages');
+      if (messages.isNotEmpty) {
+        print('   First message: ${messages.first.message}');
+        print('   Last message: ${messages.last.message}');
+      }
 
-      _scrollToBottom();
-    } catch (e) {
-      print('Error loading messages: $e');
-      setState(() => _isLoading = false);
+      // ✅ IMPORTANT: Only update if we're still viewing the same thread
+      if (_currentThreadId == widget.thread.id && mounted) {
+        setState(() {
+          _messages = messages;
+          _isLoading = false;
+        });
+
+        print('✅ Messages updated in state: ${_messages.length}');
+        _scrollToBottom();
+      } else {
+        print('⚠️ Thread changed during load, ignoring messages');
+      }
+    } catch (e, stackTrace) {
+      print('❌ Error loading messages: $e');
+      print('Stack trace: $stackTrace');
+
+      if (mounted && _currentThreadId == widget.thread.id) {
+        setState(() => _isLoading = false);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load messages: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -74,20 +176,36 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
     _threadService.subscribeToThreadMessages(
       widget.thread.id,
       (newMessage) {
-        if (mounted) {
+        // ✅ Only add message if we're still viewing this thread
+        if (mounted && _currentThreadId == widget.thread.id) {
+          print('📨 New message received for current thread');
           setState(() {
             _messages.add(newMessage);
           });
           _scrollToBottom();
-
-          // ✅ Mark as read when receiving new messages while viewing
           _markAsRead();
+        } else {
+          print('⚠️ Ignoring message for different thread');
         }
       },
       (deletedMessageId) {
-        if (mounted) {
+        if (mounted && _currentThreadId == widget.thread.id) {
           setState(() {
             _messages.removeWhere((m) => m.id == deletedMessageId);
+          });
+        }
+      },
+      // ✅ NEW: Handle message updates (edits)
+      (updatedMessage) {
+        if (mounted && _currentThreadId == widget.thread.id) {
+          print('✏️ Message updated');
+          setState(() {
+            final index = _messages.indexWhere(
+              (m) => m.id == updatedMessage.id,
+            );
+            if (index != -1) {
+              _messages[index] = updatedMessage;
+            }
           });
         }
       },
@@ -96,17 +214,19 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
 
   Future<void> _markAsRead() async {
     await _threadService.markThreadAsRead(widget.thread.id, widget.userId);
-    print('✅ Thread marked as read');
+    print('✅ Thread marked as read: ${widget.thread.id}');
   }
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       Future.delayed(const Duration(milliseconds: 100), () {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
       });
     }
   }
@@ -114,6 +234,12 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty || _isSending) return;
+
+    // Auto-join if not joined yet
+    if (!_isJoined) {
+      await _joinThread();
+      if (!_isJoined) return; // Failed to join
+    }
 
     setState(() => _isSending = true);
 
@@ -246,6 +372,8 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
           Expanded(
             child: _isLoading
                 ? Center(child: CircularProgressIndicator())
+                : !_isJoined // ✅ Check join status FIRST
+                ? _buildJoinPrompt() // Show join prompt instead
                 : _messages.isEmpty
                 ? _buildEmptyState()
                 : ListView.builder(
@@ -276,6 +404,69 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
 
           // Message input
           _buildMessageInput(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildJoinPrompt() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.lock_outline,
+              size: 64,
+              color: Colors.orange.shade600,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'Join to View Messages',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey.shade800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 48),
+            child: Text(
+              'Join this thread to read and participate in the discussion',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+            ),
+          ),
+          const SizedBox(height: 32),
+          ElevatedButton.icon(
+            onPressed: _isJoining ? null : _joinThread,
+            icon: _isJoining
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Icon(Icons.person_add),
+            label: Text(_isJoining ? 'Joining...' : 'Join Thread'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue.shade600,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -485,58 +676,81 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
                 ),
               ),
 
-            // Message bubble
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isOwnMessage ? Colors.blue.shade600 : Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Reply indicator
-                  if (message.replyToMessage != null)
-                    _buildReplyPreview(message.replyToMessage!, isOwnMessage),
+            // ✅ Message bubble with long-press menu
+            GestureDetector(
+              onLongPress: () => _showMessageOptions(message, isOwnMessage),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: isOwnMessage ? Colors.blue.shade600 : Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Reply indicator
+                    if (message.replyToMessage != null)
+                      _buildReplyPreview(message.replyToMessage!, isOwnMessage),
 
-                  // Message type badge
-                  if (message.messageType != 'comment')
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: _buildMessageTypeBadge(
-                        message.messageType,
-                        isOwnMessage,
+                    // Message type badge
+                    if (message.messageType != 'comment')
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: _buildMessageTypeBadge(
+                          message.messageType,
+                          isOwnMessage,
+                        ),
+                      ),
+
+                    // Message text
+                    Text(
+                      message.message,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: isOwnMessage ? Colors.white : Colors.black87,
                       ),
                     ),
 
-                  // Message text
-                  Text(
-                    message.message,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: isOwnMessage ? Colors.white : Colors.black87,
+                    // Timestamp and edited indicator
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          DateFormat(
+                            'h:mm a',
+                          ).format(message.createdAt.toLocal()),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isOwnMessage
+                                ? Colors.white.withOpacity(0.8)
+                                : Colors.grey.shade600,
+                          ),
+                        ),
+                        if (message.isEdited) ...[
+                          const SizedBox(width: 4),
+                          Text(
+                            '(edited)',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontStyle: FontStyle.italic,
+                              color: isOwnMessage
+                                  ? Colors.white.withOpacity(0.7)
+                                  : Colors.grey.shade500,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                  ),
-
-                  // Timestamp
-                  const SizedBox(height: 4),
-                  Text(
-                    DateFormat('h:mm a').format(message.createdAt.toLocal()),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isOwnMessage
-                          ? Colors.white.withOpacity(0.8)
-                          : Colors.grey.shade600,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -711,6 +925,9 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
   }
 
   Widget _buildMessageInput() {
+    if (!_isJoined) {
+      return const SizedBox.shrink();
+    }
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -853,6 +1070,149 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
           ),
           Expanded(
             child: Text(value, style: TextStyle(color: Colors.grey.shade800)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ NEW: Show message options (Reply, Edit, Delete)
+  void _showMessageOptions(ThreadMessage message, bool isOwnMessage) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Reply option (available for all messages)
+            ListTile(
+              leading: Icon(Icons.reply, color: Colors.blue.shade600),
+              title: const Text('Reply'),
+              onTap: () {
+                Navigator.pop(context);
+                setState(() {
+                  _replyingTo = message;
+                });
+              },
+            ),
+
+            // Edit option (only for own messages)
+            if (isOwnMessage)
+              ListTile(
+                leading: Icon(Icons.edit, color: Colors.orange.shade600),
+                title: const Text('Edit'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showEditMessageDialog(message);
+                },
+              ),
+
+            // Delete option (only for own messages)
+            if (isOwnMessage)
+              ListTile(
+                leading: Icon(Icons.delete, color: Colors.red.shade600),
+                title: const Text('Delete'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showDeleteConfirmation(message);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ✅ NEW: Show edit message dialog
+  void _showEditMessageDialog(ThreadMessage message) {
+    final editController = TextEditingController(text: message.message);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Message'),
+        content: TextField(
+          controller: editController,
+          decoration: const InputDecoration(
+            hintText: 'Edit your message...',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newText = editController.text.trim();
+              if (newText.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Message cannot be empty')),
+                );
+                return;
+              }
+
+              if (newText == message.message) {
+                Navigator.pop(context);
+                return;
+              }
+
+              try {
+                await _threadService.editMessage(message.id, newText);
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Message updated')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Failed to edit: $e')));
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ NEW: Show delete confirmation dialog
+  void _showDeleteConfirmation(ThreadMessage message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Message'),
+        content: const Text(
+          'Are you sure you want to delete this message? This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await _threadService.deleteMessage(message.id);
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Message deleted')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
           ),
         ],
       ),

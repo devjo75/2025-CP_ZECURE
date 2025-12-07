@@ -509,21 +509,83 @@ class _ThreadDesktopScreenState extends State<ThreadDesktopScreen> {
     );
   }
 
-  // ✅ NEW: Add these methods to _ThreadDesktopScreenState class:
+  // lib/thread/thread_desktop_screen.dart
+  // REPLACE _buildSectionedThreadList method:
 
   Widget _buildSectionedThreadList() {
-    // ✅ FIXED: Show as unread if: has unread messages OR user hasn't joined (not following)
-    final unreadThreads = _filteredThreads
-        .where((t) => t.unreadCount > 0 || !t.isFollowing)
+    // ✅ FIXED: Show as unread ONLY if user has joined AND has unread messages
+    // Show as "NEW" if user hasn't joined (not following)
+
+    final newThreads = _filteredThreads
+        .where((t) => !t.isFollowing) // User hasn't joined yet
         .toList();
+
+    final unreadThreads = _filteredThreads
+        .where((t) => t.isFollowing && t.unreadCount > 0) // Joined + has unread
+        .toList();
+
     final readThreads = _filteredThreads
-        .where((t) => t.unreadCount == 0 && t.isFollowing)
+        .where((t) => t.isFollowing && t.unreadCount == 0) // Joined + read
         .toList();
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        // ✅ UNREAD SECTION
+        // ✅ NEW THREADS (not joined yet)
+        if (newThreads.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(
+              left: 16,
+              right: 16,
+              bottom: 8,
+              top: 4,
+            ),
+            child: Row(
+              children: [
+                Text(
+                  'New Threads (${newThreads.length})',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.orange[700],
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.orange[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'NOT JOINED',
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange[700],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ...newThreads.map((thread) {
+            final isSelected = _selectedThread?.id == thread.id;
+            return _buildNewThreadListItem(thread, isSelected);
+          }),
+          if (unreadThreads.isNotEmpty || readThreads.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Divider(color: Colors.grey[300], height: 1),
+            ),
+          ],
+        ],
+
+        // ✅ UNREAD THREADS (joined + has unread)
         if (unreadThreads.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.only(
@@ -539,27 +601,8 @@ class _ThreadDesktopScreenState extends State<ThreadDesktopScreen> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: Colors.grey[700],
+                    color: Colors.blue[700],
                     letterSpacing: 0.3,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.blue[100],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'NEW',
-                    style: TextStyle(
-                      fontSize: 8,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue[700],
-                    ),
                   ),
                 ),
               ],
@@ -569,13 +612,15 @@ class _ThreadDesktopScreenState extends State<ThreadDesktopScreen> {
             final isSelected = _selectedThread?.id == thread.id;
             return _buildUnreadThreadListItem(thread, isSelected);
           }),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Divider(color: Colors.grey[300], height: 1),
-          ),
+          if (readThreads.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Divider(color: Colors.grey[300], height: 1),
+            ),
+          ],
         ],
 
-        // ✅ READ SECTION
+        // ✅ READ THREADS (joined + no unread)
         if (readThreads.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.only(
@@ -603,7 +648,171 @@ class _ThreadDesktopScreenState extends State<ThreadDesktopScreen> {
     );
   }
 
-  // ✅ NEW: Unread thread item (blue styling)
+  // ✅ NEW: Add this method for "NEW" threads (orange theme)
+  Widget _buildNewThreadListItem(ReportThread thread, bool isSelected) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isSelected ? Colors.orange.shade100 : Colors.orange.shade50,
+        border: Border(
+          bottom: BorderSide(color: Colors.orange.shade200),
+          left: BorderSide(
+            color: isSelected ? Colors.orange.shade600 : Colors.orange.shade300,
+            width: isSelected ? 3 : 2,
+          ),
+        ),
+      ),
+      child: InkWell(
+        onTap: () => setState(() => _selectedThread = thread),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header row
+              Row(
+                children: [
+                  // Orange dot indicator
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade600,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildSeverityBadge(thread.crimeLevel),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: thread.activeStatus == 'active'
+                          ? Colors.green.shade100
+                          : Colors.grey.shade200,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      thread.activeStatus.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: thread.activeStatus == 'active'
+                            ? Colors.green.shade700
+                            : Colors.grey.shade600,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  // NEW badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade600,
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.orange.withOpacity(0.4),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Text(
+                      'NEW',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+
+              // Title
+              Text(
+                thread.title,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.black,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+
+              // Crime info
+              Text(
+                '${thread.crimeType} • ${thread.crimeCategory}',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // Stats
+              Row(
+                children: [
+                  Icon(Icons.message, size: 14, color: Colors.orange.shade600),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${thread.messageCount}',
+                    style: TextStyle(
+                      color: Colors.orange.shade600,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Icon(Icons.people, size: 14, color: Colors.orange.shade600),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${thread.participantCount}',
+                    style: TextStyle(
+                      color: Colors.orange.shade600,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      _getTimeAgo(thread.lastMessageAt ?? thread.createdAt),
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ✅ UPDATE _buildUnreadThreadListItem - remove the "NEW" badge logic:
   Widget _buildUnreadThreadListItem(ReportThread thread, bool isSelected) {
     return Container(
       decoration: BoxDecoration(
@@ -661,59 +870,32 @@ class _ThreadDesktopScreenState extends State<ThreadDesktopScreen> {
                     ),
                   ),
                   const Spacer(),
-                  // ✅ FIXED: Show unread count OR "NEW" badge
-                  if (thread.unreadCount > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade600,
-                        borderRadius: BorderRadius.circular(10),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.red.withOpacity(0.4),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Text(
-                        '${thread.unreadCount}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
+                  // ✅ ONLY show unread count (no NEW badge here)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade600,
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.red.withOpacity(0.4),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
                         ),
-                      ),
-                    )
-                  else if (!thread.isFollowing)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade600,
-                        borderRadius: BorderRadius.circular(10),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.orange.withOpacity(0.4),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: const Text(
-                        'NEW',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      ],
+                    ),
+                    child: Text(
+                      '${thread.unreadCount}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
