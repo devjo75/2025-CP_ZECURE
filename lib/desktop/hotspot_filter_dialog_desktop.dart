@@ -541,6 +541,68 @@ class HotspotFilterDialogDesktop extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
 
+                      // ✅ NEW: Markers Section
+                      const Padding(
+                        padding: EdgeInsets.only(left: 8.0),
+                        child: Text(
+                          'Markers',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          left: 8.0,
+                          top: 4,
+                          bottom: 8,
+                        ),
+                        child: Text(
+                          'Toggle marker layers for better performance',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        child: Column(
+                          children: [
+                            buildFilterToggle(
+                              context,
+                              'Crime Markers',
+                              Icons.location_on,
+                              Colors.red,
+                              filterService.showCrimeMarkers,
+                              (_) => filterService.toggleCrimeMarkers(),
+                            ),
+                            const SizedBox(height: 8),
+                            buildFilterToggle(
+                              context,
+                              'Heatmap Layer',
+                              Icons.whatshot,
+                              Colors.orange,
+                              filterService.showHeatmapLayer,
+                              (_) => filterService.toggleHeatmapLayer(),
+                            ),
+                            const SizedBox(height: 8),
+                            buildFilterToggle(
+                              context,
+                              'Hotspot Zones',
+                              Icons.circle_outlined,
+                              Colors.deepPurple,
+                              filterService.showHotspotZoneMarkers,
+                              (_) => filterService.toggleHotspotZoneMarkers(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
                       // CRIMES FILTERS (existing code continues here)
                       // Severity filters
                       const Padding(

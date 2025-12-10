@@ -36,29 +36,17 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
       vsync: this,
     );
 
-    _scaleAnimation = Tween<double>(
-      begin: 0.3,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.elasticOut,
-    ));
+    _scaleAnimation = Tween<double>(begin: 0.3, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.elasticOut),
+    );
 
-    _fadeAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeInOut,
-    ));
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
 
-    _confettiAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _confettiController,
-      curve: Curves.easeOutBack,
-    ));
+    _confettiAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _confettiController, curve: Curves.easeOutBack),
+    );
 
     _animationController.forward();
     _confettiController.forward();
@@ -79,13 +67,11 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
     });
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     final bool isWeb = MediaQuery.of(context).size.width > 600;
     final screenWidth = MediaQuery.of(context).size.width;
-    
+
     return AnimatedBuilder(
       animation: _animationController,
       builder: (context, child) {
@@ -99,13 +85,13 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
               children: [
                 // Confetti Effect
                 ..._buildConfettiParticles(),
-                
+
                 // Main Modal
                 Center(
                   child: Transform.scale(
                     scale: _scaleAnimation.value,
                     child: Container(
-                      width: isWeb 
+                      width: isWeb
                           ? (screenWidth * 0.4).clamp(400.0, 520.0)
                           : screenWidth * 0.92,
                       constraints: BoxConstraints(
@@ -157,11 +143,12 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
           final double progress = _confettiAnimation.value;
           final double delay = index * 0.1;
           final double adjustedProgress = (progress - delay).clamp(0.0, 1.0);
-          
+
           return Positioned(
             left: MediaQuery.of(context).size.width * (0.1 + (index % 5) * 0.2),
-            top: MediaQuery.of(context).size.height * 0.1 + 
-                 adjustedProgress * MediaQuery.of(context).size.height * 0.8,
+            top:
+                MediaQuery.of(context).size.height * 0.1 +
+                adjustedProgress * MediaQuery.of(context).size.height * 0.8,
             child: Transform.rotate(
               angle: adjustedProgress * 6.28 * 2, // 2 full rotations
               child: Opacity(
@@ -177,8 +164,12 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
                       Colors.purple,
                       Colors.pink,
                     ][index % 5],
-                    shape: index % 2 == 0 ? BoxShape.circle : BoxShape.rectangle,
-                    borderRadius: index % 2 == 1 ? BorderRadius.circular(2) : null,
+                    shape: index % 2 == 0
+                        ? BoxShape.circle
+                        : BoxShape.rectangle,
+                    borderRadius: index % 2 == 1
+                        ? BorderRadius.circular(2)
+                        : null,
                   ),
                 ),
               ),
@@ -217,17 +208,13 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
                   color: Colors.white.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(25),
                 ),
-                child: const Icon(
-                  Icons.close,
-                  color: Colors.white,
-                  size: 20,
-                ),
+                child: const Icon(Icons.close, color: Colors.white, size: 20),
               ),
             ),
           ),
-          
+
           const SizedBox(height: 8),
-          
+
           // Celebration Icon with pulse effect
           AnimatedBuilder(
             animation: _confettiController,
@@ -249,9 +236,9 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
               );
             },
           ),
-          
+
           const SizedBox(height: 16),
-          
+
           // Welcome Message
           Text(
             '🎉 Welcome to Zecure!',
@@ -262,11 +249,11 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
             ),
             textAlign: TextAlign.center,
           ),
-          
+
           const SizedBox(height: 8),
-          
+
           Text(
-            widget.userName != null 
+            widget.userName != null
                 ? 'Hi ${widget.userName}! Your account is ready to go.'
                 : 'Your account has been created successfully!',
             style: GoogleFonts.poppins(
@@ -336,9 +323,9 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
               ],
             ),
           ),
-          
+
           const SizedBox(height: 24),
-          
+
           Text(
             'What you can do now:',
             style: GoogleFonts.poppins(
@@ -347,40 +334,42 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
               color: Colors.grey.shade800,
             ),
           ),
-          
+
           const SizedBox(height: 16),
-          
+
           _buildFeatureList(isWeb, [
             {
-              'icon': Icons.report_rounded, 
-              'title': 'Report Safety Incidents',
-              'description': 'Help your community by reporting safety concerns in your area.',
+              'icon': Icons.report_rounded,
+              'title': 'Report Crime Incidents',
+              'description':
+                  'Help your community by reporting safety concerns in your area.',
               'color': Colors.red.shade600,
             },
             {
-              'icon': Icons.add_location_alt_rounded, 
+              'icon': Icons.add_location_alt_rounded,
               'title': 'Mark Safe Locations',
-              'description': 'Contribute by adding safe spots to the community map.',
+              'description':
+                  'Contribute by adding safe spots to the community map.',
               'color': Colors.green.shade600,
             },
             {
-              'icon': Icons.route_rounded, 
-              'title': 'Get Safe Routes',
-              'description': 'Receive safe route suggestions based on current safety data.',
-              'color': Colors.blue.shade600,
+              'icon': Icons.forum_rounded,
+              'title': 'Join Community Discussions',
+              'description':
+                  'Participate in threads about safety incidents in your area.',
+              'color': Colors.purple.shade600,
             },
             {
-              'icon': Icons.notifications_active_rounded, 
+              'icon': Icons.notifications_active_rounded,
               'title': 'Real-time Alerts',
-              'description': 'Stay informed with instant safety alerts in your vicinity.',
+              'description':
+                  'Stay informed with instant safety alerts in your vicinity.',
               'color': Colors.orange.shade600,
             },
-
-
           ]),
-          
+
           const SizedBox(height: 20),
-          
+
           // Getting Started Tips
           Container(
             padding: const EdgeInsets.all(20),
@@ -394,7 +383,11 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
               children: [
                 Row(
                   children: [
-                    Icon(Icons.lightbulb_outline, color: Colors.blue.shade600, size: 24),
+                    Icon(
+                      Icons.lightbulb_outline,
+                      color: Colors.blue.shade600,
+                      size: 24,
+                    ),
                     const SizedBox(width: 12),
                     Text(
                       'Quick Start Tips',
@@ -407,9 +400,15 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
                   ],
                 ),
                 const SizedBox(height: 12),
-                _buildTip('📍 Explore the map to see safety hotspots in your area'),
-                _buildTip('🔔 Enable notifications for real-time safety updates'),
-                _buildTip('👥 Your reports help make the community safer for everyone'),
+                _buildTip(
+                  '📍 Explore the map to see safety hotspots in your area',
+                ),
+                _buildTip(
+                  '🔔 Enable notifications for real-time safety updates',
+                ),
+                _buildTip(
+                  '👥 Your reports help make the community safer for everyone',
+                ),
               ],
             ),
           ),
@@ -446,11 +445,7 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
                   color: (feature['color'] as Color).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                  feature['icon'],
-                  size: 20,
-                  color: feature['color'],
-                ),
+                child: Icon(feature['icon'], size: 20, color: feature['color']),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -527,10 +522,7 @@ class _FirstTimeWelcomeModalState extends State<FirstTimeWelcomeModal>
 }
 
 // Helper function to show the first-time welcome modal
-void showFirstTimeWelcomeModal(
-  BuildContext context, {
-  String? userName,
-}) {
+void showFirstTimeWelcomeModal(BuildContext context, {String? userName}) {
   showDialog(
     context: context,
     barrierDismissible: false,

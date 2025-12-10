@@ -373,111 +373,185 @@ class ThreadService {
           .toUtc()
           .toIso8601String();
 
-      // Fetch threads with participant info - LEFT JOIN to include threads user hasn't joined
-      var query = _supabase
+      // ✅ FIRST: Fetch threads user is following (regardless of age)
+      var followingQuery = _supabase
           .from('report_threads')
           .select('''
-          *,
-          hotspot:hotspot_id!inner (
+        *,
+        hotspot:hotspot_id!inner (
+          id,
+          type_id,
+          time,
+          location,
+          active_status,
+          status,
+          crime_type:type_id (
             id,
-            type_id,
-            time,
-            location,
-            active_status,
-            status,
-            crime_type:type_id (
-              id,
-              name,
-              level,
-              category,
-              description
-            )
-          ),
-          participant:thread_participants!thread_participants_thread_id_fkey (
-            user_id,
-            unread_count,
-            last_read_at,
-            is_following
+            name,
+            level,
+            category,
+            description
           )
-        ''')
+        ),
+        participant:thread_participants!thread_participants_thread_id_fkey!inner (
+          user_id,
+          unread_count,
+          last_read_at,
+          is_following
+        )
+      ''')
+          .eq('hotspot.status', 'approved')
+          .eq('participant.user_id', userId)
+          .eq('participant.is_following', true);
+
+      if (statusFilter != null && statusFilter != 'all') {
+        followingQuery = followingQuery.eq(
+          'is_active',
+          statusFilter == 'active',
+        );
+      }
+
+      if (crimeTypeFilter != null && crimeTypeFilter.isNotEmpty) {
+        followingQuery = followingQuery.eq(
+          'hotspot.crime_type.name',
+          crimeTypeFilter,
+        );
+      }
+
+      // ✅ SECOND: Fetch recent threads (within 30 days) with LEFT JOIN
+      var recentQuery = _supabase
+          .from('report_threads')
+          .select('''
+        *,
+        hotspot:hotspot_id!inner (
+          id,
+          type_id,
+          time,
+          location,
+          active_status,
+          status,
+          crime_type:type_id (
+            id,
+            name,
+            level,
+            category,
+            description
+          )
+        ),
+        participant:thread_participants!thread_participants_thread_id_fkey (
+          user_id,
+          unread_count,
+          last_read_at,
+          is_following
+        )
+      ''')
           .gte('hotspot.time', thirtyDaysAgo)
           .eq('hotspot.status', 'approved');
 
       if (statusFilter != null && statusFilter != 'all') {
-        query = query.eq('is_active', statusFilter == 'active');
+        recentQuery = recentQuery.eq('is_active', statusFilter == 'active');
       }
 
       if (crimeTypeFilter != null && crimeTypeFilter.isNotEmpty) {
-        query = query.eq('hotspot.crime_type.name', crimeTypeFilter);
+        recentQuery = recentQuery.eq(
+          'hotspot.crime_type.name',
+          crimeTypeFilter,
+        );
       }
 
-      final response = await query.order('last_message_at', ascending: false);
+      // Execute both queries
+      final followingResponse = await followingQuery.order(
+        'last_message_at',
+        ascending: false,
+      );
+      final recentResponse = await recentQuery.order(
+        'last_message_at',
+        ascending: false,
+      );
 
-      print('✅ Fetched ${response.length} threads with participant info');
+      print('✅ Fetched ${followingResponse.length} following threads');
+      print('✅ Fetched ${recentResponse.length} recent threads');
 
+      // Use a Set to track unique thread IDs
+      final Set<String> threadIds = {};
       List<ReportThread> threads = [];
-      for (var json in response) {
-        try {
-          var thread = ReportThread.fromJson(json);
 
-          // ✅ FIXED: Properly check participant data
-          final participantData = json['participant'];
-          int unreadCount = 0;
-          bool isFollowing = false;
-          bool hasJoined = false;
+      // Helper function to parse thread
+      ReportThread parseThread(
+        Map<String, dynamic> json,
+        bool isFromFollowing,
+      ) {
+        var thread = ReportThread.fromJson(json);
 
-          if (participantData is List && participantData.isNotEmpty) {
-            // Find this user's participant record
-            final userParticipant = participantData.firstWhere(
-              (p) => p['user_id'] == userId,
-              orElse: () => null,
-            );
+        final participantData = json['participant'];
+        int unreadCount = 0;
+        bool isFollowing = false;
+        bool hasJoined = false;
 
-            if (userParticipant != null) {
-              hasJoined = true;
-              unreadCount = userParticipant['unread_count'] as int? ?? 0;
-              isFollowing = userParticipant['is_following'] as bool? ?? false;
-            }
-          }
-
-          // ✅ CRITICAL FIX: Only show as unread if:
-          // 1. User has joined AND has unread messages (unreadCount > 0)
-          // 2. OR user hasn't joined at all (hasJoined = false)
-          // This prevents showing all threads as unread after sending a message
-          thread = thread.copyWith(
-            unreadCount: unreadCount,
-            isFollowing: hasJoined
-                ? isFollowing
-                : false, // false if not joined (shows as NEW)
+        if (participantData is List && participantData.isNotEmpty) {
+          final userParticipant = participantData.firstWhere(
+            (p) => p['user_id'] == userId,
+            orElse: () => null,
           );
 
-          if (userLocation != null) {
-            final distance = _calculateDistance(userLocation, thread.location);
-            thread = thread.copyWith(distanceFromUser: distance);
+          if (userParticipant != null) {
+            hasJoined = true;
+            unreadCount = userParticipant['unread_count'] as int? ?? 0;
+            isFollowing = userParticipant['is_following'] as bool? ?? false;
           }
+        } else if (isFromFollowing) {
+          // If from following query, user must be following
+          hasJoined = true;
+          isFollowing = true;
+        }
 
-          threads.add(thread);
+        thread = thread.copyWith(
+          unreadCount: unreadCount,
+          isFollowing: hasJoined ? isFollowing : false,
+        );
 
-          // Debug log for the first few threads
-          if (threads.length <= 3) {
-            print('Thread: ${thread.title}');
-            print(
-              '  hasJoined: $hasJoined, unreadCount: $unreadCount, isFollowing: $isFollowing',
-            );
+        if (userLocation != null) {
+          final distance = _calculateDistance(userLocation, thread.location);
+          thread = thread.copyWith(distanceFromUser: distance);
+        }
+
+        return thread;
+      }
+
+      // Process following threads first (these have priority)
+      for (var json in followingResponse) {
+        try {
+          final threadId = json['id'] as String;
+          if (!threadIds.contains(threadId)) {
+            threadIds.add(threadId);
+            threads.add(parseThread(json, true));
           }
         } catch (e) {
-          print('Error parsing thread: $e');
+          print('Error parsing following thread: $e');
         }
       }
 
+      // Process recent threads (skip if already added from following)
+      for (var json in recentResponse) {
+        try {
+          final threadId = json['id'] as String;
+          if (!threadIds.contains(threadId)) {
+            threadIds.add(threadId);
+            threads.add(parseThread(json, false));
+          }
+        } catch (e) {
+          print('Error parsing recent thread: $e');
+        }
+      }
+
+      print('🎉 Total unique threads: ${threads.length}');
       return threads;
-    } catch (e) {
+    } catch (e, stackTrace) {
       print('❌ Error fetching threads: $e');
+      print('Stack trace: $stackTrace');
       rethrow;
     }
   }
-
-  // lib/thread/thread_service.dart - ADD THIS METHOD
 
   /// Join a thread explicitly
   Future<void> joinThread(String threadId, String userId) async {

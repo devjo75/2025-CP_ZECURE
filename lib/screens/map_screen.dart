@@ -37,7 +37,7 @@ import 'package:zecure/savepoint/save_point_details.dart';
 import 'package:zecure/screens/crime_heatmap_layer.dart';
 import 'package:zecure/screens/hotspot_details_form.dart';
 import 'package:zecure/screens/hotspot_drawing_controls.dart';
-import 'package:zecure/screens/hotspot_zone_details.dart';
+import 'package:zecure/screens/hotspot_zone_details_edit.dart';
 import 'package:zecure/screens/welcome_message_first_timer.dart';
 import 'package:zecure/screens/welcome_message_screen.dart';
 import 'package:zecure/screens/hotlines_screen.dart';
@@ -78,11 +78,11 @@ enum TravelMode { walking, driving, cycling }
 
 enum MapType { defaultMap, standard, satellite, cycleMap }
 
-class _MapScreenState extends State<MapScreen> {
+// ✅ ADD 'with WidgetsBindingObserver' HERE
+class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
   final _authService = AuthService(Supabase.instance.client);
-
   // 2. Change the default map type to defaultMap
   MapType _currentMapType = MapType.defaultMap;
 
@@ -165,6 +165,11 @@ class _MapScreenState extends State<MapScreen> {
   bool _locationButtonPressed = false;
   LatLng? _tempPinnedLocation;
 
+  //OFFICER SHARING LOCATIONS
+  List<Map<String, dynamic>> _sharedLocations = [];
+  StreamSubscription? _locationSharingSubscription;
+  Timer? _locationUpdateTimer;
+
   // ADD: ROUTE TRACKING
   List<LatLng> _routePoints = []; // Only for directions/safe routes
   bool _hasActiveRoute = false;
@@ -180,6 +185,7 @@ class _MapScreenState extends State<MapScreen> {
   List<Map<String, dynamic>> _nearbyHotspots = [];
   bool _showProximityAlert = false;
   Timer? _proximityCheckTimer;
+  List<Map<String, dynamic>> _nearbyZones = [];
 
   // Directions state
   double _distance = 0;
@@ -285,6 +291,32 @@ class _MapScreenState extends State<MapScreen> {
   bool _showSavePointSelector = false; // New state for savepoint button
 
   Timer? _timeUpdateTimer;
+
+  // ============================================
+  // LOCATION CACHE VARIABLES
+  // ============================================
+  LatLng? _cachedQuickActionLocation;
+  DateTime? _quickActionLocationTimestamp;
+  static const Duration _locationCacheValidity = Duration(
+    minutes: 5,
+  ); // Cache for 5 minutes
+
+  // ============================================
+  // LOCATION CACHE HELPER METHODS
+  // ============================================
+
+  /// Check if cached location is still valid
+  bool _isLocationCacheValid() {
+    if (_cachedQuickActionLocation == null ||
+        _quickActionLocationTimestamp == null) {
+      return false;
+    }
+
+    final now = DateTime.now();
+    final difference = now.difference(_quickActionLocationTimestamp!);
+
+    return difference < _locationCacheValidity;
+  }
 
   // NEW: Progressive marker loading based on zoom level
   // Helper method - Add this near your other helper methods
@@ -562,7 +594,7 @@ class _MapScreenState extends State<MapScreen> {
     if (_currentZoom < 12.0) return 250;
     if (_currentZoom < 14.0) return 400;
     if (_currentZoom < 16.0) return 600;
-    return 1000; // Max markers at closest zoom
+    return 10000; // Max markers at closest zoom
   }
 
   Timer? _zoomDebounceTimer;
@@ -654,6 +686,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeEssentials();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -670,6 +703,49 @@ class _MapScreenState extends State<MapScreen> {
         filterService.addListener(_onFiltersChanged);
       }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    if (_userProfile?['id'] == null) return;
+
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // App is going to background or being closed
+        print('🔴 App paused/detached - disabling location sharing');
+        _disableLocationSharingOnExit();
+        break;
+      case AppLifecycleState.resumed:
+        print('🟢 App resumed');
+        // Location sharing stays off - user must manually re-enable
+        break;
+      default:
+        break;
+    }
+  }
+
+  // ✅ ADD THIS METHOD - Disable location sharing helper
+  Future<void> _disableLocationSharingOnExit() async {
+    if (_userProfile?['id'] == null) return;
+
+    try {
+      await Supabase.instance.client
+          .from('users')
+          .update({
+            'is_sharing_location': false,
+            'current_latitude': null,
+            'current_longitude': null,
+            'last_location_update': null,
+          })
+          .eq('id', _userProfile!['id']);
+
+      print('✅ Location sharing disabled on exit');
+    } catch (e) {
+      print('❌ Error disabling location sharing on exit: $e');
+    }
   }
 
   // ============================================
@@ -753,6 +829,7 @@ class _MapScreenState extends State<MapScreen> {
   bool _isReloadingData = false;
   bool _authListenerSetup = false; // Prevent duplicate listeners
   bool _isLoadingProfile = false; // Prevent duplicate profile loads
+  bool _isLocationSharing = false;
 
   void _initializeEssentials() {
     if (!_authListenerSetup) {
@@ -885,6 +962,16 @@ class _MapScreenState extends State<MapScreen> {
   void _cleanupChannels() {
     print('🧹 Cleaning up all real-time channels...');
 
+    // ✅ Disable location sharing on cleanup
+    if (_userProfile?['id'] != null) {
+      Supabase.instance.client
+          .from('users')
+          .update({'is_sharing_location': false})
+          .eq('id', _userProfile!['id'])
+          .then((_) => print('✅ Location sharing disabled on cleanup'))
+          .catchError((e) => print('❌ Error: $e'));
+    }
+
     _hotspotsChannel?.unsubscribe();
     _hotspotsChannel = null;
 
@@ -896,6 +983,9 @@ class _MapScreenState extends State<MapScreen> {
 
     _hotspotZonesChannel?.unsubscribe();
     _hotspotZonesChannel = null;
+
+    _locationSharingSubscription?.cancel(); // ✅ ADD THIS
+    _locationUpdateTimer?.cancel(); // ✅ ADD THIS
 
     // Remove filter listeners
     try {
@@ -1109,6 +1199,27 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   void dispose() {
+    // ✅ Remove lifecycle observer
+    WidgetsBinding.instance.removeObserver(this);
+
+    // ✅ Clear location cache
+    _clearLocationCache();
+
+    // ✅ Turn off location sharing when app closes
+    if (_userProfile?['id'] != null) {
+      Supabase.instance.client
+          .from('users')
+          .update({
+            'is_sharing_location': false,
+            'current_latitude': null,
+            'current_longitude': null,
+            'last_location_update': null,
+          })
+          .eq('id', _userProfile!['id'])
+          .then((_) => print('✅ Location sharing disabled on dispose'))
+          .catchError((e) => print('❌ Error disabling location: $e'));
+    }
+
     // ✅ Unsubscribe from all channels FIRST
     _hotspotsChannel?.unsubscribe();
     _hotspotsChannel = null;
@@ -1132,6 +1243,9 @@ class _MapScreenState extends State<MapScreen> {
     _proximityCheckTimer?.cancel();
     _deferredLoadTimer?.cancel();
     _timeUpdateTimer?.cancel();
+
+    _locationSharingSubscription?.cancel();
+    _locationUpdateTimer?.cancel();
 
     for (final timer in _updateTimers.values) {
       timer.cancel();
@@ -1802,6 +1916,7 @@ class _MapScreenState extends State<MapScreen> {
         final role = response['role'];
         final isAdmin = role == 'admin';
         final isOfficer = role == 'officer';
+        final isTanod = role == 'tanod'; // ✅ ADD THIS
         final firstName = response['first_name'];
         final hasSeenWelcome = response['has_seen_welcome'] ?? false;
 
@@ -1821,6 +1936,9 @@ class _MapScreenState extends State<MapScreen> {
             userType = UserType.admin;
           } else if (isOfficer) {
             userType = UserType.officer;
+          } else if (isTanod) {
+            // ✅ ADD THIS CONDITION
+            userType = UserType.tanod;
           } else {
             userType = UserType.user;
           }
@@ -1880,6 +1998,7 @@ class _MapScreenState extends State<MapScreen> {
       if (_showProximityAlert) {
         setState(() {
           _nearbyHotspots.clear();
+          _nearbyZones.clear();
           _showProximityAlert = false;
         });
       }
@@ -1890,9 +2009,14 @@ class _MapScreenState extends State<MapScreen> {
       'DEBUG: Checking proximity from position: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}',
     );
     print('DEBUG: Total hotspots to check: ${_hotspots.length}');
+    print('DEBUG: Total zones to check: ${_crimeHotspots.length}');
 
     final nearbyHotspots = <Map<String, dynamic>>[];
+    final nearbyZones = <Map<String, dynamic>>[];
 
+    // ============================================
+    // PART 1: Check proximity to individual crimes (existing logic)
+    // ============================================
     for (final hotspot in _hotspots) {
       // Only check active, approved hotspots
       final status = hotspot['status'] ?? 'approved';
@@ -1932,8 +2056,134 @@ class _MapScreenState extends State<MapScreen> {
       }
     }
 
-    // Sort by distance (closest first)
+    // ============================================
+    // PART 2: Check proximity to hotspot zones (ENHANCED)
+    // Now checks both NEARBY (within buffer) and INSIDE
+    // ============================================
+
+    const double zoneProximityBuffer =
+        100.0; // Alert when within 100m of zone edge
+
+    for (final zone in _crimeHotspots) {
+      // ✅ Only check public zones for regular users
+      final userRole = _userProfile?['role'] as String?;
+      final isRegularUser = userRole == null || userRole == 'user';
+
+      if (isRegularUser && zone.visibility != HotspotVisibility.public) {
+        print('DEBUG: Skipping zone ${zone.id} (${zone.name}) - not public');
+        continue;
+      }
+
+      // ✅ Only check active zones
+      if (zone.status != HotspotStatus.active) {
+        print('DEBUG: Skipping zone ${zone.id} (${zone.name}) - not active');
+        continue;
+      }
+
+      bool isInZone = false;
+      double distanceToZone = double.infinity;
+      String proximityStatus = 'far'; // 'inside', 'nearby', 'far'
+
+      if (zone.geometryType == GeometryType.circle) {
+        // For circular zones
+        distanceToZone = _calculateDistance(_currentPosition!, zone.center!);
+        final zoneRadius = zone.radiusMeters!;
+
+        if (distanceToZone <= zoneRadius) {
+          // Inside the zone
+          isInZone = true;
+          proximityStatus = 'inside';
+        } else if (distanceToZone <= zoneRadius + zoneProximityBuffer) {
+          // Nearby (within buffer distance of zone edge)
+          proximityStatus = 'nearby';
+        }
+
+        print(
+          'DEBUG: Circular zone ${zone.id} (${zone.name}) - distance to center: ${distanceToZone.toStringAsFixed(1)}m, radius: ${zoneRadius}m, status: $proximityStatus',
+        );
+      } else if (zone.geometryType == GeometryType.polygon) {
+        // For polygon zones, check if inside
+        isInZone = _hotspotService.isCrimeInPolygonHotspot(
+          crimeLocation: _currentPosition!,
+          polygonPoints: zone.polygonPoints!,
+        );
+
+        // Calculate distance to polygon center
+        final polygonCenter = _calculatePolygonCenter(zone.polygonPoints!);
+        distanceToZone = _calculateDistance(_currentPosition!, polygonCenter);
+
+        if (isInZone) {
+          proximityStatus = 'inside';
+        } else {
+          // Check if nearby by finding closest edge distance
+          double minEdgeDistance = double.infinity;
+          for (int i = 0; i < zone.polygonPoints!.length; i++) {
+            final point = zone.polygonPoints![i];
+            final edgeDistance = _calculateDistance(_currentPosition!, point);
+            if (edgeDistance < minEdgeDistance) {
+              minEdgeDistance = edgeDistance;
+            }
+          }
+
+          if (minEdgeDistance <= zoneProximityBuffer) {
+            proximityStatus = 'nearby';
+            distanceToZone = minEdgeDistance;
+          }
+        }
+
+        print(
+          'DEBUG: Polygon zone ${zone.id} (${zone.name}) - distance to center: ${distanceToZone.toStringAsFixed(1)}m, inside: $isInZone, status: $proximityStatus',
+        );
+      }
+
+      // ✅ Add to nearby zones if inside OR nearby
+      if (proximityStatus == 'inside' || proximityStatus == 'nearby') {
+        print(
+          'DEBUG: ✅ Zone ${zone.id} (${zone.name}) is $proximityStatus! Adding to nearby zones.',
+        );
+
+        // ✅ Use dominantSeverity from zone, default to 'medium' if null
+        final zoneSeverity = zone.dominantSeverity ?? 'medium';
+
+        nearbyZones.add({
+          'id': zone.id,
+          'name': zone.name,
+          'severity': zoneSeverity,
+          'crime_count': zone.visibleCrimeCount,
+          'distance': distanceToZone,
+          'proximity_status': proximityStatus, // 'inside' or 'nearby'
+          'type': 'zone',
+        });
+      }
+    }
+
+    // ============================================
+    // PART 3: Combine and sort by priority
+    // ============================================
+
+    // Sort individual crimes by distance (closest first)
     nearbyHotspots.sort((a, b) {
+      return (a['distance'] as double).compareTo(b['distance'] as double);
+    });
+
+    // Sort zones: "inside" zones first, then by severity, then by distance
+    nearbyZones.sort((a, b) {
+      // Prioritize "inside" over "nearby"
+      final aProximity = a['proximity_status'] as String;
+      final bProximity = b['proximity_status'] as String;
+      if (aProximity == 'inside' && bProximity != 'inside') return -1;
+      if (bProximity == 'inside' && aProximity != 'inside') return 1;
+
+      // Then by severity
+      final severityOrder = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3};
+      final aSeverity = severityOrder[a['severity']] ?? 4;
+      final bSeverity = severityOrder[b['severity']] ?? 4;
+
+      if (aSeverity != bSeverity) {
+        return aSeverity.compareTo(bSeverity);
+      }
+
+      // Finally by distance
       return (a['distance'] as double).compareTo(b['distance'] as double);
     });
 
@@ -1942,19 +2192,216 @@ class _MapScreenState extends State<MapScreen> {
     if (mounted) {
       setState(() {
         _nearbyHotspots = nearbyHotspots;
-        _showProximityAlert = nearbyHotspots.isNotEmpty;
+        _nearbyZones = nearbyZones;
+        _showProximityAlert =
+            nearbyHotspots.isNotEmpty || nearbyZones.isNotEmpty;
       });
 
       // Trigger haptic feedback when alert activates
       if (_showProximityAlert && !previousAlertState) {
         HapticFeedback.mediumImpact();
         print('🚨 HOTSPOT PROXIMITY ALERT ACTIVATED');
+        print('   - ${nearbyHotspots.length} nearby crimes');
+        print('   - ${nearbyZones.length} nearby zones');
       }
     }
 
-    print('DEBUG: Found ${nearbyHotspots.length} nearby hotspots');
+    print(
+      'DEBUG: Found ${nearbyHotspots.length} nearby hotspots and ${nearbyZones.length} nearby zones',
+    );
   }
 
+  // ============================================
+  // UPDATED: Build proximity alert with zone support
+  // ============================================
+
+  Widget _buildProximityAlert() {
+    if (!_showProximityAlert ||
+        (_nearbyHotspots.isEmpty && _nearbyZones.isEmpty)) {
+      return const SizedBox.shrink();
+    }
+
+    // ✅ Prioritize zone alerts over individual crime alerts
+    if (_nearbyZones.isNotEmpty) {
+      return _buildZoneAlert();
+    }
+
+    return _buildHotspotAlert();
+  }
+
+  // ============================================
+  // ENHANCED: Build alert for hotspot zones with better messaging
+  // ============================================
+
+  // ============================================
+  // FIXED: Build alert for hotspot zones with proper severity colors
+  // Now matches the intensity of individual crime alerts
+  // ============================================
+
+  Widget _buildZoneAlert() {
+    if (_nearbyZones.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final closestZone = _nearbyZones.first;
+    final zoneName = closestZone['name'] as String;
+    final severity = closestZone['severity'] as String;
+    final crimeCount = closestZone['crime_count'] as int;
+    final proximityStatus = closestZone['proximity_status'] as String;
+    final distance = (closestZone['distance'] as double).round();
+
+    Color alertColor;
+    IconData alertIcon;
+    Color textColor = Colors.white;
+    String alertEmoji;
+    String alertTitle;
+    String alertSubtitle;
+
+    // ✅ FIXED: Match severity colors to individual crime alerts
+    switch (severity) {
+      case 'critical':
+        // Extreme/Critical - Bright red (matches Armed Violence alert)
+        alertColor = const Color(0xFFEF4444); // Bright red
+        alertIcon = Icons.warning_rounded;
+        alertEmoji = '🚨';
+        break;
+      case 'high':
+        // High severity - Orange-red
+        alertColor = const Color(0xFFF97316); // Orange
+        alertIcon = Icons.error_rounded;
+        alertEmoji = '⚠️';
+        break;
+      case 'medium':
+        // Medium severity - Yellow-orange
+        alertColor = const Color(0xFFF59E0B); // Amber
+        alertIcon = Icons.info_rounded;
+        alertEmoji = '⚠️';
+        break;
+      case 'low':
+        // Low severity - Yellow
+        alertColor = const Color(0xFFFBBF24); // Yellow
+        alertIcon = Icons.info_outline_rounded;
+        alertEmoji = 'ℹ️';
+        textColor = Colors.black87;
+        break;
+      default:
+        alertColor = const Color(0xFFF59E0B); // Default to amber
+        alertIcon = Icons.warning_outlined;
+        alertEmoji = '⚠️';
+    }
+
+    // Enhanced messaging based on proximity status
+    if (proximityStatus == 'inside') {
+      alertTitle = 'Inside $zoneName';
+      alertSubtitle = '$crimeCount reported incidents in this area';
+    } else {
+      // nearby
+      alertTitle = 'Approaching $zoneName';
+      alertSubtitle = '${distance}m away • $crimeCount incidents reported';
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: alertColor,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: alertColor.withOpacity(0.4),
+            blurRadius: 10,
+            spreadRadius: 1,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () {
+            // Find the actual zone object to show details
+            final zone = _crimeHotspots.firstWhere(
+              (z) => z.id == closestZone['id'],
+              orElse: () => _crimeHotspots.first,
+            );
+            _showHotspotZoneDetails(zone);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.25),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(alertIcon, color: textColor, size: 14),
+                ),
+
+                const SizedBox(width: 8),
+
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            alertEmoji,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              alertTitle,
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      Text(
+                        alertSubtitle,
+                        style: TextStyle(
+                          color: textColor.withOpacity(0.9),
+                          fontSize: 10,
+                        ),
+                      ),
+
+                      // Show additional zones if any
+                      if (_nearbyZones.length > 1)
+                        Text(
+                          '+${_nearbyZones.length - 1} more ${_nearbyZones.length == 2 ? "zone" : "zones"} nearby',
+                          style: TextStyle(
+                            color: textColor.withOpacity(0.8),
+                            fontSize: 9,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+
+                Icon(
+                  Icons.chevron_right,
+                  color: textColor.withOpacity(0.7),
+                  size: 16,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
   // NOTIFICATION REALTIME METHOD
 
   void _setupNotificationsRealtime() {
@@ -2294,21 +2741,24 @@ class _MapScreenState extends State<MapScreen> {
             _userProfile = response;
             _isAdmin = response['role'] == 'admin';
             _isOfficer = response['role'] == 'officer';
-            _isTanod = response['role'] == 'tanod'; // NEW
+            _isTanod = response['role'] == 'tanod';
+
+            // ✅ UPDATE THIS - Pass the callback
             _profileScreen = ProfileScreen(
               _authService,
               _userProfile,
               _isAdmin,
               _hasAdminPermissions,
+              onProfileUpdated: _reloadUserProfileFromMap, // ✅ ADD THIS
             );
             _profileScreen.initControllers();
           });
 
           print('User profile loaded: ${_userProfile!['id']}');
-          // Profile photo URL: ${_userProfile!['profile_picture_url'] ?? 'none'}
 
-          // Setup real-time subscriptions after profile is loaded
+          // Setup real-time subscriptions
           _setupNotificationsRealtime();
+          _setupLocationSharingRealtime();
           await _loadNotifications();
           await _loadHotspots();
         }
@@ -2320,6 +2770,46 @@ class _MapScreenState extends State<MapScreen> {
       }
     } else {
       print('No user logged in');
+    }
+  }
+
+  // Add this method in _MapScreenState class
+
+  // ✅ ADD THIS METHOD - Reload profile after updates
+  Future<void> _reloadUserProfileFromMap() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      try {
+        final response = await Supabase.instance.client
+            .from('users')
+            .select()
+            .eq('id', user.id)
+            .single();
+
+        if (mounted) {
+          setState(() {
+            _userProfile = response;
+            _isAdmin = response['role'] == 'admin';
+            _isOfficer = response['role'] == 'officer';
+            _isTanod = response['role'] == 'tanod';
+
+            // Reinitialize profile screen with updated data and callback
+            _profileScreen = ProfileScreen(
+              _authService,
+              _userProfile,
+              _isAdmin,
+              _hasAdminPermissions,
+              onProfileUpdated:
+                  _reloadUserProfileFromMap, // Pass callback recursively
+            );
+            _profileScreen.initControllers();
+          });
+
+          print('✅ Profile reloaded - UI updated');
+        }
+      } catch (e) {
+        print('❌ Error reloading profile: $e');
+      }
     }
   }
 
@@ -3582,39 +4072,53 @@ class _MapScreenState extends State<MapScreen> {
       listen: false,
     );
 
-    // ✅ Check user role for inactive hotspots
+    // ✅ Check user role
     final userRole = _userProfile?['role'] as String?;
-    final isAdminOrOfficer =
-        userRole == 'admin' || userRole == 'officer' || userRole == 'tanod';
+    final isAdmin = userRole == 'admin';
+    final isOfficer = userRole == 'officer' || userRole == 'tanod';
+    final isAdminOrOfficer = isAdmin || isOfficer;
 
-    // ✅ Inactive zones: only visible to admin/officer/tanod, then apply date rules
+    // ✅ FIRST: Check visibility permissions
+    switch (zone.visibility) {
+      case HotspotVisibility.adminOnly:
+        if (!isAdmin) return false; // Only admins can see
+        break;
+      case HotspotVisibility.policeOnly:
+        if (!isAdminOrOfficer) return false; // Only admin/officer/tanod can see
+        break;
+      case HotspotVisibility.public:
+        // Everyone can see (continue to other checks)
+        break;
+    }
+
+    // ✅ SECOND: Check status (inactive zones only visible to admin/officer/tanod)
     if (zone.status != HotspotStatus.active) {
       if (!isAdminOrOfficer) {
-        return false; // Hide from public
+        return false; // Hide inactive zones from public
       }
       // Admin/officer can see inactive zones, but still need to pass date filtering below
     }
 
-    // ✅ Check if we have a custom date range filter
+    // ✅ THIRD: Apply date filtering
     final hasCustomDateRange =
         filterService.crimeStartDate != null &&
         filterService.crimeEndDate != null;
 
     if (hasCustomDateRange) {
-      // ✅ Custom date filter is active - use intersection logic
+      // Custom date filter is active - use intersection logic
 
       // If hotspot has no dates, don't show it when filtering
       if (zone.firstCrimeDate == null || zone.lastCrimeDate == null) {
         return false;
       }
 
-      // Use the intersection logic from the model (applies to both active and inactive)
+      // Use the intersection logic from the model
       return zone.intersectsWithDateRange(
         filterService.crimeStartDate!,
         filterService.crimeEndDate!,
       );
     } else {
-      // ✅ NO custom date filter - apply default 30-day rule to ALL zones
+      // NO custom date filter - apply default 30-day rule to ALL zones
 
       // If hotspot has no dates, don't show it
       if (zone.lastCrimeDate == null) {
@@ -3624,11 +4128,10 @@ class _MapScreenState extends State<MapScreen> {
       // Calculate 30 days ago
       final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
 
-      // ✅ Apply 30-day rule to both active and inactive zones
+      // Apply 30-day rule to both active and inactive zones
       return zone.lastCrimeDate!.isAfter(thirtyDaysAgo);
     }
   }
-
   // ============================================
   // NEW METHOD: _calculatePolygonCenter()
   // ============================================
@@ -3797,6 +4300,7 @@ class _MapScreenState extends State<MapScreen> {
           onSave: (hotspotData) async {
             await _createHotspot(hotspotData);
           },
+          userProfile: _userProfile,
         ),
       );
     } else {
@@ -3813,6 +4317,7 @@ class _MapScreenState extends State<MapScreen> {
           onSave: (hotspotData) async {
             await _createHotspot(hotspotData);
           },
+          userProfile: _userProfile,
         ),
       );
     }
@@ -4106,6 +4611,73 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  void _setupLocationSharingRealtime() {
+    _locationSharingSubscription = Supabase.instance.client
+        .from('users')
+        .stream(primaryKey: ['id'])
+        .inFilter('role', [
+          'officer',
+          'admin',
+        ]) // ✅ Listen to all officers/admins
+        .listen((List<Map<String, dynamic>> data) {
+          if (mounted) {
+            setState(() {
+              _sharedLocations = data.where((user) {
+                final isOfficerOrAdmin =
+                    user['role'] == 'officer' || user['role'] == 'admin';
+                final isNotCurrentUser = user['id'] != _userProfile?['id'];
+                final hasLocation =
+                    user['current_latitude'] != null &&
+                    user['current_longitude'] != null;
+                final isSharing = user['is_sharing_location'] == true;
+
+                return isOfficerOrAdmin &&
+                    isNotCurrentUser &&
+                    hasLocation &&
+                    isSharing;
+              }).toList();
+            });
+            print(
+              'Location sharing updated: ${_sharedLocations.length} users sharing',
+            );
+          }
+        });
+  }
+
+  // Add this method to update your own location in the database
+  Future<void> _updateLocationInDatabase() async {
+    if (_currentPosition == null || _userProfile?['id'] == null) return;
+
+    try {
+      // Check if user has location sharing enabled
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('is_sharing_location')
+          .eq('id', _userProfile!['id'])
+          .single();
+
+      final isSharing = response['is_sharing_location'] ?? false;
+
+      if (isSharing) {
+        await Supabase.instance.client
+            .from('users')
+            .update({
+              'current_latitude': _currentPosition!.latitude,
+              'current_longitude': _currentPosition!.longitude,
+              'last_location_update': DateTime.now().toIso8601String(),
+            })
+            .eq('id', _userProfile!['id']);
+
+        print(
+          'Location updated in database: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}',
+        );
+      }
+    } catch (e) {
+      print('Error updating location in database: $e');
+    }
+  }
+
+  // Update _startLiveLocation to include database updates
   void _startLiveLocation() {
     if (mounted) {
       setState(() {
@@ -4121,22 +4693,24 @@ class _MapScreenState extends State<MapScreen> {
             if (mounted) {
               final newPosition = LatLng(position.latitude, position.longitude);
 
-              // Only update if the position has actually changed significantly
               if (_currentPosition == null ||
                   _calculateDistance(_currentPosition!, newPosition) > 10) {
-                // Increased to 10m to reduce API calls
-
                 final oldPosition = _currentPosition;
                 setState(() {
                   _currentPosition = newPosition;
                   _isLoading = false;
+
+                  // ✅ Update cache with new live location
+                  _cachedQuickActionLocation = newPosition;
+                  _quickActionLocationTimestamp = DateTime.now();
                 });
 
-                // CRITICAL: Update route if we have an active route and moved significantly
+                // Update location in database for sharing
+                _updateLocationInDatabase();
+
                 if (_hasActiveRoute &&
                     _destination != null &&
                     oldPosition != null) {
-                  // Only update route if we've moved more than 20 meters to avoid excessive API calls
                   if (_calculateDistance(oldPosition, newPosition) > 20) {
                     _updateRouteProgress();
                   }
@@ -4158,6 +4732,12 @@ class _MapScreenState extends State<MapScreen> {
         );
 
     _startProximityMonitoring();
+
+    // Start periodic location updates (every 30 seconds)
+    _locationUpdateTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (timer) => _updateLocationInDatabase(),
+    );
   }
 
   void _clearDirections() {
@@ -5158,6 +5738,73 @@ class _MapScreenState extends State<MapScreen> {
                                 ),
                                 const SizedBox(height: 16),
 
+                                // ✅ NEW: Markers Section
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 8.0),
+                                  child: Text(
+                                    'Markers',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: 8.0,
+                                    top: 4,
+                                    bottom: 8,
+                                  ),
+                                  child: Text(
+                                    'Toggle marker layers for better performance',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey.shade600,
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8.0,
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      _buildFilterToggle(
+                                        context,
+                                        'Crime Markers',
+                                        Icons.location_on,
+                                        Colors.red,
+                                        filterService.showCrimeMarkers,
+                                        (_) =>
+                                            filterService.toggleCrimeMarkers(),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      _buildFilterToggle(
+                                        context,
+                                        'Heatmap Layer',
+                                        Icons.whatshot,
+                                        Colors.orange,
+                                        filterService.showHeatmapLayer,
+                                        (_) =>
+                                            filterService.toggleHeatmapLayer(),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      _buildFilterToggle(
+                                        context,
+                                        'Hotspot Zones',
+                                        Icons.circle_outlined,
+                                        Colors.deepPurple,
+                                        filterService.showHotspotZoneMarkers,
+                                        (_) => filterService
+                                            .toggleHotspotZoneMarkers(),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
                                 // CRIMES FILTERS (existing code)
                                 // Severity filters
                                 const Padding(
@@ -5884,7 +6531,7 @@ class _MapScreenState extends State<MapScreen> {
 
   List<LatLng> _findUnsafeSegments(List<LatLng> route) {
     final unsafeSegments = <LatLng>[];
-    const safeDistance = 150.0; // Distance for active hotspots
+    const safeDistance = 150.0; // Distance for individual active hotspots
 
     // Filter hotspots to only include active + approved ones
     final activeApprovedHotspots = _hotspots.where((hotspot) {
@@ -5893,10 +6540,16 @@ class _MapScreenState extends State<MapScreen> {
       return status == 'approved' && activeStatus == 'active';
     }).toList();
 
-    // Check each route point against active hotspots
+    // ✅ NEW: Get active hotspot zones
+    final activeHotspotZones = _crimeHotspots.where((zone) {
+      return zone.status == HotspotStatus.active;
+    }).toList();
+
+    // Check each route point against active hotspots AND zones
     for (final point in route) {
       bool isUnsafe = false;
 
+      // Check against individual crime hotspots
       for (final hotspot in activeApprovedHotspots) {
         final coords = hotspot['location']['coordinates'];
         final hotspotLatLng = LatLng(coords[1], coords[0]);
@@ -5906,11 +6559,42 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
 
+      // ✅ NEW: Check against hotspot zones
+      if (!isUnsafe) {
+        for (final zone in activeHotspotZones) {
+          bool isInZone = false;
+
+          if (zone.geometryType == GeometryType.circle) {
+            // Check if point is inside circular zone
+            isInZone = _hotspotService.isCrimeInCircularHotspot(
+              crimeLocation: point,
+              hotspotCenter: zone.center!,
+              radiusMeters: zone.radiusMeters!,
+            );
+          } else if (zone.geometryType == GeometryType.polygon) {
+            // Check if point is inside polygon zone
+            isInZone = _hotspotService.isCrimeInPolygonHotspot(
+              crimeLocation: point,
+              polygonPoints: zone.polygonPoints!,
+            );
+          }
+
+          if (isInZone) {
+            isUnsafe = true;
+            print('⚠️ Route point passes through zone: ${zone.name}');
+            break;
+          }
+        }
+      }
+
       if (isUnsafe) {
         unsafeSegments.add(point);
       }
     }
 
+    print(
+      'Found ${unsafeSegments.length} unsafe route segments (including zones)',
+    );
     return unsafeSegments;
   }
 
@@ -6788,7 +7472,6 @@ class _MapScreenState extends State<MapScreen> {
   // Enhanced safe routing with multiple strategies to find alternative routes
   // that avoid hotspots even when the free API doesn't provide them directly
 
-  // 1. ENHANCED: Multiple waypoint strategies for better hotspot avoidance
   Future<List<LatLng>> _findBestSafeRoute(
     LatLng start,
     LatLng destination,
@@ -6798,8 +7481,13 @@ class _MapScreenState extends State<MapScreen> {
       'Finding safe route: ${unsafeSegments.length} unsafe segments detected',
     );
 
-    // Strategy 1: Try multiple alternative routes with different approaches
+    // ✅ UPDATED: Add zone avoidance as FIRST priority strategy
     final strategies = [
+      () => _tryZoneAvoidanceStrategy(
+        start,
+        destination,
+        unsafeSegments,
+      ), // NEW: First priority
       () => _tryPerpendicularDetourStrategy(start, destination, unsafeSegments),
       () => _tryRadialAvoidanceStrategy(start, destination, unsafeSegments),
       () => _trySegmentBySegmentAvoidance(start, destination, unsafeSegments),
@@ -6829,6 +7517,155 @@ class _MapScreenState extends State<MapScreen> {
     // If all strategies fail, return the original route with warning
     print('All safe route strategies failed, using original route');
     return await _getRouteFromAPI(start, destination);
+  }
+
+  Future<List<LatLng>> _tryZoneAvoidanceStrategy(
+    LatLng start,
+    LatLng destination,
+    List<LatLng> unsafeSegments,
+  ) async {
+    print('Trying zone avoidance strategy...');
+
+    // Get waypoints specifically for avoiding zones
+    final zoneWaypoints = _getZoneAvoidanceWaypoints(start, destination);
+
+    if (zoneWaypoints.isEmpty) {
+      throw Exception('No zone avoidance waypoints found');
+    }
+
+    // Try to get route with these waypoints
+    final route = await _getRouteWithWaypoints(
+      start,
+      destination,
+      zoneWaypoints,
+    );
+
+    // Verify route doesn't pass through zones
+    if (_routePassesThroughZones(route)) {
+      print('❌ Route still passes through zones');
+      throw Exception('Route still unsafe - passes through zones');
+    }
+
+    print('✅ Zone avoidance route found!');
+    return route;
+  }
+
+  // ============================================
+  // NEW: Helper to check if route passes through zones
+  // ============================================
+
+  /// Check if a route passes through any active hotspot zones
+  bool _routePassesThroughZones(List<LatLng> route) {
+    final activeZones = _crimeHotspots.where((zone) {
+      return zone.status == HotspotStatus.active;
+    }).toList();
+
+    if (activeZones.isEmpty) return false;
+
+    // Sample route points (check every ~50 meters)
+    final sampleInterval = (route.length / 20).ceil().clamp(1, 50);
+
+    for (int i = 0; i < route.length; i += sampleInterval) {
+      final point = route[i];
+
+      for (final zone in activeZones) {
+        bool isInZone = false;
+
+        if (zone.geometryType == GeometryType.circle) {
+          isInZone = _hotspotService.isCrimeInCircularHotspot(
+            crimeLocation: point,
+            hotspotCenter: zone.center!,
+            radiusMeters: zone.radiusMeters!,
+          );
+        } else if (zone.geometryType == GeometryType.polygon) {
+          isInZone = _hotspotService.isCrimeInPolygonHotspot(
+            crimeLocation: point,
+            polygonPoints: zone.polygonPoints!,
+          );
+        }
+
+        if (isInZone) {
+          print('⚠️ Route passes through zone: ${zone.name}');
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // ============================================
+  // NEW: Get zone avoidance waypoints
+  // ============================================
+
+  /// Generate waypoints to avoid passing through zones
+  List<LatLng> _getZoneAvoidanceWaypoints(LatLng start, LatLng destination) {
+    final waypoints = <LatLng>[];
+
+    final activeZones = _crimeHotspots.where((zone) {
+      return zone.status == HotspotStatus.active;
+    }).toList();
+
+    if (activeZones.isEmpty) return waypoints;
+
+    final routeBearing = _calculateBearing(start, destination);
+
+    for (final zone in activeZones) {
+      LatLng zoneCenter;
+      double zoneRadius;
+
+      if (zone.geometryType == GeometryType.circle) {
+        zoneCenter = zone.center!;
+        zoneRadius = zone.radiusMeters!;
+      } else {
+        zoneCenter = _calculatePolygonCenter(zone.polygonPoints!);
+        // Approximate radius for polygon
+        zoneRadius = 0.0;
+        for (final point in zone.polygonPoints!) {
+          final dist = _calculateDistance(zoneCenter, point);
+          if (dist > zoneRadius) zoneRadius = dist;
+        }
+      }
+
+      // Check if zone is between start and destination
+      final distStartToZone = _calculateDistance(start, zoneCenter);
+      final distZoneToDest = _calculateDistance(zoneCenter, destination);
+      final distStartToDest = _calculateDistance(start, destination);
+
+      // If zone is roughly on the path (within 30% of direct distance)
+      if ((distStartToZone + distZoneToDest) < (distStartToDest * 1.3)) {
+        // Create avoidance waypoint perpendicular to route
+        final avoidanceDistance =
+            zoneRadius + 400.0; // 400m buffer beyond zone edge
+        final perpBearing1 = (routeBearing + 90) % 360;
+        final perpBearing2 = (routeBearing - 90) % 360;
+
+        final waypoint1 = _calculateDestination(
+          zoneCenter,
+          perpBearing1,
+          avoidanceDistance,
+        );
+        final waypoint2 = _calculateDestination(
+          zoneCenter,
+          perpBearing2,
+          avoidanceDistance,
+        );
+
+        // Choose safer side
+        final safety1 = _evaluateWaypointSafety(waypoint1);
+        final safety2 = _evaluateWaypointSafety(waypoint2);
+
+        if (safety1 > safety2 && safety1 > 300) {
+          waypoints.add(waypoint1);
+          print('✅ Added zone avoidance waypoint for: ${zone.name}');
+        } else if (safety2 > 300) {
+          waypoints.add(waypoint2);
+          print('✅ Added zone avoidance waypoint for: ${zone.name}');
+        }
+      }
+    }
+
+    return waypoints.take(3).toList(); // Limit to 3 zone avoidance points
   }
 
   // 2. NEW: Perpendicular detour strategy - creates waypoints perpendicular to hotspot clusters
@@ -7167,7 +8004,7 @@ class _MapScreenState extends State<MapScreen> {
   double _evaluateWaypointSafety(LatLng waypoint) {
     double minDistance = double.infinity;
 
-    // Check distance to all active hotspots
+    // Check distance to all active individual hotspots
     final activeHotspots = _hotspots.where((hotspot) {
       final status = hotspot['status'] ?? 'approved';
       final activeStatus = hotspot['active_status'] ?? 'active';
@@ -7183,6 +8020,58 @@ class _MapScreenState extends State<MapScreen> {
       }
     }
 
+    // ✅ NEW: Check proximity to hotspot zones
+    final activeHotspotZones = _crimeHotspots.where((zone) {
+      return zone.status == HotspotStatus.active;
+    }).toList();
+
+    for (final zone in activeHotspotZones) {
+      double distanceToZone = double.infinity;
+
+      if (zone.geometryType == GeometryType.circle) {
+        // For circular zones, check if inside or get distance to edge
+        final distanceToCenter = _calculateDistance(waypoint, zone.center!);
+        final radius = zone.radiusMeters!;
+
+        if (distanceToCenter <= radius) {
+          // Inside zone = unsafe
+          minDistance = 0;
+          print('❌ Waypoint is INSIDE circular zone: ${zone.name}');
+          break;
+        } else {
+          // Distance to zone edge
+          distanceToZone = distanceToCenter - radius;
+        }
+      } else if (zone.geometryType == GeometryType.polygon) {
+        // Check if inside polygon
+        final isInside = _hotspotService.isCrimeInPolygonHotspot(
+          crimeLocation: waypoint,
+          polygonPoints: zone.polygonPoints!,
+        );
+
+        if (isInside) {
+          // Inside zone = unsafe
+          minDistance = 0;
+          print('❌ Waypoint is INSIDE polygon zone: ${zone.name}');
+          break;
+        } else {
+          // Find closest polygon edge
+          double minEdgeDistance = double.infinity;
+          for (final point in zone.polygonPoints!) {
+            final edgeDistance = _calculateDistance(waypoint, point);
+            if (edgeDistance < minEdgeDistance) {
+              minEdgeDistance = edgeDistance;
+            }
+          }
+          distanceToZone = minEdgeDistance;
+        }
+      }
+
+      if (distanceToZone < minDistance) {
+        minDistance = distanceToZone;
+      }
+    }
+
     return minDistance;
   }
 
@@ -7192,7 +8081,7 @@ class _MapScreenState extends State<MapScreen> {
   double _getClusterDangerScore(LatLng point) {
     double maxDangerScore = 0.0;
 
-    // Get active hotspots
+    // Get active individual hotspots
     final activeHotspots = _hotspots.where((hotspot) {
       final status = hotspot['status'] ?? 'approved';
       final activeStatus = hotspot['active_status'] ?? 'active';
@@ -7205,22 +8094,79 @@ class _MapScreenState extends State<MapScreen> {
       final hotspotLatLng = LatLng(coords[1], coords[0]);
       final distance = _calculateDistance(point, hotspotLatLng);
 
-      // Danger zone radius (adjust as needed)
       const dangerZoneRadius = 200.0;
 
       if (distance <= dangerZoneRadius) {
-        // Calculate danger score based on proximity
         final proximityFactor = 1.0 - (distance / dangerZoneRadius);
-
-        // Get severity weight
         final level = hotspot['crime_type']?['level'] ?? 'medium';
         final severityWeight = _getSeverityWeight(level);
-
         final dangerScore = proximityFactor * severityWeight;
 
         if (dangerScore > maxDangerScore) {
           maxDangerScore = dangerScore;
         }
+      }
+    }
+
+    // ✅ NEW: Calculate danger score for hotspot zones
+    final activeHotspotZones = _crimeHotspots.where((zone) {
+      return zone.status == HotspotStatus.active;
+    }).toList();
+
+    for (final zone in activeHotspotZones) {
+      bool isInZone = false;
+      double distanceToZone = double.infinity;
+
+      if (zone.geometryType == GeometryType.circle) {
+        final distanceToCenter = _calculateDistance(point, zone.center!);
+        final radius = zone.radiusMeters!;
+
+        if (distanceToCenter <= radius) {
+          isInZone = true;
+        } else {
+          distanceToZone = distanceToCenter - radius;
+        }
+      } else if (zone.geometryType == GeometryType.polygon) {
+        isInZone = _hotspotService.isCrimeInPolygonHotspot(
+          crimeLocation: point,
+          polygonPoints: zone.polygonPoints!,
+        );
+
+        if (!isInZone) {
+          // Find closest edge
+          double minEdgeDistance = double.infinity;
+          for (final zonePoint in zone.polygonPoints!) {
+            final edgeDistance = _calculateDistance(point, zonePoint);
+            if (edgeDistance < minEdgeDistance) {
+              minEdgeDistance = edgeDistance;
+            }
+          }
+          distanceToZone = minEdgeDistance;
+        }
+      }
+
+      // Calculate danger score for zone
+      double zoneDangerScore = 0.0;
+      const zoneBufferRadius = 300.0; // 300m buffer around zone
+
+      if (isInZone) {
+        // MAXIMUM danger if inside zone
+        zoneDangerScore = 2.0; // Higher than individual hotspot max (1.0)
+        print('🚨 Point is INSIDE high-danger zone: ${zone.name}');
+      } else if (distanceToZone <= zoneBufferRadius) {
+        // Proximity danger based on distance to zone edge
+        final proximityFactor = 1.0 - (distanceToZone / zoneBufferRadius);
+
+        // Use zone's dominant severity for weight
+        final zoneSeverity = zone.dominantSeverity ?? 'medium';
+        final severityWeight = _getSeverityWeight(zoneSeverity);
+
+        // Zone danger is 1.5x more severe than individual hotspots
+        zoneDangerScore = proximityFactor * severityWeight * 1.5;
+      }
+
+      if (zoneDangerScore > maxDangerScore) {
+        maxDangerScore = zoneDangerScore;
       }
     }
 
@@ -7523,8 +8469,8 @@ class _MapScreenState extends State<MapScreen> {
       final dateController = TextEditingController();
       final timeController = TextEditingController();
 
-      String selectedCrimeType = crimeTypes[0]['name'];
-      int selectedCrimeId = crimeTypes[0]['id'];
+      String selectedCrimeType = ''; // Start empty
+      int selectedCrimeId = 0; // Invalid ID to force selection
       bool isActiveStatus = true;
       String selectedActiveStatus = 'active';
       XFile? selectedPhoto;
@@ -7669,21 +8615,16 @@ class _MapScreenState extends State<MapScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           DropdownButtonFormField<String>(
-                            value: selectedCrimeType,
+                            value: selectedCrimeType.isEmpty
+                                ? null
+                                : selectedCrimeType,
                             decoration: const InputDecoration(
                               labelText: 'Crime Type',
                               border: OutlineInputBorder(),
+                              hintText: 'Select a crime type',
                             ),
-                            items: crimeTypes.map((crimeType) {
-                              return DropdownMenuItem<String>(
-                                value: crimeType['name'],
-                                child: Text(
-                                  '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                  style: const TextStyle(fontSize: 14),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              );
-                            }).toList(),
+
+                            items: _buildCategorizedDropdownItems(crimeTypes),
                             onChanged: (value) {
                               if (value != null) {
                                 final selected = crimeTypes.firstWhere(
@@ -8132,23 +9073,18 @@ class _MapScreenState extends State<MapScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     DropdownButtonFormField<String>(
-                                      value: selectedCrimeType,
+                                      value: selectedCrimeType.isEmpty
+                                          ? null
+                                          : selectedCrimeType,
                                       decoration: const InputDecoration(
                                         labelText: 'Crime Type',
                                         border: OutlineInputBorder(),
+                                        hintText: 'Select a crime type',
                                       ),
-                                      items: crimeTypes.map((crimeType) {
-                                        return DropdownMenuItem<String>(
-                                          value: crimeType['name'],
-                                          child: Text(
-                                            '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                            ),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        );
-                                      }).toList(),
+
+                                      items: _buildCategorizedDropdownItems(
+                                        crimeTypes,
+                                      ),
                                       onChanged: (newValue) {
                                         if (newValue != null) {
                                           final selected = crimeTypes
@@ -8788,8 +9724,8 @@ class _MapScreenState extends State<MapScreen> {
       text: TimeOfDay.fromDateTime(now).format(context),
     );
 
-    String selectedCrimeType = crimeTypes[0]['name'];
-    int selectedCrimeId = crimeTypes[0]['id'];
+    String selectedCrimeType = ''; // Start empty
+    int selectedCrimeId = 0; // Invalid ID to force selection
     bool isSubmitting = false;
     XFile? selectedPhoto;
     bool isUploadingPhoto = false;
@@ -8949,21 +9885,18 @@ class _MapScreenState extends State<MapScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   DropdownButtonFormField<String>(
-                                    value: selectedCrimeType,
+                                    value: selectedCrimeType.isEmpty
+                                        ? null
+                                        : selectedCrimeType,
+                                    hint: const Text('Select a crime type'),
                                     decoration: const InputDecoration(
                                       labelText: 'Crime Type',
                                       border: OutlineInputBorder(),
                                     ),
-                                    items: crimeTypes.map((crimeType) {
-                                      return DropdownMenuItem<String>(
-                                        value: crimeType['name'],
-                                        child: Text(
-                                          '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                          style: const TextStyle(fontSize: 14),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      );
-                                    }).toList(),
+
+                                    items: _buildCategorizedDropdownItemsMobile(
+                                      crimeTypes,
+                                    ),
                                     onChanged: isSubmitting
                                         ? null
                                         : (newValue) {
@@ -9238,6 +10171,91 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  List<DropdownMenuItem<String>> _buildCategorizedDropdownItemsMobile(
+    List<Map<String, dynamic>> crimeTypes,
+  ) {
+    // Same exact code as the desktop version above
+    final Map<String, List<Map<String, dynamic>>> groupedByLevel = {
+      'critical': [],
+      'high': [],
+      'medium': [],
+      'low': [],
+    };
+
+    for (final crime in crimeTypes) {
+      final level = (crime['level'] ?? 'low').toString().toLowerCase();
+      if (groupedByLevel.containsKey(level)) {
+        groupedByLevel[level]!.add(crime);
+      }
+    }
+
+    final List<DropdownMenuItem<String>> items = [];
+
+    final levelColors = {
+      'critical': Colors.red.shade700,
+      'high': Colors.orange.shade700,
+      'medium': Colors.amber.shade700,
+      'low': Colors.blue.shade700,
+    };
+
+    final levelIcons = {
+      'critical': Icons.crisis_alert,
+      'high': Icons.warning,
+      'medium': Icons.info,
+      'low': Icons.info_outline,
+    };
+
+    groupedByLevel.forEach((level, crimes) {
+      if (crimes.isEmpty) return;
+
+      items.add(
+        DropdownMenuItem<String>(
+          enabled: false,
+          value: null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(levelIcons[level], size: 16, color: levelColors[level]),
+                const SizedBox(width: 8),
+                Text(
+                  level.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: levelColors[level],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      // Add crimes in this level
+      for (final crime in crimes) {
+        items.add(
+          DropdownMenuItem<String>(
+            value: crime['name'],
+            child: Padding(
+              padding: const EdgeInsets.only(left: 24),
+              child: Text(
+                '${crime['name']} - ${crime['category'] ?? ''}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        );
+      }
+    });
+
+    return items;
+  }
+
   // Helper methods for daily counter styling
   Color _getDailyCounterColor(int count) {
     if (count >= 5) return Colors.red.withOpacity(0.1);
@@ -9416,16 +10434,7 @@ class _MapScreenState extends State<MapScreen> {
                             labelText: 'Crime Type',
                             border: OutlineInputBorder(),
                           ),
-                          items: crimeTypes.map((crimeType) {
-                            return DropdownMenuItem<String>(
-                              value: crimeType['name'],
-                              child: Text(
-                                '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                style: const TextStyle(fontSize: 14),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            );
-                          }).toList(),
+                          items: _buildCategorizedDropdownItems(crimeTypes),
                           onChanged: (value) {
                             if (value != null) {
                               final selected = crimeTypes.firstWhere(
@@ -9898,16 +10907,7 @@ class _MapScreenState extends State<MapScreen> {
                             labelText: 'Crime Type',
                             border: OutlineInputBorder(),
                           ),
-                          items: crimeTypes.map((crimeType) {
-                            return DropdownMenuItem<String>(
-                              value: crimeType['name'],
-                              child: Text(
-                                '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                                style: const TextStyle(fontSize: 14),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            );
-                          }).toList(),
+                          items: _buildCategorizedDropdownItems(crimeTypes),
                           onChanged: (newValue) {
                             if (newValue != null) {
                               final selected = crimeTypes.firstWhere(
@@ -11164,9 +12164,28 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _logout() async {
-    isLoggingOut = true; // Set the flag
+    isLoggingOut = true;
 
-    // ✅ Clean up all channels and listeners BEFORE signing out
+    // ✅ Turn off location sharing FIRST before any cleanup
+    if (_userProfile?['id'] != null) {
+      try {
+        await Supabase.instance.client
+            .from('users')
+            .update({
+              'is_sharing_location': false,
+              'current_latitude': null,
+              'current_longitude': null,
+              'last_location_update': null,
+            })
+            .eq('id', _userProfile!['id']);
+
+        print('✅ Location sharing disabled on logout');
+      } catch (e) {
+        print('❌ Error disabling location sharing: $e');
+      }
+    }
+
+    // ✅ Clean up all channels and listeners
     _cleanupChannels();
 
     // ✅ Cancel all timers
@@ -11176,6 +12195,8 @@ class _MapScreenState extends State<MapScreen> {
     _proximityCheckTimer?.cancel();
     _deferredLoadTimer?.cancel();
     _timeUpdateTimer?.cancel();
+    _locationSharingSubscription?.cancel(); // ✅ ADD THIS
+    _locationUpdateTimer?.cancel(); // ✅ ADD THIS
 
     for (final timer in _updateTimers.values) {
       timer.cancel();
@@ -11185,6 +12206,7 @@ class _MapScreenState extends State<MapScreen> {
     // ✅ Clear user profile to prevent real-time callbacks
     setState(() {
       _userProfile = null;
+      _isLocationSharing = false; // ✅ ADD THIS
     });
 
     // ✅ Now sign out
@@ -11266,24 +12288,43 @@ class _MapScreenState extends State<MapScreen> {
     Future<void> refreshProfile() async {
       final user = _authService.currentUser;
       if (user != null) {
-        final response = await Supabase.instance.client
-            .from('users')
-            .select()
-            .eq('id', user.id)
-            .single();
-        if (mounted) {
-          setState(() {
-            _userProfile = response;
-            _isAdmin = response['role'] == 'admin';
-            _isOfficer = response['role'] == 'officer';
-            _profileScreen = ProfileScreen(
-              _authService,
-              _userProfile,
-              _isAdmin,
-              _hasAdminPermissions,
+        try {
+          _profileScreen.disposeControllers();
+          final response = await Supabase.instance.client
+              .from('users')
+              .select()
+              .eq('id', user.id)
+              .single();
+          if (mounted) {
+            setState(() {
+              _userProfile = response;
+              _isAdmin = response['role'] == 'admin';
+              _isOfficer = response['role'] == 'officer';
+
+              // ✅ UPDATE THIS - Pass the callback
+              _profileScreen = ProfileScreen(
+                _authService,
+                _userProfile,
+                _isAdmin,
+                _hasAdminPermissions,
+                onProfileUpdated: _reloadUserProfileFromMap, // ✅ ADD THIS
+              );
+              _profileScreen.initControllers();
+            });
+            print(
+              'Profile refreshed successfully: Email = ${response['email']}, Role = ${response['role']}',
             );
-            _profileScreen.initControllers();
-          });
+          }
+        } catch (e) {
+          print('Error refreshing profile: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to refresh profile: ${e.toString()}'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
         }
       }
     }
@@ -12040,53 +13081,6 @@ class _MapScreenState extends State<MapScreen> {
           _profileScreen.resetTab();
         }
       });
-    }
-  }
-
-  // ============================================
-  // QUICK REPORT FUNCTION - ENTRY POINT
-  // ============================================
-  void _quickReportCrime() async {
-    // Show loading indicator
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator()),
-    );
-
-    try {
-      // Get current location
-      await _getCurrentLocation();
-
-      // Close loading dialog
-      if (mounted) Navigator.pop(context);
-
-      if (_currentPosition == null) {
-        _showSnackBar('Unable to get current location. Please try again.');
-        return;
-      }
-
-      // ✅ Check if user is regular reporter (not admin/officer/tanod)
-      final isRegularUser = !_canAccessAllReports;
-
-      if (isRegularUser) {
-        // For regular users: Check for nearby hotspots to support
-        await _checkAndShowNearbyHotspotsForSupport(_currentPosition!);
-      } else {
-        // ✅ For admin/officer/tanod: Check nearby with duplicate prevention
-        await _checkAndShowNearbyHotspotsForAdmin(_currentPosition!);
-      }
-
-      // Optionally switch to map tab to show the location
-      setState(() {
-        _currentTab = MainTab.map;
-      });
-    } catch (e) {
-      // Close loading dialog if still open
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-      _showSnackBar('Error getting location: ${e.toString()}');
     }
   }
 
@@ -13088,7 +14082,91 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // QUICK ADD SAFE SPOT FUNCTION
+  /// Get cached or fetch new location
+  Future<LatLng?> _getQuickActionLocation() async {
+    // If cache is valid, return immediately
+    if (_isLocationCacheValid() && _cachedQuickActionLocation != null) {
+      print('✅ Using cached location for quick action');
+      return _cachedQuickActionLocation;
+    }
+
+    // If we already have current position from live tracking, use that
+    if (_currentPosition != null) {
+      print('✅ Using live tracked position for quick action');
+      _cachedQuickActionLocation = _currentPosition;
+      _quickActionLocationTimestamp = DateTime.now();
+      return _currentPosition;
+    }
+
+    // Otherwise fetch new location
+    print('📍 Fetching fresh location for quick action');
+    await _getCurrentLocation();
+
+    if (_currentPosition != null) {
+      _cachedQuickActionLocation = _currentPosition;
+      _quickActionLocationTimestamp = DateTime.now();
+    }
+
+    return _currentPosition;
+  }
+
+  /// Clear location cache (call this when user manually changes location)
+  void _clearLocationCache() {
+    _cachedQuickActionLocation = null;
+    _quickActionLocationTimestamp = null;
+    print('🗑️ Location cache cleared');
+  }
+
+  // ============================================
+  // UPDATED: QUICK REPORT FUNCTION - ENTRY POINT
+  // ============================================
+  void _quickReportCrime() async {
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      // ✅ Use cached location getter instead of _getCurrentLocation()
+      final location = await _getQuickActionLocation();
+
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      if (location == null) {
+        _showSnackBar('Unable to get current location. Please try again.');
+        return;
+      }
+
+      // ✅ Check if user is regular reporter (not admin/officer/tanod)
+      final isRegularUser = !_canAccessAllReports;
+
+      if (isRegularUser) {
+        // For regular users: Check for nearby hotspots to support
+        await _checkAndShowNearbyHotspotsForSupport(location);
+      } else {
+        // ✅ For admin/officer/tanod: Check nearby with duplicate prevention
+        await _checkAndShowNearbyHotspotsForAdmin(location);
+      }
+
+      // Optionally switch to map tab to show the location
+      setState(() {
+        _currentTab = MainTab.map;
+      });
+    } catch (e) {
+      // Close loading dialog if still open
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      _showSnackBar('Error getting location: ${e.toString()}');
+    }
+  }
+
+  // ============================================
+  // UPDATED: QUICK ADD SAFE SPOT FUNCTION
+  // ============================================
   void _quickAddSafeSpot() async {
     // Show loading indicator
     showDialog(
@@ -13098,13 +14176,13 @@ class _MapScreenState extends State<MapScreen> {
     );
 
     try {
-      // Get current location
-      await _getCurrentLocation();
+      // ✅ Use cached location getter instead of _getCurrentLocation()
+      final location = await _getQuickActionLocation();
 
       // Close loading dialog
       if (mounted) Navigator.pop(context);
 
-      if (_currentPosition == null) {
+      if (location == null) {
         _showSnackBar('Unable to get current location. Please try again.');
         return;
       }
@@ -13112,14 +14190,11 @@ class _MapScreenState extends State<MapScreen> {
       // Show safe spot form
       SafeSpotForm.showSafeSpotForm(
         context: context,
-        position: LatLng(
-          _currentPosition!.latitude,
-          _currentPosition!.longitude,
-        ),
+        position: LatLng(location.latitude, location.longitude),
         userProfile: _userProfile,
         onUpdate: () {
           // Refresh safe spots on map or any other necessary updates
-          _loadSafeSpots(); // You'll need to implement this method if not already present
+          _loadSafeSpots();
         },
       );
 
@@ -13136,7 +14211,9 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // QUICK ADD SAVE POINT FUNCTION
+  // ============================================
+  // UPDATED: QUICK ADD SAVE POINT FUNCTION
+  // ============================================
   void _quickAddSavePoint() async {
     // Show loading indicator
     showDialog(
@@ -13146,13 +14223,13 @@ class _MapScreenState extends State<MapScreen> {
     );
 
     try {
-      // Get current location
-      await _getCurrentLocation();
+      // ✅ Use cached location getter instead of _getCurrentLocation()
+      final location = await _getQuickActionLocation();
 
       // Close loading dialog
       if (mounted) Navigator.pop(context);
 
-      if (_currentPosition == null) {
+      if (location == null) {
         _showSnackBar('Unable to get current location. Please try again.');
         return;
       }
@@ -13166,10 +14243,7 @@ class _MapScreenState extends State<MapScreen> {
       AddSavePointScreen.showAddSavePointForm(
         context: context,
         userProfile: _userProfile,
-        initialLocation: LatLng(
-          _currentPosition!.latitude,
-          _currentPosition!.longitude,
-        ),
+        initialLocation: LatLng(location.latitude, location.longitude),
         onUpdate: () {
           // Refresh save points on map
           _loadSavePoints();
@@ -15814,7 +16888,6 @@ class _MapScreenState extends State<MapScreen> {
                 ),
 
                 // ✅ ADD: Draft hotspot polygon preview (while drawing)
-                // ✅ ADD: Draft hotspot polygon preview (while drawing)
                 if (_draftHotspotPolygon != null)
                   PolygonLayer(polygons: [_draftHotspotPolygon!]),
 
@@ -15894,65 +16967,94 @@ class _MapScreenState extends State<MapScreen> {
                     ],
                   ),
 
-                // ✅ UPDATED: Polygon hotspot zones WITHOUT labels
-                PolygonLayer(
-                  polygons: _crimeHotspots
-                      .where((h) => h.geometryType == GeometryType.polygon)
-                      .where((h) => _shouldShowHotspotZone(h))
-                      .map((hotspot) {
-                        final isSelected =
-                            _selectedHotspotZone?.id == hotspot.id;
-                        final isInactive =
-                            hotspot.status != HotspotStatus.active;
+                // ✅ UPDATED: Polygon hotspot zones - wrap with conditional
+                Consumer<HotspotFilterService>(
+                  builder: (context, filterService, child) {
+                    if (!filterService.showHotspotZoneMarkers) {
+                      return const SizedBox.shrink();
+                    }
 
-                        Color zoneColor = isInactive
-                            ? Colors.grey
-                            : _getHotspotColor(hotspot);
+                    return PolygonLayer(
+                      polygons: _crimeHotspots
+                          .where((h) => h.geometryType == GeometryType.polygon)
+                          .where((h) => _shouldShowHotspotZone(h))
+                          .map((hotspot) {
+                            final isSelected =
+                                _selectedHotspotZone?.id == hotspot.id;
+                            final isInactive =
+                                hotspot.status != HotspotStatus.active;
 
-                        return Polygon(
-                          points: hotspot.polygonPoints!,
-                          color: zoneColor.withOpacity(isSelected ? 0.4 : 0.25),
-                          borderColor: zoneColor,
-                          borderStrokeWidth: isSelected ? 3 : 2,
-                          isFilled: true,
-                        );
-                      })
-                      .toList(),
+                            Color zoneColor = isInactive
+                                ? Colors.grey
+                                : _getHotspotColor(hotspot);
+
+                            return Polygon(
+                              points: hotspot.polygonPoints!,
+                              color: zoneColor.withOpacity(
+                                isSelected ? 0.4 : 0.25,
+                              ),
+                              borderColor: zoneColor,
+                              borderStrokeWidth: isSelected ? 3 : 2,
+                              isFilled: true,
+                            );
+                          })
+                          .toList(),
+                    );
+                  },
                 ),
 
-                // ✅ ADD: Existing saved circular hotspot zones
-                CircleLayer(
-                  circles: _crimeHotspots
-                      .where((h) => h.geometryType == GeometryType.circle)
-                      .where((h) => _shouldShowHotspotZone(h))
-                      .map((hotspot) {
-                        final isSelected =
-                            _selectedHotspotZone?.id == hotspot.id;
-                        final isInactive =
-                            hotspot.status != HotspotStatus.active;
+                // ✅ UPDATED: Circular hotspot zones - wrap with conditional
+                Consumer<HotspotFilterService>(
+                  builder: (context, filterService, child) {
+                    if (!filterService.showHotspotZoneMarkers) {
+                      return const SizedBox.shrink();
+                    }
 
-                        Color zoneColor = isInactive
-                            ? Colors.grey
-                            : _getHotspotColor(hotspot);
+                    return CircleLayer(
+                      circles: _crimeHotspots
+                          .where((h) => h.geometryType == GeometryType.circle)
+                          .where((h) => _shouldShowHotspotZone(h))
+                          .map((hotspot) {
+                            final isSelected =
+                                _selectedHotspotZone?.id == hotspot.id;
+                            final isInactive =
+                                hotspot.status != HotspotStatus.active;
 
-                        return CircleMarker(
-                          point: hotspot.center!,
-                          radius: hotspot.radiusMeters!,
-                          useRadiusInMeter: true,
-                          color: zoneColor.withOpacity(isSelected ? 0.4 : 0.25),
-                          borderColor: zoneColor,
-                          borderStrokeWidth: isSelected ? 3 : 2,
-                        );
-                      })
-                      .toList(),
+                            Color zoneColor = isInactive
+                                ? Colors.grey
+                                : _getHotspotColor(hotspot);
+
+                            return CircleMarker(
+                              point: hotspot.center!,
+                              radius: hotspot.radiusMeters!,
+                              useRadiusInMeter: true,
+                              color: zoneColor.withOpacity(
+                                isSelected ? 0.4 : 0.25,
+                              ),
+                              borderColor: zoneColor,
+                              borderStrokeWidth: isSelected ? 3 : 2,
+                            );
+                          })
+                          .toList(),
+                    );
+                  },
                 ),
 
-                if (_showHeatmap && _heatmapPoints.isNotEmpty)
-                  CrimeHeatmapLayer(
-                    points: _heatmapPoints,
-                    config: _heatmapConfig,
-                    currentZoom: _currentZoom,
-                  ),
+                // ✅ Heatmap layer - wrap with conditional
+                Consumer<HotspotFilterService>(
+                  builder: (context, filterService, child) {
+                    if (filterService.showHeatmapLayer &&
+                        _showHeatmap &&
+                        _heatmapPoints.isNotEmpty) {
+                      return CrimeHeatmapLayer(
+                        points: _heatmapPoints,
+                        config: _heatmapConfig,
+                        currentZoom: _currentZoom,
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
 
                 // UPDATED: Only show route polylines, not tracking polylines
                 if (_routePoints.isNotEmpty && _hasActiveRoute) ...[
@@ -16037,56 +17139,55 @@ class _MapScreenState extends State<MapScreen> {
                 ),
 
                 MarkerLayer(
-                  markers: _crimeHotspots
-                      .where((h) => _shouldShowHotspotZone(h))
-                      .map((hotspot) {
-                        // Calculate center point for polygon or use existing center for circle
-                        final centerPoint =
-                            hotspot.geometryType == GeometryType.circle
-                            ? hotspot.center!
-                            : _calculatePolygonCenter(hotspot.polygonPoints!);
+                  markers: _sharedLocations.map((user) {
+                    final latitude = user['current_latitude'] as double;
+                    final longitude = user['current_longitude'] as double;
+                    final point = LatLng(latitude, longitude);
+                    final profilePictureUrl = user['profile_picture_url'];
+                    final firstName = user['first_name'] ?? 'User';
+                    final lastName = user['last_name'] ?? '';
+                    final role = user['role'] ?? 'officer';
+                    final policeRank = user['police_rank']?['name'];
 
-                        final isInactive =
-                            hotspot.status != HotspotStatus.active;
-
-                        return Marker(
-                          point: centerPoint,
-                          width: 120, // ✅ Increased width to accommodate name
-                          height: isInactive
-                              ? 105
-                              : 90, // ✅ Increased height for name + count
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                _selectedHotspotZone = hotspot;
-                                _selectedHotspot =
-                                    null; // Clear crime selection
-                                _selectedSafeSpot = null;
-                              });
-                              _showHotspotZoneDetails(hotspot);
-                            },
-                            child: Transform.rotate(
-                              angle: -_currentMapRotation * pi / 180,
-                              alignment: Alignment.center,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
+                    return Marker(
+                      point: point,
+                      width: 120,
+                      height: 80,
+                      child: GestureDetector(
+                        onTap: () => _showSharedLocationDetails(user),
+                        child: Transform.rotate(
+                          angle: -_currentMapRotation * pi / 180,
+                          alignment: Alignment.center,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Profile badge with photo
+                              Stack(
+                                alignment: Alignment.center,
                                 children: [
-                                  // ✅ Hotspot Name (replacing icon badge)
+                                  // Outer glow
                                   Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 3,
-                                    ),
+                                    width: 50,
+                                    height: 50,
                                     decoration: BoxDecoration(
-                                      color: isInactive
-                                          ? Colors.grey.withOpacity(0.95)
-                                          : _getHotspotColor(
-                                              hotspot,
-                                            ).withOpacity(0.95),
-                                      borderRadius: BorderRadius.circular(12),
+                                      shape: BoxShape.circle,
+                                      color: role == 'admin'
+                                          ? Colors.blue.withOpacity(0.2)
+                                          : Colors.green.withOpacity(0.2),
+                                    ),
+                                  ),
+                                  // Main circle with profile photo or default icon
+                                  Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.white,
                                       border: Border.all(
-                                        color: Colors.white,
-                                        width: 2,
+                                        color: role == 'admin'
+                                            ? Colors.blue.shade600
+                                            : Colors.green.shade600,
+                                        width: 3,
                                       ),
                                       boxShadow: [
                                         BoxShadow(
@@ -16096,116 +17197,316 @@ class _MapScreenState extends State<MapScreen> {
                                         ),
                                       ],
                                     ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          hotspot.geometryType ==
-                                                  GeometryType.circle
-                                              ? Icons.circle_outlined
-                                              : Icons.pentagon_outlined,
-                                          color: Colors.white,
-                                          size: 14,
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Flexible(
-                                          child: Text(
-                                            hotspot.name,
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
+                                    child: ClipOval(
+                                      child:
+                                          profilePictureUrl != null &&
+                                              profilePictureUrl.isNotEmpty
+                                          ? Image.network(
+                                              profilePictureUrl,
+                                              fit: BoxFit.cover,
+                                              errorBuilder:
+                                                  (context, error, stackTrace) {
+                                                    return Icon(
+                                                      Icons.person,
+                                                      size: 20,
+                                                      color: role == 'admin'
+                                                          ? Colors.blue.shade600
+                                                          : Colors
+                                                                .green
+                                                                .shade600,
+                                                    );
+                                                  },
+                                            )
+                                          : Icon(
+                                              Icons.person,
+                                              size: 20,
+                                              color: role == 'admin'
+                                                  ? Colors.blue.shade600
+                                                  : Colors.green.shade600,
                                             ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      ],
                                     ),
                                   ),
-                                  const SizedBox(height: 4),
-
-                                  // ✅ Crime count badge
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isInactive
-                                          ? Colors.grey.shade100
-                                          : Colors.white,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: isInactive
-                                            ? Colors.grey.shade400
-                                            : _getHotspotColor(hotspot),
-                                        width: 1.5,
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.2),
-                                          blurRadius: 4,
-                                          offset: const Offset(0, 1),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.report_outlined,
-                                          size: 12,
-                                          color: isInactive
-                                              ? Colors.grey.shade600
-                                              : _getHotspotColor(hotspot),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          '${hotspot.visibleCrimeCount}',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
-                                            color: isInactive
-                                                ? Colors.grey.shade700
-                                                : _getHotspotColor(hotspot),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-
-                                  // ✅ "Inactive" label for deactivated zones
-                                  if (isInactive) ...[
-                                    const SizedBox(height: 2),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
+                                  // Role badge (small)
+                                  Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: Container(
+                                      width: 16,
+                                      height: 16,
                                       decoration: BoxDecoration(
-                                        color: Colors.grey.shade200,
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(
-                                        'Inactive',
-                                        style: TextStyle(
-                                          fontSize: 8,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.grey.shade700,
+                                        shape: BoxShape.circle,
+                                        color: role == 'admin'
+                                            ? Colors.blue.shade600
+                                            : Colors.green.shade600,
+                                        border: Border.all(
+                                          color: Colors.white,
+                                          width: 2,
                                         ),
                                       ),
+                                      child: Icon(
+                                        role == 'admin'
+                                            ? Icons.shield
+                                            : Icons.local_police,
+                                        size: 8,
+                                        color: Colors.white,
+                                      ),
                                     ),
-                                  ],
+                                  ),
                                 ],
                               ),
-                            ),
+                              const SizedBox(height: 4),
+                              // Name label
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: role == 'admin'
+                                        ? Colors.blue.shade300
+                                        : Colors.green.shade300,
+                                    width: 1.5,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.2),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '$firstName ${lastName.isNotEmpty ? lastName[0] : ''}.',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: role == 'admin'
+                                            ? Colors.blue.shade700
+                                            : Colors.green.shade700,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    if (policeRank != null)
+                                      Text(
+                                        policeRank,
+                                        style: TextStyle(
+                                          fontSize: 8,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                        );
-                      })
-                      .toList(),
+                        ),
+                      ),
+                    );
+                  }).toList(),
                 ),
 
+                // ✅ Hotspot zone markers - wrap with conditional
+                Consumer<HotspotFilterService>(
+                  builder: (context, filterService, child) {
+                    if (!filterService.showHotspotZoneMarkers) {
+                      return const SizedBox.shrink();
+                    }
+
+                    return MarkerLayer(
+                      markers: _crimeHotspots
+                          .where((h) => _shouldShowHotspotZone(h))
+                          .map((hotspot) {
+                            // Calculate center point for polygon or use existing center for circle
+                            final centerPoint =
+                                hotspot.geometryType == GeometryType.circle
+                                ? hotspot.center!
+                                : _calculatePolygonCenter(
+                                    hotspot.polygonPoints!,
+                                  );
+
+                            final isInactive =
+                                hotspot.status != HotspotStatus.active;
+
+                            return Marker(
+                              point: centerPoint,
+                              width:
+                                  120, // ✅ Increased width to accommodate name
+                              height: isInactive
+                                  ? 105
+                                  : 90, // ✅ Increased height for name + count
+                              child: GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _selectedHotspotZone = hotspot;
+                                    _selectedHotspot =
+                                        null; // Clear crime selection
+                                    _selectedSafeSpot = null;
+                                  });
+                                  _showHotspotZoneDetails(hotspot);
+                                },
+                                child: Transform.rotate(
+                                  angle: -_currentMapRotation * pi / 180,
+                                  alignment: Alignment.center,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      // ✅ Hotspot Name (replacing icon badge)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 3,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: isInactive
+                                              ? Colors.grey.withOpacity(0.95)
+                                              : _getHotspotColor(
+                                                  hotspot,
+                                                ).withOpacity(0.95),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.white,
+                                            width: 2,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withOpacity(
+                                                0.3,
+                                              ),
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              hotspot.geometryType ==
+                                                      GeometryType.circle
+                                                  ? Icons.circle_outlined
+                                                  : Icons.pentagon_outlined,
+                                              color: Colors.white,
+                                              size: 14,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Flexible(
+                                              child: Text(
+                                                hotspot.name,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+
+                                      // ✅ Crime count badge
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: isInactive
+                                              ? Colors.grey.shade100
+                                              : Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color: isInactive
+                                                ? Colors.grey.shade400
+                                                : _getHotspotColor(hotspot),
+                                            width: 1.5,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withOpacity(
+                                                0.2,
+                                              ),
+                                              blurRadius: 4,
+                                              offset: const Offset(0, 1),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.report_outlined,
+                                              size: 12,
+                                              color: isInactive
+                                                  ? Colors.grey.shade600
+                                                  : _getHotspotColor(hotspot),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              '${hotspot.visibleCrimeCount}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                                color: isInactive
+                                                    ? Colors.grey.shade700
+                                                    : _getHotspotColor(hotspot),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+
+                                      // ✅ "Inactive" label for deactivated zones
+                                      if (isInactive) ...[
+                                        const SizedBox(height: 2),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey.shade200,
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            'Inactive',
+                                            style: TextStyle(
+                                              fontSize: 8,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.grey.shade700,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          })
+                          .toList(),
+                    );
+                  },
+                ),
+
+                // ✅ Crime markers layer - wrap with conditional
                 Consumer<HotspotFilterService>(
                   builder: (context, filterService, child) {
                     final thirtyDaysAgo = DateTime.now().subtract(
@@ -16215,8 +17516,6 @@ class _MapScreenState extends State<MapScreen> {
                     final hasCustomDateRange =
                         filterService.crimeStartDate != null &&
                         filterService.crimeEndDate != null;
-
-                    // ✅ Cluster code removed - no longer needed without heatmap
 
                     final visibleHotspots = _visibleHotspots.where((hotspot) {
                       final currentUserId = _userProfile?['id'];
@@ -16312,6 +17611,11 @@ class _MapScreenState extends State<MapScreen> {
 
                       return false;
                     }).toList();
+
+                    // ✅ Return empty if crime markers toggle is disabled
+                    if (!filterService.showCrimeMarkers) {
+                      return const SizedBox.shrink();
+                    }
 
                     return MarkerLayer(
                       key: ValueKey(
@@ -23809,18 +25113,6 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // ============================================
-  // RECOMMENDED: Smart Combined Proximity Alert
-  // Shows most critical threat first, with compact multi-alert display
-  // ============================================
-  Widget _buildProximityAlert() {
-    if (!_showProximityAlert || _nearbyHotspots.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return _buildHotspotAlert();
-  }
-
-  // ============================================
   // REFACTORED: Original hotspot alert as separate method
   // ============================================
   Widget _buildHotspotAlert() {
@@ -23977,6 +25269,75 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Widget _buildDesktopFloatingQuickActionButton() {
+    // Only show if user is logged in
+    if (_userProfile == null) return const SizedBox.shrink();
+
+    return Positioned(
+      bottom: 24,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color.fromARGB(255, 43, 68, 105),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.12),
+                blurRadius: 24,
+                offset: const Offset(0, 6),
+                spreadRadius: 0,
+              ),
+              BoxShadow(
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+                spreadRadius: 0,
+              ),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: Tooltip(
+              message: 'Quick Actions',
+              child: InkWell(
+                onTap: _showQuickActionDialog,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 14,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.bolt_rounded,
+                        color: Colors.yellowAccent, // you may adjust if needed
+                        size: 24,
+                      ),
+                      const SizedBox(width: 10),
+                      const Text(
+                        'Quick Actions',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   // BUILD CURRENT SCREEN - Updated to remove logout button only on mobile for logged-in users
   Widget _buildCurrentScreen(bool isDesktop) {
     switch (_currentTab) {
@@ -24065,6 +25426,12 @@ class _MapScreenState extends State<MapScreen> {
                 heatmapStats: _heatmapStats,
                 isHeatmapVisible: _showHeatmap,
               ),
+            // ✅ ADD QUICK ACTION BUTTON - BOTTOM CENTER
+            // Choose one of these three options:
+            if (isDesktop)
+              _buildDesktopFloatingQuickActionButton(), // Simple icon button
+            // if (isDesktop) _buildDesktopFloatingQuickActionButtonWithLabel(), // With "Quick Actions" label
+            // if (isDesktop) _buildDesktopFloatingQuickActionButtonMinimal(), // Minimal white style
           ],
         );
 
@@ -24138,6 +25505,8 @@ class _MapScreenState extends State<MapScreen> {
                     heatmapStats: _heatmapStats,
                     isHeatmapVisible: _showHeatmap,
                   ),
+                  // ✅ ADD QUICK ACTION BUTTON - BOTTOM CENTER
+                  _buildDesktopFloatingQuickActionButton(),
                 ],
               )
             : QuickAccessScreen(
@@ -24229,6 +25598,8 @@ class _MapScreenState extends State<MapScreen> {
                     heatmapStats: _heatmapStats,
                     isHeatmapVisible: _showHeatmap,
                   ),
+                  // ✅ ADD QUICK ACTION BUTTON - BOTTOM CENTER
+                  _buildDesktopFloatingQuickActionButton(),
                 ],
               )
             : _buildNotificationsScreen();
@@ -24257,7 +25628,6 @@ class _MapScreenState extends State<MapScreen> {
                                 child: _buildSearchBar(isWeb: isDesktop),
                               ),
                               const SizedBox(width: 12),
-
                               if (_userProfile != null) ...[
                                 Stack(
                                   clipBehavior: Clip.none,
@@ -24336,7 +25706,6 @@ class _MapScreenState extends State<MapScreen> {
                                 ),
                                 const SizedBox(width: 12),
                               ],
-
                               Container(
                                 width: 45,
                                 height: 45,
@@ -24383,6 +25752,8 @@ class _MapScreenState extends State<MapScreen> {
                     heatmapStats: _heatmapStats,
                     isHeatmapVisible: _showHeatmap,
                   ),
+                  // ✅ ADD QUICK ACTION BUTTON - BOTTOM CENTER
+                  _buildDesktopFloatingQuickActionButton(),
                 ],
               )
             : SavePointScreen(
@@ -24459,6 +25830,8 @@ class _MapScreenState extends State<MapScreen> {
                 _userProfile,
                 _isAdmin,
                 _hasAdminPermissions,
+                onProfileUpdated:
+                    refreshProfile, // ✅ ADD THIS - Pass callback recursively
               );
               _profileScreen.initControllers();
             });
@@ -25387,6 +26760,7 @@ class _MapScreenState extends State<MapScreen> {
         builder: (context) => EditHotspotZoneDialog(
           hotspot: hotspot,
           canDelete: canDelete,
+          userProfile: _userProfile,
           onSave: (updatedData) async {
             Navigator.pop(context); // ✅ Close edit dialog first
 
@@ -25420,6 +26794,7 @@ class _MapScreenState extends State<MapScreen> {
         builder: (context) => EditHotspotZoneSheet(
           hotspot: hotspot,
           canDelete: canDelete,
+          userProfile: _userProfile,
           onSave: (updatedData) async {
             Navigator.pop(context); // ✅ Close edit sheet first
 
@@ -25605,7 +26980,7 @@ class _MapScreenState extends State<MapScreen> {
             Navigator.pop(context); // Close crimes dialog
             final coords = crime['location']['coordinates'];
             final crimePoint = LatLng(coords[1], coords[0]);
-            _mapController.move(crimePoint, 17.0);
+            _mapController.move(crimePoint, 18.0);
             setState(() {
               _selectedHotspot = crime;
             });
@@ -25625,7 +27000,7 @@ class _MapScreenState extends State<MapScreen> {
             Navigator.pop(context); // Close crimes sheet
             final coords = crime['location']['coordinates'];
             final crimePoint = LatLng(coords[1], coords[0]);
-            _mapController.move(crimePoint, 17.0);
+            _mapController.move(crimePoint, 18.0);
             setState(() {
               _selectedHotspot = crime;
             });
@@ -25718,6 +27093,265 @@ class _MapScreenState extends State<MapScreen> {
     } catch (e) {
       print('❌ Error setting up hotspot zones real-time: $e');
     }
+  }
+
+  void _showSharedLocationDetails(Map<String, dynamic> user) {
+    final firstName = user['first_name'] ?? 'User';
+    final lastName = user['last_name'] ?? '';
+    final middleName = user['middle_name'] ?? '';
+    final role = user['role'] ?? 'officer';
+    final policeRank = user['police_rank']?['name'];
+    final policeStation = user['police_station']?['name'];
+    final lastUpdate = DateTime.tryParse(user['last_location_update'] ?? '');
+
+    String timeAgo = 'Unknown';
+    if (lastUpdate != null) {
+      final difference = DateTime.now().difference(lastUpdate);
+      if (difference.inMinutes < 1) {
+        timeAgo = 'Just now';
+      } else if (difference.inMinutes < 60) {
+        timeAgo = '${difference.inMinutes}m ago';
+      } else if (difference.inHours < 24) {
+        timeAgo = '${difference.inHours}h ago';
+      } else {
+        timeAgo = '${difference.inDays}d ago';
+      }
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Profile photo
+            if (user['profile_picture_url'] != null)
+              CircleAvatar(
+                radius: 40,
+                backgroundImage: NetworkImage(user['profile_picture_url']),
+              )
+            else
+              CircleAvatar(
+                radius: 40,
+                backgroundColor: role == 'admin'
+                    ? Colors.blue.shade100
+                    : Colors.green.shade100,
+                child: Icon(
+                  Icons.person,
+                  size: 40,
+                  color: role == 'admin'
+                      ? Colors.blue.shade600
+                      : Colors.green.shade600,
+                ),
+              ),
+
+            const SizedBox(height: 12),
+
+            // Name
+            Text(
+              '$firstName ${middleName.isNotEmpty ? '$middleName ' : ''}$lastName',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+
+            const SizedBox(height: 4),
+
+            // Role badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: role == 'admin'
+                    ? Colors.blue.shade50
+                    : Colors.green.shade50,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: role == 'admin'
+                      ? Colors.blue.shade300
+                      : Colors.green.shade300,
+                ),
+              ),
+              child: Text(
+                role.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: role == 'admin'
+                      ? Colors.blue.shade700
+                      : Colors.green.shade700,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Additional info
+            if (policeRank != null || policeStation != null)
+              Column(
+                children: [
+                  if (policeRank != null)
+                    _buildInfoRow(Icons.military_tech, 'Rank', policeRank),
+                  if (policeStation != null)
+                    _buildInfoRow(
+                      Icons.location_city,
+                      'Station',
+                      policeStation,
+                    ),
+                ],
+              ),
+
+            const SizedBox(height: 12),
+
+            // Last update time
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
+                const SizedBox(width: 4),
+                Text(
+                  'Updated $timeAgo',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: Colors.grey[700]),
+          const SizedBox(width: 12),
+          Text(
+            '$label: ',
+            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<DropdownMenuItem<String>> _buildCategorizedDropdownItems(
+    List<Map<String, dynamic>> crimeTypes,
+  ) {
+    // Group by level
+    final Map<String, List<Map<String, dynamic>>> groupedByLevel = {
+      'critical': [],
+      'high': [],
+      'medium': [],
+      'low': [],
+    };
+
+    for (final crime in crimeTypes) {
+      final level = (crime['level'] ?? 'low').toString().toLowerCase();
+      if (groupedByLevel.containsKey(level)) {
+        groupedByLevel[level]!.add(crime);
+      }
+    }
+
+    final List<DropdownMenuItem<String>> items = [];
+
+    // Color mapping for levels
+    final levelColors = {
+      'critical': Colors.red.shade700,
+      'high': Colors.orange.shade700,
+      'medium': Colors.amber.shade700,
+      'low': Colors.blue.shade700,
+    };
+
+    final levelIcons = {
+      'critical': Icons.crisis_alert,
+      'high': Icons.warning,
+      'medium': Icons.info,
+      'low': Icons.info_outline,
+    };
+
+    // Add items grouped by severity
+    groupedByLevel.forEach((level, crimes) {
+      if (crimes.isEmpty) return;
+
+      // Add header
+      items.add(
+        DropdownMenuItem<String>(
+          enabled: false,
+          value: null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(levelIcons[level], size: 16, color: levelColors[level]),
+                const SizedBox(width: 8),
+                Text(
+                  level.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: levelColors[level],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      // Add crimes in this level
+      for (final crime in crimes) {
+        items.add(
+          DropdownMenuItem<String>(
+            value: crime['name'],
+            child: Padding(
+              padding: const EdgeInsets.only(left: 24),
+              child: Text(
+                '${crime['name']} - ${crime['category'] ?? ''}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        );
+      }
+    });
+
+    return items;
   }
 }
 

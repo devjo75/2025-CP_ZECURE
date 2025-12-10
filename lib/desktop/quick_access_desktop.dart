@@ -179,7 +179,7 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
-                                      'Hotspot',
+                                      'Crimes',
                                       style: TextStyle(
                                         color: !_showingSafeSpots
                                             ? Colors.white

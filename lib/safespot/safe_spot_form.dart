@@ -1,3 +1,8 @@
+// ============================================
+// UPDATED: safe_spot_form.dart
+// Restricts certain types to authorized users only
+// ============================================
+
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'safe_spot_service.dart';
@@ -77,11 +82,18 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
 
-  List<Map<String, dynamic>> _safeSpotTypes = [];
+  List<Map<String, dynamic>> _filteredSafeSpotTypes =
+      []; // ✅ NEW: Filtered types
   String? _selectedTypeName;
   int? _selectedTypeId;
   bool _isLoading = true;
   bool _isSubmitting = false;
+
+  // ✅ NEW: Check if user is authorized for restricted types
+  bool get isAuthorizedUser {
+    final role = widget.userProfile?['role'];
+    return role == 'admin' || role == 'officer' || role == 'tanod';
+  }
 
   bool get isAdmin {
     return widget.userProfile?['role'] == 'admin';
@@ -100,6 +112,13 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
     super.dispose();
   }
 
+  // ✅ NEW: Check if a type is restricted
+  bool _isRestrictedType(Map<String, dynamic> type) {
+    final typeName = type['name'].toString().toLowerCase();
+    return typeName.contains('police station') ||
+        typeName.contains('security checkpoint');
+  }
+
   Future<void> _loadSafeSpotTypes() async {
     try {
       print('Loading safe spot types...');
@@ -107,13 +126,27 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
       print('Loaded ${safeSpotTypes.length} safe spot types: $safeSpotTypes');
 
       if (mounted) {
+        // ✅ Filter types based on user role
+        final filteredTypes = safeSpotTypes.where((type) {
+          // If user is authorized, show all types
+          if (isAuthorizedUser) return true;
+
+          // Otherwise, hide restricted types
+          return !_isRestrictedType(type);
+        }).toList();
+
+        print(
+          'Filtered to ${filteredTypes.length} types for user role: ${widget.userProfile?['role']}',
+        );
+
         setState(() {
-          _safeSpotTypes = safeSpotTypes;
+          // Keep original for reference
+          _filteredSafeSpotTypes = filteredTypes; // Use filtered for display
           _isLoading = false;
 
-          if (safeSpotTypes.isNotEmpty) {
-            _selectedTypeName = safeSpotTypes[0]['name'];
-            _selectedTypeId = safeSpotTypes[0]['id'];
+          if (filteredTypes.isNotEmpty) {
+            _selectedTypeName = filteredTypes[0]['name'];
+            _selectedTypeId = filteredTypes[0]['id'];
             print('Selected type: $_selectedTypeName (ID: $_selectedTypeId)');
           }
         });
@@ -292,7 +325,8 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                         child: CircularProgressIndicator(),
                       ),
                     )
-                  : _safeSpotTypes.isEmpty
+                  : _filteredSafeSpotTypes
+                        .isEmpty // ✅ UPDATED: Check filtered types
                   ? const Center(
                       child: Padding(
                         padding: EdgeInsets.all(32.0),
@@ -319,7 +353,7 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
 
                             const SizedBox(height: 16),
 
-                            // Safe spot type dropdown
+                            // ✅ UPDATED: Safe spot type dropdown with filtered types
                             DropdownButtonFormField<String>(
                               value: _selectedTypeName,
                               decoration: const InputDecoration(
@@ -331,7 +365,8 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                                 ),
                               ),
                               isExpanded: true,
-                              items: _safeSpotTypes.map((type) {
+                              items: _filteredSafeSpotTypes.map((type) {
+                                // ✅ Use filtered types
                                 return DropdownMenuItem<String>(
                                   value: type['name'],
                                   child: Row(
@@ -357,10 +392,11 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
                                   ? null
                                   : (value) {
                                       if (value != null) {
-                                        final selected = _safeSpotTypes
-                                            .firstWhere(
-                                              (t) => t['name'] == value,
-                                            );
+                                        final selected =
+                                            _filteredSafeSpotTypes // ✅ Use filtered types
+                                                .firstWhere(
+                                                  (t) => t['name'] == value,
+                                                );
                                         setState(() {
                                           _selectedTypeName = value;
                                           _selectedTypeId = selected['id'];
@@ -495,7 +531,7 @@ class _SafeSpotFormModalState extends State<SafeSpotFormModal> {
     );
   }
 
-  // Helper method to build info tiles (similar to SafeSpotDetails)
+  // Helper method to build info tiles
   Widget _buildInfoTile(
     String title,
     String content,

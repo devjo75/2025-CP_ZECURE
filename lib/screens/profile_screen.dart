@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -20,8 +22,9 @@ enum ProfilePictureState { normal, uploading, success, error }
 class ProfileScreen {
   final AuthService _authService;
   Map<String, dynamic>? userProfile;
-  final bool isAdmin; // Keep this for admin-only features
-  final bool hasAdminPermissions; // Keep this for shared admin/officer features
+  final bool isAdmin;
+  final bool hasAdminPermissions;
+  final VoidCallback? onProfileUpdated; // ✅ ADD THIS
   final ScrollController _scrollController = ScrollController();
   SaveButtonState _saveButtonState = SaveButtonState.normal;
   Timer? _buttonStateTimer;
@@ -31,8 +34,9 @@ class ProfileScreen {
     this._authService,
     this.userProfile,
     this.isAdmin,
-    this.hasAdminPermissions,
-  );
+    this.hasAdminPermissions, {
+    this.onProfileUpdated, // ✅ ADD THIS
+  });
   ProfilePictureState _profilePictureState = ProfilePictureState.normal;
   Timer? _profilePictureStateTimer;
   final ImagePicker _imagePicker = ImagePicker();
@@ -130,6 +134,9 @@ class ProfileScreen {
     if (userProfile?['role'] == 'officer') {
       _loadPoliceData();
     }
+    if (userProfile?['role'] == 'officer' || userProfile?['role'] == 'admin') {
+      _loadLocationSharingState();
+    }
   }
 
   void disposeControllers() {
@@ -148,6 +155,7 @@ class ProfileScreen {
     _profilePictureStateTimer?.cancel();
     _buttonStateTimer?.cancel();
     _emailResendTimer?.cancel();
+    _locationSharingTimer?.cancel();
   }
 
   bool _hasEmailChanges() {
@@ -197,6 +205,130 @@ class ProfileScreen {
   // In your ProfileScreen class, add this method:
   void resetSaveButtonState() {
     _saveButtonState = SaveButtonState.normal;
+  }
+
+  bool _isLocationSharing = false;
+  Timer? _locationSharingTimer;
+
+  Future<void> _loadLocationSharingState() async {
+    if (userProfile?['id'] == null) return;
+
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('is_sharing_location')
+          .eq('id', userProfile!['id'])
+          .single();
+
+      _isLocationSharing = response['is_sharing_location'] ?? false;
+    } catch (e) {
+      print('Error loading location sharing state: $e');
+    }
+  }
+
+  // Add this method to toggle location sharing
+  Future<void> _toggleLocationSharing(
+    BuildContext context,
+    StateSetter setState,
+  ) async {
+    if (userProfile?['id'] == null) return;
+
+    try {
+      final newState = !_isLocationSharing;
+
+      // Update in database
+      await Supabase.instance.client
+          .from('users')
+          .update({
+            'is_sharing_location': newState,
+            'last_location_update': DateTime.now().toIso8601String(),
+          })
+          .eq('id', userProfile!['id']);
+
+      setState(() {
+        _isLocationSharing = newState;
+      });
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              newState
+                  ? 'Location sharing enabled'
+                  : 'Location sharing disabled',
+            ),
+            backgroundColor: newState ? Colors.green : Colors.orange,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error toggling location sharing: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update location sharing: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Add this widget builder for the location sharing toggle
+  Widget _buildLocationSharingToggle(
+    BuildContext context,
+    StateSetter setStateHeader, {
+    bool isMobile = false,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _isLocationSharing
+            ? Colors.green.withOpacity(0.15)
+            : Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: _isLocationSharing
+              ? Colors.green
+              : Colors.white.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => _toggleLocationSharing(context, setStateHeader),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 12 : 12,
+              vertical: isMobile ? 12 : 8,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _isLocationSharing ? Icons.my_location : Icons.location_off,
+                  size: 18,
+                  color: _isLocationSharing ? Colors.green : Colors.white,
+                ),
+                if (!isMobile) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    _isLocationSharing ? 'Sharing' : 'Share Location',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _isLocationSharing ? Colors.green : Colors.white,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   //PROFILE PICTURE METHOD
@@ -333,6 +465,7 @@ class ProfileScreen {
 
       // Update local profile
       userProfile = response;
+      onProfileUpdated?.call();
 
       // Set success state
       onStateChange?.call(() {
@@ -424,6 +557,7 @@ class ProfileScreen {
 
       // Update local profile
       userProfile = response;
+      onProfileUpdated?.call();
 
       // Set success state
       onStateChange?.call(() {
@@ -1169,6 +1303,8 @@ class ProfileScreen {
             .select()
             .single();
         userProfile = response;
+        onProfileUpdated?.call();
+        print('✅ Profile updated - parent notified');
       }
 
       // Handle email verification if needed
@@ -2904,28 +3040,45 @@ class ProfileScreen {
                         ],
                       ),
                     ),
-                    // Edit Profile Icon Button (Top Right)
+                    // ✅ UPDATED - Top Right Buttons Column (stacked vertically)
                     Positioned(
                       top: 20,
                       right: 16,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Edit Profile Button (top)
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.2),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: IconButton(
+                              onPressed: onEditPressed,
+                              icon: const Icon(Icons.edit, size: 20),
+                              color: const Color.fromARGB(255, 43, 68, 105),
+                              tooltip: 'Edit Profile',
+                            ),
+                          ),
+
+                          // Location Sharing Toggle (below edit button)
+                          if (userProfile?['role'] == 'officer' ||
+                              userProfile?['role'] == 'admin') ...[
+                            const SizedBox(height: 8),
+                            _buildLocationSharingToggle(
+                              context,
+                              setStateHeader,
+                              isMobile: true,
                             ),
                           ],
-                        ),
-                        child: IconButton(
-                          onPressed: onEditPressed,
-                          icon: const Icon(Icons.edit, size: 20),
-                          color: const Color.fromARGB(255, 43, 68, 105),
-                          tooltip: 'Edit Profile',
-                        ),
+                        ],
                       ),
                     ),
                   ],
@@ -4478,28 +4631,50 @@ class ProfileScreen {
                               ),
                             ),
                           ),
-                          // Edit button (Top Right) - NEW
+                          // Top Right Buttons Row
                           Positioned(
                             top: 16,
                             right: 16,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // Location Sharing Toggle (only for officer/admin)
+                                if (userProfile?['role'] == 'officer' ||
+                                    userProfile?['role'] == 'admin')
+                                  _buildLocationSharingToggle(
+                                    context,
+                                    setStateHeader,
+                                    isMobile: false,
                                   ),
-                                ],
-                              ),
-                              child: IconButton(
-                                onPressed: onEditPressed,
-                                icon: const Icon(Icons.edit, size: 20),
-                                color: const Color.fromARGB(255, 43, 68, 105),
-                                tooltip: 'Edit Profile',
-                              ),
+
+                                const SizedBox(width: 8),
+
+                                // Edit Profile Button
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: IconButton(
+                                    onPressed: onEditPressed,
+                                    icon: const Icon(Icons.edit, size: 20),
+                                    color: const Color.fromARGB(
+                                      255,
+                                      43,
+                                      68,
+                                      105,
+                                    ),
+                                    tooltip: 'Edit Profile',
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           Center(

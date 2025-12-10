@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,7 +11,14 @@ import 'package:zecure/services/photo_upload_service.dart';
 class ReportHotspotFormDesktop extends StatefulWidget {
   final LatLng position;
   final List<Map<String, dynamic>> crimeTypes;
-  final Future<bool> Function(int crimeId, String description, LatLng position, DateTime time, XFile? photo) onSubmit;
+  final Future<bool> Function(
+    int crimeId,
+    String description,
+    LatLng position,
+    DateTime time,
+    XFile? photo,
+  )
+  onSubmit;
   final VoidCallback onCancel;
   final int dailyCount;
 
@@ -23,7 +32,8 @@ class ReportHotspotFormDesktop extends StatefulWidget {
   });
 
   @override
-  State<ReportHotspotFormDesktop> createState() => _ReportHotspotFormDesktopState();
+  State<ReportHotspotFormDesktop> createState() =>
+      _ReportHotspotFormDesktopState();
 }
 
 class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
@@ -41,13 +51,17 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
   @override
   void initState() {
     super.initState();
-    _selectedCrimeType = widget.crimeTypes[0]['name'];
-    _selectedCrimeId = widget.crimeTypes[0]['id'];
+    _selectedCrimeType = ''; // Start empty
+    _selectedCrimeId = 0; // Invalid ID to force selection
 
     final now = DateTime.now();
     _descriptionController = TextEditingController();
-    _dateController = TextEditingController(text: DateFormat('yyyy-MM-dd').format(now));
-    _timeController = TextEditingController(text: TimeOfDay.fromDateTime(now).format(context));
+    _dateController = TextEditingController(
+      text: DateFormat('yyyy-MM-dd').format(now),
+    );
+    _timeController = TextEditingController(
+      text: TimeOfDay.fromDateTime(now).format(context),
+    );
   }
 
   @override
@@ -82,10 +96,10 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
       final timeParts = _timeController.text.split(' ');
       final time = timeParts[0].split(':');
       final isPM = timeParts.length > 1 && timeParts[1].toLowerCase() == 'pm';
-      
+
       int hour = int.parse(time[0]);
       final minute = int.parse(time[1]);
-      
+
       if (isPM && hour != 12) hour += 12;
       if (!isPM && hour == 12) hour = 0;
 
@@ -104,7 +118,8 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
   }
 
   Future<void> _pickDate() async {
-    DateTime initialDate = DateTime.tryParse(_dateController.text) ?? DateTime.now();
+    DateTime initialDate =
+        DateTime.tryParse(_dateController.text) ?? DateTime.now();
     final pickedDate = await showDatePicker(
       context: context,
       initialDate: initialDate,
@@ -121,7 +136,8 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
 
   Future<void> _pickTime() async {
     TimeOfDay initialTime = TimeOfDay.fromDateTime(
-      DateTime.tryParse('${_dateController.text} ${_timeController.text}') ?? DateTime.now()
+      DateTime.tryParse('${_dateController.text} ${_timeController.text}') ??
+          DateTime.now(),
     );
     final pickedTime = await showTimePicker(
       context: context,
@@ -141,7 +157,11 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
     }
   }
 
-  Widget _buildPhotoSection(XFile? selectedPhoto, bool isUploading, Function(XFile?, bool) onPhotoChanged) {
+  Widget _buildPhotoSection(
+    XFile? selectedPhoto,
+    bool isUploading,
+    Function(XFile?, bool) onPhotoChanged,
+  ) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -174,14 +194,18 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                             selectedPhoto.path,
                             fit: BoxFit.cover,
                             errorBuilder: (context, error, stackTrace) {
-                              return const Center(child: Text('Error loading image'));
+                              return const Center(
+                                child: Text('Error loading image'),
+                              );
                             },
                           )
                         : Image.file(
                             File(selectedPhoto.path),
                             fit: BoxFit.cover,
                             errorBuilder: (context, error, stackTrace) {
-                              return const Center(child: Text('Error loading image'));
+                              return const Center(
+                                child: Text('Error loading image'),
+                              );
                             },
                           ),
                   ),
@@ -193,7 +217,11 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                     backgroundColor: Colors.red,
                     radius: 16,
                     child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white, size: 16),
+                      icon: const Icon(
+                        Icons.close,
+                        color: Colors.white,
+                        size: 16,
+                      ),
                       onPressed: () {
                         onPhotoChanged(null, false);
                       },
@@ -217,7 +245,9 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                             } catch (e) {
                               onPhotoChanged(null, false);
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Error taking photo: $e')),
+                                SnackBar(
+                                  content: Text('Error taking photo: $e'),
+                                ),
                               );
                             }
                           },
@@ -226,7 +256,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                       foregroundColor: const Color.fromARGB(255, 20, 92, 151),
                       side: BorderSide(color: Colors.grey.shade300),
                     ),
-                    icon: isUploading 
+                    icon: isUploading
                         ? const SizedBox(
                             width: 16,
                             height: 16,
@@ -244,12 +274,15 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                         : () async {
                             onPhotoChanged(null, true);
                             try {
-                              final photo = await PhotoService.pickImageFromGallery();
+                              final photo =
+                                  await PhotoService.pickImageFromGallery();
                               onPhotoChanged(photo, false);
                             } catch (e) {
                               onPhotoChanged(null, false);
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Error selecting photo: $e')),
+                                SnackBar(
+                                  content: Text('Error selecting photo: $e'),
+                                ),
                               );
                             }
                           },
@@ -258,7 +291,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                       foregroundColor: const Color.fromARGB(255, 20, 92, 151),
                       side: BorderSide(color: Colors.grey.shade300),
                     ),
-                    icon: isUploading 
+                    icon: isUploading
                         ? const SizedBox(
                             width: 16,
                             height: 16,
@@ -276,7 +309,11 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
   }
 
   Future<void> _submitForm() async {
-    if (!_formKey.currentState!.validate() || _isSubmitting || _isUploadingPhoto || !_isTimeValid) return;
+    if (!_formKey.currentState!.validate() ||
+        _isSubmitting ||
+        _isUploadingPhoto ||
+        !_isTimeValid)
+      return;
 
     setState(() => _isSubmitting = true);
     try {
@@ -284,10 +321,10 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
       final timeParts = _timeController.text.split(' ');
       final time = timeParts[0].split(':');
       final isPM = timeParts.length > 1 && timeParts[1].toLowerCase() == 'pm';
-      
+
       int hour = int.parse(time[0]);
       final minute = int.parse(time[1]);
-      
+
       if (isPM && hour != 12) hour += 12;
       if (!isPM && hour == 12) hour = 0;
 
@@ -299,8 +336,14 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
         minute,
       );
 
-      final success = await widget.onSubmit(_selectedCrimeId, _descriptionController.text, widget.position, dateTime, _selectedPhoto);
-      
+      final success = await widget.onSubmit(
+        _selectedCrimeId,
+        _descriptionController.text,
+        widget.position,
+        dateTime,
+        _selectedPhoto,
+      );
+
       if (mounted && success) {
         Navigator.pop(context);
       }
@@ -312,9 +355,9 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to report crime: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to report crime: $e')));
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -369,9 +412,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
             decoration: BoxDecoration(
               color: Colors.orange.withOpacity(0.1),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: Colors.orange.withOpacity(0.3),
-              ),
+              border: Border.all(color: Colors.orange.withOpacity(0.3)),
             ),
             child: Column(
               children: [
@@ -392,10 +433,7 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                 const SizedBox(height: 4),
                 Text(
                   'Submit a crime report for admin review',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                   textAlign: TextAlign.center,
                 ),
               ],
@@ -408,28 +446,23 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 DropdownButtonFormField<String>(
-                  value: _selectedCrimeType,
+                  value: _selectedCrimeType.isEmpty ? null : _selectedCrimeType,
                   decoration: const InputDecoration(
                     labelText: 'Crime Type',
                     border: OutlineInputBorder(),
+                    hintText: 'Select a crime type',
                   ),
-                  items: widget.crimeTypes.map((crimeType) {
-                    return DropdownMenuItem<String>(
-                      value: crimeType['name'],
-                      child: Text(
-                        '${crimeType['name']} - ${crimeType['category']} (${crimeType['level']})',
-                        style: const TextStyle(fontSize: 14),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    );
-                  }).toList(),
+
+                  items: _buildCategorizedDropdownItems(widget.crimeTypes),
                   onChanged: _isSubmitting
                       ? null
                       : (newValue) {
                           if (newValue != null && mounted) {
                             setState(() {
                               _selectedCrimeType = newValue;
-                              _selectedCrimeId = widget.crimeTypes.firstWhere((c) => c['name'] == newValue)['id'];
+                              _selectedCrimeId = widget.crimeTypes.firstWhere(
+                                (c) => c['name'] == newValue,
+                              )['id'];
                             });
                           }
                         },
@@ -451,7 +484,10 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                   enabled: !_isSubmitting,
                 ),
                 const SizedBox(height: 16),
-                _buildPhotoSection(_selectedPhoto, _isUploadingPhoto, (photo, uploading) {
+                _buildPhotoSection(_selectedPhoto, _isUploadingPhoto, (
+                  photo,
+                  uploading,
+                ) {
                   setState(() {
                     _selectedPhoto = photo;
                     _isUploadingPhoto = uploading;
@@ -499,17 +535,11 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                   decoration: BoxDecoration(
                     color: Colors.red.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: Colors.red.withOpacity(0.3),
-                    ),
+                    border: Border.all(color: Colors.red.withOpacity(0.3)),
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.warning,
-                        color: Colors.red[600],
-                        size: 20,
-                      ),
+                      Icon(Icons.warning, color: Colors.red[600], size: 20),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Column(
@@ -541,7 +571,10 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: (_isSubmitting || _isUploadingPhoto || !_isTimeValid) ? null : _submitForm,
+                    onPressed:
+                        (_isSubmitting || _isUploadingPhoto || !_isTimeValid)
+                        ? null
+                        : _submitForm,
                     child: (_isSubmitting || _isUploadingPhoto)
                         ? const SizedBox(
                             width: 20,
@@ -551,7 +584,9 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
                               valueColor: AlwaysStoppedAnimation(Colors.white),
                             ),
                           )
-                        : Text('Submit Report (${5 - widget.dailyCount} remaining)'),
+                        : Text(
+                            'Submit Report (${5 - widget.dailyCount} remaining)',
+                          ),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -574,5 +609,93 @@ class _ReportHotspotFormDesktopState extends State<ReportHotspotFormDesktop> {
         ],
       ),
     );
+  }
+
+  List<DropdownMenuItem<String>> _buildCategorizedDropdownItems(
+    List<Map<String, dynamic>> crimeTypes,
+  ) {
+    // Group by level
+    final Map<String, List<Map<String, dynamic>>> groupedByLevel = {
+      'critical': [],
+      'high': [],
+      'medium': [],
+      'low': [],
+    };
+
+    for (final crime in crimeTypes) {
+      final level = (crime['level'] ?? 'low').toString().toLowerCase();
+      if (groupedByLevel.containsKey(level)) {
+        groupedByLevel[level]!.add(crime);
+      }
+    }
+
+    final List<DropdownMenuItem<String>> items = [];
+
+    // Color mapping for levels
+    final levelColors = {
+      'critical': Colors.red.shade700,
+      'high': Colors.orange.shade700,
+      'medium': Colors.amber.shade700,
+      'low': Colors.blue.shade700,
+    };
+
+    final levelIcons = {
+      'critical': Icons.crisis_alert,
+      'high': Icons.warning,
+      'medium': Icons.info,
+      'low': Icons.info_outline,
+    };
+
+    // Add items grouped by severity
+    groupedByLevel.forEach((level, crimes) {
+      if (crimes.isEmpty) return;
+
+      // Add header
+      items.add(
+        DropdownMenuItem<String>(
+          enabled: false,
+          value: null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(levelIcons[level], size: 16, color: levelColors[level]),
+                const SizedBox(width: 8),
+                Text(
+                  level.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: levelColors[level],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      // Add crimes in this level
+      for (final crime in crimes) {
+        items.add(
+          DropdownMenuItem<String>(
+            value: crime['name'],
+            child: Padding(
+              padding: const EdgeInsets.only(left: 24),
+              child: Text(
+                '${crime['name']} - ${crime['category'] ?? ''}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        );
+      }
+    });
+
+    return items;
   }
 }

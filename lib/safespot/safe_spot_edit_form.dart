@@ -1,3 +1,8 @@
+// ============================================
+// UPDATED: safe_spot_edit_form.dart
+// Restricts certain types to authorized users only
+// ============================================
+
 import 'package:flutter/material.dart';
 import 'safe_spot_service.dart';
 
@@ -71,11 +76,12 @@ class SafeSpotEditForm {
     if (userProfile == null) return false;
 
     final userRole = userProfile['role'];
-    final isAdminOrOfficer = userRole == 'admin' || userRole == 'officer';
+    final isAdminOrOfficer =
+        userRole == 'admin' || userRole == 'officer' || userRole == 'tanod';
     final isOwner = safeSpot['created_by'] == userProfile['id'];
     final status = safeSpot['status'] ?? 'pending';
 
-    // Admin or Officer can edit all safe spots
+    // Admin, Officer, or Tanod can edit all safe spots
     if (isAdminOrOfficer) return true;
 
     // Regular users can only edit their own pending safe spots
@@ -106,11 +112,18 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
 
-  List<Map<String, dynamic>> _safeSpotTypes = [];
+  List<Map<String, dynamic>> _filteredSafeSpotTypes =
+      []; // ✅ NEW: Filtered types
   String? _selectedTypeName;
   int? _selectedTypeId;
   bool _isLoading = true;
   bool _isSubmitting = false;
+
+  // ✅ NEW: Check if user is authorized for restricted types
+  bool get isAuthorizedUser {
+    final role = widget.userProfile?['role'];
+    return role == 'admin' || role == 'officer' || role == 'tanod';
+  }
 
   bool get isAdminOrOfficer {
     final role = widget.userProfile?['role'];
@@ -144,6 +157,13 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
     super.dispose();
   }
 
+  // ✅ NEW: Check if a type is restricted
+  bool _isRestrictedType(Map<String, dynamic> type) {
+    final typeName = type['name'].toString().toLowerCase();
+    return typeName.contains('police station') ||
+        typeName.contains('security checkpoint');
+  }
+
   Future<void> _loadSafeSpotTypes() async {
     try {
       print('Loading safe spot types...');
@@ -151,8 +171,21 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
       print('Loaded ${safeSpotTypes.length} safe spot types: $safeSpotTypes');
 
       if (mounted) {
+        // ✅ Filter types based on user role
+        final filteredTypes = safeSpotTypes.where((type) {
+          // If user is authorized, show all types
+          if (isAuthorizedUser) return true;
+
+          // Otherwise, hide restricted types
+          return !_isRestrictedType(type);
+        }).toList();
+
+        print(
+          'Filtered to ${filteredTypes.length} types for user role: ${widget.userProfile?['role']}',
+        );
+
         setState(() {
-          _safeSpotTypes = safeSpotTypes;
+          _filteredSafeSpotTypes = filteredTypes;
           _isLoading = false;
         });
       }
@@ -181,7 +214,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
     });
 
     try {
-      // Use the userId from widget.userProfile instead of an empty string
       final userId = widget.userProfile?['id'];
       if (userId == null || userId.isEmpty) {
         throw Exception('User ID is missing or invalid');
@@ -194,11 +226,11 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
         description: _descriptionController.text.trim().isEmpty
             ? null
             : _descriptionController.text.trim(),
-        userId: userId, // Pass the actual userId
+        userId: userId,
       );
 
       if (mounted) {
-        widget.onUpdate(); // Call the update callback
+        widget.onUpdate();
         Navigator.pop(context); // Close the edit modal
         Navigator.pop(context); // Close the details modal too
 
@@ -254,7 +286,7 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {}, // Prevents dismissal when tapping content
+      onTap: () {},
       child: Container(
         constraints: widget.isDesktop
             ? null
@@ -271,7 +303,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Drag handle at the top (only for mobile)
             if (!widget.isDesktop)
               Container(
                 width: 40,
@@ -283,7 +314,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                 ),
               ),
 
-            // Header
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
@@ -325,7 +355,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
 
             const Divider(height: 1),
 
-            // Content wrapper
             Flexible(
               child: _isLoading
                   ? const Center(
@@ -334,7 +363,8 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                         child: CircularProgressIndicator(),
                       ),
                     )
-                  : _safeSpotTypes.isEmpty
+                  : _filteredSafeSpotTypes
+                        .isEmpty // ✅ UPDATED
                   ? const Center(
                       child: Padding(
                         padding: EdgeInsets.all(32.0),
@@ -352,7 +382,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // Location info (read-only)
                             _buildInfoTile(
                               'Location',
                               '${widget.safeSpot['location']['coordinates'][1].toStringAsFixed(6)}, ${widget.safeSpot['location']['coordinates'][0].toStringAsFixed(6)}',
@@ -361,7 +390,7 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
 
                             const SizedBox(height: 16),
 
-                            // Safe spot type dropdown
+                            // ✅ UPDATED: Dropdown with filtered types
                             DropdownButtonFormField<String>(
                               value: _selectedTypeName,
                               decoration: const InputDecoration(
@@ -373,7 +402,8 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                                 ),
                               ),
                               isExpanded: true,
-                              items: _safeSpotTypes.map((type) {
+                              items: _filteredSafeSpotTypes.map((type) {
+                                // ✅ Use filtered
                                 return DropdownMenuItem<String>(
                                   value: type['name'],
                                   child: Row(
@@ -399,10 +429,11 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                                   ? null
                                   : (value) {
                                       if (value != null) {
-                                        final selected = _safeSpotTypes
-                                            .firstWhere(
-                                              (t) => t['name'] == value,
-                                            );
+                                        final selected =
+                                            _filteredSafeSpotTypes // ✅ Use filtered
+                                                .firstWhere(
+                                                  (t) => t['name'] == value,
+                                                );
                                         setState(() {
                                           _selectedTypeName = value;
                                           _selectedTypeId = selected['id'];
@@ -418,7 +449,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                             ),
                             const SizedBox(height: 16),
 
-                            // Name field
                             TextFormField(
                               controller: _nameController,
                               decoration: const InputDecoration(
@@ -443,7 +473,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                             ),
                             const SizedBox(height: 16),
 
-                            // Description field
                             TextFormField(
                               controller: _descriptionController,
                               decoration: const InputDecoration(
@@ -461,7 +490,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                             ),
                             const SizedBox(height: 16),
 
-                            // Info container
                             Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
@@ -495,7 +523,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                             ),
                             const SizedBox(height: 24),
 
-                            // Submit button
                             ElevatedButton(
                               onPressed: _isSubmitting ? null : _submitForm,
                               style: ElevatedButton.styleFrom(
@@ -523,7 +550,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
                                     ),
                             ),
 
-                            // Add some bottom padding for better UX
                             SizedBox(
                               height:
                                   MediaQuery.of(context).viewInsets.bottom + 16,
@@ -539,7 +565,6 @@ class _SafeSpotEditModalState extends State<SafeSpotEditModal> {
     );
   }
 
-  // Helper method to build info tiles (similar to SafeSpotDetails)
   Widget _buildInfoTile(
     String title,
     String content,

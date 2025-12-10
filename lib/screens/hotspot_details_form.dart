@@ -11,6 +11,7 @@ class HotspotDetailsFormDialog extends StatefulWidget {
   final List<LatLng>? polygonPoints;
   final LatLng? center;
   final double? radius;
+  final Map<String, dynamic>? userProfile;
   final Function(Map<String, dynamic> hotspotData) onSave;
 
   const HotspotDetailsFormDialog({
@@ -19,6 +20,7 @@ class HotspotDetailsFormDialog extends StatefulWidget {
     this.polygonPoints,
     this.center,
     this.radius,
+    required this.userProfile,
     required this.onSave,
   });
 
@@ -36,6 +38,21 @@ class _HotspotDetailsFormDialogState extends State<HotspotDetailsFormDialog> {
   RiskAssessment _riskAssessment = RiskAssessment.high;
   HotspotVisibility _visibility = HotspotVisibility.public;
   bool _isSaving = false;
+
+  bool get _isAdmin {
+    final role = widget.userProfile?['role'] as String?;
+    return role == 'admin';
+  }
+
+  // ✅ ADD: Get allowed visibility options
+  List<HotspotVisibility> get _allowedVisibilityOptions {
+    if (_isAdmin) {
+      return HotspotVisibility.values; // Admin sees all
+    } else {
+      // Officer/Tanod only see public and police_only
+      return [HotspotVisibility.public, HotspotVisibility.policeOnly];
+    }
+  }
 
   @override
   void dispose() {
@@ -254,7 +271,7 @@ class _HotspotDetailsFormDialogState extends State<HotspotDetailsFormDialog> {
         prefixIcon: const Icon(Icons.visibility_outlined),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
       ),
-      items: HotspotVisibility.values.map((visibility) {
+      items: _allowedVisibilityOptions.map((visibility) {
         return DropdownMenuItem(
           value: visibility,
           child: Row(
@@ -402,6 +419,7 @@ class HotspotDetailsFormSheet extends StatefulWidget {
   final List<LatLng>? polygonPoints;
   final LatLng? center;
   final double? radius;
+  final Map<String, dynamic>? userProfile;
   final Function(Map<String, dynamic> hotspotData) onSave;
 
   const HotspotDetailsFormSheet({
@@ -410,6 +428,7 @@ class HotspotDetailsFormSheet extends StatefulWidget {
     this.polygonPoints,
     this.center,
     this.radius,
+    required this.userProfile,
     required this.onSave,
   });
 
@@ -427,6 +446,20 @@ class _HotspotDetailsFormSheetState extends State<HotspotDetailsFormSheet> {
   RiskAssessment _riskAssessment = RiskAssessment.high;
   HotspotVisibility _visibility = HotspotVisibility.public;
   bool _isSaving = false;
+
+  bool get _isAdmin {
+    final role = widget.userProfile?['role'] as String?;
+    return role == 'admin';
+  }
+
+  // ✅ ADD: Get allowed visibility options
+  List<HotspotVisibility> get _allowedVisibilityOptions {
+    if (_isAdmin) {
+      return HotspotVisibility.values;
+    } else {
+      return [HotspotVisibility.public, HotspotVisibility.policeOnly];
+    }
+  }
 
   @override
   void dispose() {
@@ -676,7 +709,7 @@ class _HotspotDetailsFormSheetState extends State<HotspotDetailsFormSheet> {
         prefixIcon: const Icon(Icons.visibility_outlined),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
       ),
-      items: HotspotVisibility.values.map((visibility) {
+      items: _allowedVisibilityOptions.map((visibility) {
         return DropdownMenuItem(
           value: visibility,
           child: Row(

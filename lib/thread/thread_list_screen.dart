@@ -354,25 +354,45 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
   // REPLACE _buildSectionedThreadList method:
 
   Widget _buildSectionedThreadList() {
-    // ✅ FIXED: Three categories now
-    // 1. NEW - User hasn't joined yet (!isFollowing)
-    // 2. UNREAD - User joined AND has unread messages (isFollowing && unreadCount > 0)
-    // 3. READ - User joined AND no unread messages (isFollowing && unreadCount == 0)
+    final now = DateTime.now();
+    final thirtyDaysAgo = now.subtract(Duration(days: 30));
 
-    final newThreads = _filteredThreads.where((t) => !t.isFollowing).toList();
+    // ✅ NEW: Four categories now
+    // 1. NEW - User hasn't joined yet (!isFollowing) AND within 30 days
+    // 2. UNREAD - User joined AND has unread messages (isFollowing && unreadCount > 0)
+    // 3. EARLIER - User joined AND no unread messages AND within 30 days
+    // 4. FOLLOWING - User joined AND thread is older than 30 days (regardless of unread status)
+
+    final newThreads = _filteredThreads
+        .where((t) => !t.isFollowing && t.incidentTime.isAfter(thirtyDaysAgo))
+        .toList();
 
     final unreadThreads = _filteredThreads
-        .where((t) => t.isFollowing && t.unreadCount > 0)
+        .where(
+          (t) =>
+              t.isFollowing &&
+              t.unreadCount > 0 &&
+              t.incidentTime.isAfter(thirtyDaysAgo),
+        )
         .toList();
 
     final readThreads = _filteredThreads
-        .where((t) => t.isFollowing && t.unreadCount == 0)
+        .where(
+          (t) =>
+              t.isFollowing &&
+              t.unreadCount == 0 &&
+              t.incidentTime.isAfter(thirtyDaysAgo),
+        )
+        .toList();
+
+    final followingOldThreads = _filteredThreads
+        .where((t) => t.isFollowing && t.incidentTime.isBefore(thirtyDaysAgo))
         .toList();
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       children: [
-        // ✅ NEW THREADS SECTION (not joined)
+        // ✅ NEW THREADS SECTION (not joined, within 30 days)
         if (newThreads.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.only(left: 12, bottom: 8, top: 4),
@@ -410,7 +430,9 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
             ),
           ),
           ...newThreads.map((thread) => _buildNewThreadCard(thread)),
-          if (unreadThreads.isNotEmpty || readThreads.isNotEmpty) ...[
+          if (unreadThreads.isNotEmpty ||
+              readThreads.isNotEmpty ||
+              followingOldThreads.isNotEmpty) ...[
             const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -420,7 +442,7 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
           ],
         ],
 
-        // ✅ UNREAD SECTION (joined + has unread)
+        // ✅ UNREAD SECTION (joined + has unread + within 30 days)
         if (unreadThreads.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.only(left: 12, bottom: 8, top: 8),
@@ -439,7 +461,7 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
             ),
           ),
           ...unreadThreads.map((thread) => _buildUnreadThreadCard(thread)),
-          if (readThreads.isNotEmpty) ...[
+          if (readThreads.isNotEmpty || followingOldThreads.isNotEmpty) ...[
             const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -449,7 +471,7 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
           ],
         ],
 
-        // ✅ READ SECTION (joined + no unread)
+        // ✅ EARLIER SECTION (joined + no unread + within 30 days)
         if (readThreads.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.only(left: 12, bottom: 8, top: 8),
@@ -464,9 +486,301 @@ class _ThreadListScreenState extends State<ThreadListScreen> {
             ),
           ),
           ...readThreads.map((thread) => _buildReadThreadCard(thread)),
+          if (followingOldThreads.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Divider(color: Colors.grey[300], thickness: 1),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ],
+
+        // ✅ NEW: FOLLOWING SECTION (joined + older than 30 days)
+        if (followingOldThreads.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(left: 12, bottom: 8, top: 8),
+            child: Row(
+              children: [
+                Icon(Icons.bookmark, size: 16, color: Colors.purple[700]),
+                const SizedBox(width: 6),
+                Text(
+                  'Following (${followingOldThreads.length})',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.purple[700],
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.purple[100],
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'OLDER',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.purple[700],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ...followingOldThreads.map(
+            (thread) => _buildFollowingThreadCard(thread),
+          ),
         ],
       ],
     );
+  }
+
+  // ✅ NEW: Following thread card (purple theme for older threads)
+  Widget _buildFollowingThreadCard(ReportThread thread) {
+    // Check if it has unread messages
+    final hasUnread = thread.unreadCount > 0;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      decoration: BoxDecoration(
+        color: hasUnread ? Colors.purple[50] : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: hasUnread ? Colors.purple[200]! : Colors.grey[200]!,
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) =>
+                    ThreadDetailScreen(thread: thread, userId: widget.userId),
+              ),
+            );
+            _loadThreads();
+          },
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header row
+                Row(
+                  children: [
+                    // Purple bookmark indicator
+                    Icon(Icons.bookmark, size: 16, color: Colors.purple[600]),
+                    const SizedBox(width: 8),
+                    _buildSeverityBadge(thread.crimeLevel),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: thread.activeStatus == 'active'
+                            ? Colors.green.shade100
+                            : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        thread.activeStatus.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: thread.activeStatus == 'active'
+                              ? Colors.green.shade700
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    // Show unread badge if there are unread messages
+                    if (hasUnread)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade600,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.red.withOpacity(0.4),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          '${thread.unreadCount}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      )
+                    else
+                      // Show age of thread
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.purple[100],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          _getThreadAge(thread.incidentTime),
+                          style: TextStyle(
+                            color: Colors.purple[700],
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Title
+                Text(
+                  thread.title,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: hasUnread ? FontWeight.w900 : FontWeight.w600,
+                    color: hasUnread ? Colors.black : Colors.grey.shade800,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
+
+                // Crime info
+                Text(
+                  '${thread.crimeType} • ${thread.crimeCategory}',
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 14,
+                    fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Stats row
+                Row(
+                  children: [
+                    Icon(
+                      Icons.message,
+                      size: 16,
+                      color: hasUnread
+                          ? Colors.purple.shade600
+                          : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${thread.messageCount}',
+                      style: TextStyle(
+                        color: hasUnread
+                            ? Colors.purple.shade600
+                            : Colors.grey.shade600,
+                        fontSize: 13,
+                        fontWeight: hasUnread
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Icon(
+                      Icons.people,
+                      size: 16,
+                      color: hasUnread
+                          ? Colors.purple.shade600
+                          : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${thread.participantCount}',
+                      style: TextStyle(
+                        color: hasUnread
+                            ? Colors.purple.shade600
+                            : Colors.grey.shade600,
+                        fontSize: 13,
+                        fontWeight: hasUnread
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: hasUnread
+                            ? Colors.purple.shade100
+                            : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _getTimeAgo(thread.lastMessageAt ?? thread.createdAt),
+                        style: TextStyle(
+                          color: hasUnread
+                              ? Colors.purple.shade700
+                              : Colors.grey.shade500,
+                          fontSize: 12,
+                          fontWeight: hasUnread
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Helper method to get thread age
+  String _getThreadAge(DateTime incidentTime) {
+    final now = DateTime.now();
+    final difference = now.difference(incidentTime);
+
+    if (difference.inDays < 30) return '${difference.inDays}d';
+    if (difference.inDays < 365) {
+      final months = (difference.inDays / 30).floor();
+      return '${months}mo';
+    }
+    final years = (difference.inDays / 365).floor();
+    return '${years}y';
   }
 
   // ✅ NEW: Add method for NEW threads (orange theme)

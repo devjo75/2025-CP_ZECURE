@@ -112,16 +112,17 @@ class _HeatmapCirclePainter extends CustomPainter {
   }
 
   /// Returns thermal gradient colors based on intensity
-  /// Higher intensity = hotter colors (yellow, orange, red)
-  /// Lower intensity = cooler colors (blue, green)
+  /// Higher intensity = hotter colors (yellow, orange, red) AT THE CENTER
+  /// Lower intensity = cooler colors (blue, green) AT THE CENTER
   List<Color> _getThermalColors(double intensity) {
-    // Base thermal gradient: blue → green → yellow → orange → red
+    // Base thermal gradient: center → edge
+    // We reverse the position so center gets the hot color
     final baseColors = [
-      const Color(0x00000000), // Transparent edge
-      _getColorForIntensity(intensity, 0.2),
-      _getColorForIntensity(intensity, 0.5),
+      _getColorForIntensity(intensity, 1.0), // Center (hottest)
       _getColorForIntensity(intensity, 0.8),
-      _getColorForIntensity(intensity, 1.0),
+      _getColorForIntensity(intensity, 0.5),
+      _getColorForIntensity(intensity, 0.2),
+      const Color(0x00000000), // Transparent edge
     ];
 
     return baseColors;

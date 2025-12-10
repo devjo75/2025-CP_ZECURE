@@ -4,6 +4,12 @@ class HotspotFilterService with ChangeNotifier {
   bool get hasCustomDateRange =>
       (_crimeStartDate != null && _crimeEndDate != null) ||
       (_safeSpotStartDate != null && _safeSpotEndDate != null);
+
+  // ✅ NEW: Marker layer visibility toggles
+  bool _showCrimeMarkers = true;
+  bool _showHeatmapLayer = true;
+  bool _showHotspotZoneMarkers = true;
+
   // Severity filters
   bool _showCritical = true;
   bool _showHigh = true;
@@ -57,6 +63,11 @@ class HotspotFilterService with ChangeNotifier {
 
   // Track current user to reset filters when user changes
   String? _currentUserId;
+
+  // ✅ NEW: Marker layer visibility getters
+  bool get showCrimeMarkers => _showCrimeMarkers;
+  bool get showHeatmapLayer => _showHeatmapLayer;
+  bool get showHotspotZoneMarkers => _showHotspotZoneMarkers;
 
   // Existing getters
   bool get showCritical => _showCritical;
@@ -122,10 +133,31 @@ class HotspotFilterService with ChangeNotifier {
       _isShowingCrimes ? _crimeStartDate : _safeSpotStartDate;
   DateTime? get endDate => _isShowingCrimes ? _crimeEndDate : _safeSpotEndDate;
 
+  // ✅ NEW: Marker layer visibility toggle methods
+  void toggleCrimeMarkers() {
+    _showCrimeMarkers = !_showCrimeMarkers;
+    notifyListeners();
+  }
+
+  void toggleHeatmapLayer() {
+    _showHeatmapLayer = !_showHeatmapLayer;
+    notifyListeners();
+  }
+
+  void toggleHotspotZoneMarkers() {
+    _showHotspotZoneMarkers = !_showHotspotZoneMarkers;
+    notifyListeners();
+  }
+
   // Method to reset filters when user changes or logs out
   void resetFiltersForUser(String? newUserId) {
     if (_currentUserId != newUserId) {
       _currentUserId = newUserId;
+
+      // Reset marker visibility to default (all visible)
+      _showCrimeMarkers = true;
+      _showHeatmapLayer = true;
+      _showHotspotZoneMarkers = true;
 
       // Reset all crime filters to default (true)
       _showCritical = true;

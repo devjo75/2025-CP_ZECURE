@@ -2723,7 +2723,6 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
     }
   }
 
-  // REVAMPED CRIME LINE CHART
   Widget _buildCrimeLineChart() {
     if (_crimeData.isEmpty) {
       return Center(
@@ -2749,6 +2748,14 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
               "Data will appear here once reports are submitted",
               style: GoogleFonts.poppins(
                 fontSize: 12,
+                color: Colors.grey.shade400,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Only crimes from the last 30 days are displayed.",
+              style: GoogleFonts.poppins(
+                fontSize: 11,
                 color: Colors.grey.shade400,
               ),
             ),
