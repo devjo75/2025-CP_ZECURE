@@ -13,8 +13,10 @@ class WelcomeMessageModal extends StatefulWidget {
   final String? userName;
   final VoidCallback onClose;
   final VoidCallback? onCreateAccount;
-  final bool isSidebarVisible; // Add sidebar visibility
-  final double sidebarWidth; // Add sidebar width
+  final bool isSidebarVisible;
+  final double sidebarWidth;
+  final bool? isLocationSharing; // ✅ ADD THIS
+  final Function(bool)? onLocationSharingToggle; // ✅ ADD THIS
 
   const WelcomeMessageModal({
     super.key,
@@ -22,8 +24,10 @@ class WelcomeMessageModal extends StatefulWidget {
     this.userName,
     required this.onClose,
     this.onCreateAccount,
-    this.isSidebarVisible = true, // Default value
-    this.sidebarWidth = 280, // Default value, adjust to match your app
+    this.isSidebarVisible = true,
+    this.sidebarWidth = 280,
+    this.isLocationSharing, // ✅ ADD THIS
+    this.onLocationSharingToggle, // ✅ ADD THIS
   });
 
   @override
@@ -35,6 +39,9 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
+  bool _isTogglingLocation = false;
+  String? _statusMessage; // ✅ ADD THIS
+  bool _isSuccess = true; // ✅ ADD THIS (for color)
 
   @override
   void initState() {
@@ -67,6 +74,215 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
         widget.onClose();
       }
     });
+  }
+
+  Widget _buildLocationSharingCard(bool isWeb) {
+    final isSharing = widget.isLocationSharing ?? false;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isSharing
+              ? [Colors.green.shade50, Colors.green.shade100]
+              : [Colors.orange.shade50, Colors.orange.shade100],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isSharing ? Colors.green.shade300 : Colors.orange.shade300,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: isSharing
+                      ? Colors.green.shade600
+                      : Colors.orange.shade600,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  isSharing ? Icons.my_location : Icons.location_off,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Location Sharing',
+                      style: GoogleFonts.poppins(
+                        fontSize: isWeb ? 14 : 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade800,
+                      ),
+                    ),
+                    Text(
+                      isSharing
+                          ? 'Your location is visible to other officers'
+                          : 'Enable to share your location with team',
+                      style: GoogleFonts.poppins(
+                        fontSize: isWeb ? 12 : 11,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          if (_statusMessage != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: _isSuccess ? Colors.green.shade100 : Colors.red.shade100,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _isSuccess
+                      ? Colors.green.shade300
+                      : Colors.red.shade300,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _isSuccess ? Icons.check_circle : Icons.error,
+                    size: 16,
+                    color: _isSuccess
+                        ? Colors.green.shade700
+                        : Colors.red.shade700,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _statusMessage!,
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: _isSuccess
+                            ? Colors.green.shade700
+                            : Colors.red.shade700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed:
+                  _isTogglingLocation || widget.onLocationSharingToggle == null
+                  ? null
+                  : () async {
+                      setState(() {
+                        _isTogglingLocation = true;
+                        _statusMessage = null;
+                      });
+
+                      try {
+                        await widget.onLocationSharingToggle?.call(!isSharing);
+
+                        if (mounted) {
+                          setState(() {
+                            _isTogglingLocation = false;
+                            _isSuccess = true;
+                            _statusMessage = !isSharing
+                                ? '📍 You are now visible to other officers'
+                                : '🔒 Location sharing disabled';
+                          });
+
+                          Future.delayed(const Duration(seconds: 3), () {
+                            if (mounted) {
+                              setState(() {
+                                _statusMessage = null;
+                              });
+                            }
+                          });
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          setState(() {
+                            _isTogglingLocation = false;
+                            _isSuccess = false;
+                            _statusMessage =
+                                'Failed to update location sharing';
+                          });
+                        }
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isSharing
+                    ? Colors.orange.shade600
+                    : Colors.green.shade600,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: _isTogglingLocation
+                  ? SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          isSharing ? Icons.location_off : Icons.my_location,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          isSharing ? 'Turn Off Sharing' : 'Turn On Sharing',
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+
+          // ✅ UPDATE THIS: Helpful note with better alignment
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.info_outline, size: 12, color: Colors.grey.shade500),
+              const SizedBox(width: 4),
+              Text(
+                'You can toggle this anytime in your Profile',
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  color: Colors.grey.shade600,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -564,6 +780,11 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
 
         const SizedBox(height: 12),
 
+        // ✅ ADD LOCATION SHARING CARD
+        _buildLocationSharingCard(isWeb),
+
+        const SizedBox(height: 16),
+
         Text(
           'You have administrative privileges for managing Zecure\'s safety data and user reports:',
           style: GoogleFonts.poppins(
@@ -651,6 +872,11 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
         ),
 
         const SizedBox(height: 12),
+
+        // ✅ ADD LOCATION SHARING CARD
+        _buildLocationSharingCard(isWeb),
+
+        const SizedBox(height: 16),
 
         Text(
           'You have officer privileges for managing safety reports and community data:',
@@ -1086,26 +1312,44 @@ class _WelcomeMessageModalState extends State<WelcomeMessageModal>
   }
 }
 
-// Helper function to show the welcome modal
 void showWelcomeModal(
   BuildContext context, {
   required UserType userType,
   String? userName,
   VoidCallback? onCreateAccount,
-  bool isSidebarVisible = true, // Add sidebar visibility
-  double sidebarWidth = 280, // Add sidebar width
+  bool isSidebarVisible = true,
+  double sidebarWidth = 280,
+  bool? isLocationSharing,
+  Function(bool)? onLocationSharingToggle,
 }) {
   showDialog(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) {
-      return WelcomeMessageModal(
-        userType: userType,
-        userName: userName,
-        onClose: () => Navigator.of(context).pop(),
-        onCreateAccount: onCreateAccount,
-        isSidebarVisible: isSidebarVisible,
-        sidebarWidth: sidebarWidth,
+      // ✅ ADD StatefulBuilder to track location sharing state
+      bool currentLocationSharing = isLocationSharing ?? false;
+
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          return WelcomeMessageModal(
+            userType: userType,
+            userName: userName,
+            onClose: () => Navigator.of(context).pop(),
+            onCreateAccount: onCreateAccount,
+            isSidebarVisible: isSidebarVisible,
+            sidebarWidth: sidebarWidth,
+            isLocationSharing: currentLocationSharing, // ✅ Use tracked state
+            onLocationSharingToggle: (newState) async {
+              // ✅ Call original callback
+              await onLocationSharingToggle?.call(newState);
+
+              // ✅ Update dialog state immediately
+              setDialogState(() {
+                currentLocationSharing = newState;
+              });
+            },
+          );
+        },
       );
     },
   );

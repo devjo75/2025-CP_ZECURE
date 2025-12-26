@@ -683,6 +683,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     }
   }
 
+  Timer? _markerUpdateTimer;
+
   @override
   void initState() {
     super.initState();
@@ -703,6 +705,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         filterService.addListener(_onFiltersChanged);
       }
     });
+
+    // ✅ ADD THIS: Start marker update timer
+    _markerUpdateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (mounted && _sharedLocations.isNotEmpty) {
+        setState(() {
+          // This triggers a rebuild to update "time ago" text
+        });
+        print('🔄 Marker timestamps updated');
+      }
+    });
   }
 
   @override
@@ -712,39 +724,60 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (_userProfile?['id'] == null) return;
 
     switch (state) {
-      case AppLifecycleState.paused:
-      case AppLifecycleState.detached:
-        // App is going to background or being closed
-        print('🔴 App paused/detached - disabling location sharing');
-        _disableLocationSharingOnExit();
-        break;
       case AppLifecycleState.resumed:
-        print('🟢 App resumed');
-        // Location sharing stays off - user must manually re-enable
+        // ✅ App came back to foreground
+        print('🟢 App resumed - refreshing location sharing state');
+        _refreshLocationSharingState();
+
+        // ✅ Optional: Also force a location update if sharing is enabled
+        if (_isLocationSharing) {
+          _updateLocationInDatabase();
+        }
         break;
+
+      case AppLifecycleState.paused:
+        // ✅ App went to background (screen lock, home button, etc.)
+        print('🟡 App paused - location sharing continues in background');
+        // Don't disable - let it keep running
+        break;
+
+      case AppLifecycleState.inactive:
+        // ✅ App lost focus temporarily
+        print('🟠 App inactive - temporary state');
+        break;
+
       default:
         break;
     }
   }
 
-  // ✅ ADD THIS METHOD - Disable location sharing helper
-  Future<void> _disableLocationSharingOnExit() async {
+  // ✅ Method to refresh location sharing state from database
+  Future<void> _refreshLocationSharingState() async {
     if (_userProfile?['id'] == null) return;
 
     try {
-      await Supabase.instance.client
+      final response = await Supabase.instance.client
           .from('users')
-          .update({
-            'is_sharing_location': false,
-            'current_latitude': null,
-            'current_longitude': null,
-            'last_location_update': null,
-          })
-          .eq('id', _userProfile!['id']);
+          .select('is_sharing_location')
+          .eq('id', _userProfile!['id'])
+          .single();
 
-      print('✅ Location sharing disabled on exit');
+      final isSharing = response['is_sharing_location'] ?? false;
+
+      if (mounted) {
+        setState(() {
+          _isLocationSharing = isSharing;
+        });
+
+        print('📍 Location sharing state refreshed: $isSharing');
+
+        // ✅ If sharing is enabled, push current location immediately
+        if (isSharing && _currentPosition != null) {
+          _updateLocationInDatabase();
+        }
+      }
     } catch (e) {
-      print('❌ Error disabling location sharing on exit: $e');
+      print('❌ Error refreshing location sharing state: $e');
     }
   }
 
@@ -962,7 +995,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   void _cleanupChannels() {
     print('🧹 Cleaning up all real-time channels...');
 
-    // ✅ Disable location sharing on cleanup
+    // ✅ Disable location sharing on cleanup (synchronous)
     if (_userProfile?['id'] != null) {
       Supabase.instance.client
           .from('users')
@@ -972,6 +1005,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           .catchError((e) => print('❌ Error: $e'));
     }
 
+    // ✅ Cancel location subscriptions
+    _locationSharingSubscription?.cancel();
+    _locationSharingSubscription = null;
+
+    _locationUpdateTimer?.cancel();
+    _locationUpdateTimer = null;
+
+    // Unsubscribe other channels
     _hotspotsChannel?.unsubscribe();
     _hotspotsChannel = null;
 
@@ -983,9 +1024,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
     _hotspotZonesChannel?.unsubscribe();
     _hotspotZonesChannel = null;
-
-    _locationSharingSubscription?.cancel(); // ✅ ADD THIS
-    _locationUpdateTimer?.cancel(); // ✅ ADD THIS
 
     // Remove filter listeners
     try {
@@ -1199,13 +1237,15 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    print('🧹 Disposing MapScreen...');
+
     // ✅ Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
 
     // ✅ Clear location cache
     _clearLocationCache();
 
-    // ✅ Turn off location sharing when app closes
+    // ✅ Turn off location sharing synchronously (don't await)
     if (_userProfile?['id'] != null) {
       Supabase.instance.client
           .from('users')
@@ -1220,7 +1260,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           .catchError((e) => print('❌ Error disabling location: $e'));
     }
 
-    // ✅ Unsubscribe from all channels FIRST
+    // ✅ Cancel location subscriptions FIRST
+    _locationSharingSubscription?.cancel();
+    _locationUpdateTimer?.cancel();
+
+    // ✅ Unsubscribe from all channels
     _hotspotsChannel?.unsubscribe();
     _hotspotsChannel = null;
 
@@ -1236,16 +1280,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _chatUpdatesSubscription?.unsubscribe();
     _chatUpdatesSubscription = null;
 
-    // Cancel timers
+    // Cancel all timers
     _positionStream?.cancel();
     _reconnectionTimer?.cancel();
     _routeUpdateTimer?.cancel();
     _proximityCheckTimer?.cancel();
     _deferredLoadTimer?.cancel();
     _timeUpdateTimer?.cancel();
-
-    _locationSharingSubscription?.cancel();
-    _locationUpdateTimer?.cancel();
+    _markerUpdateTimer?.cancel(); // ✅ ADD THIS
 
     for (final timer in _updateTimers.values) {
       timer.cancel();
@@ -1255,7 +1297,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _searchController.dispose();
     _profileScreen.disposeControllers();
 
-    // Remove listeners
+    // Remove filter listeners
     try {
       final filterService = Provider.of<HotspotFilterService>(
         context,
@@ -1267,12 +1309,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         filterService.removeListener(_filterListener!);
       }
 
-      print('✅ Removed all filter listeners');
+      print('✅ All listeners removed');
     } catch (e) {
-      print('⚠️ Error removing filter listeners in dispose: $e');
+      print('⚠️ Error removing filter listeners: $e');
     }
 
     _threadService.dispose();
+
+    print('✅ MapScreen disposed');
     super.dispose();
   }
 
@@ -1909,16 +1953,17 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       try {
         final response = await Supabase.instance.client
             .from('users')
-            .select('first_name, role, has_seen_welcome')
+            .select('first_name, role, has_seen_welcome, is_sharing_location')
             .eq('id', user.id)
             .single();
 
         final role = response['role'];
         final isAdmin = role == 'admin';
         final isOfficer = role == 'officer';
-        final isTanod = role == 'tanod'; // ✅ ADD THIS
+        final isTanod = role == 'tanod';
         final firstName = response['first_name'];
         final hasSeenWelcome = response['has_seen_welcome'] ?? false;
+        final isLocationSharing = response['is_sharing_location'] ?? false;
 
         if (!hasSeenWelcome) {
           // Show first-time welcome and mark as seen
@@ -1937,7 +1982,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           } else if (isOfficer) {
             userType = UserType.officer;
           } else if (isTanod) {
-            // ✅ ADD THIS CONDITION
             userType = UserType.tanod;
           } else {
             userType = UserType.user;
@@ -1949,6 +1993,57 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             userName: firstName,
             isSidebarVisible: _isSidebarVisible,
             sidebarWidth: 285,
+            isLocationSharing: isLocationSharing,
+            onLocationSharingToggle: (newState) async {
+              try {
+                // Get current location if enabling
+                LatLng? currentLocation;
+                if (newState && _currentPosition != null) {
+                  currentLocation = _currentPosition;
+                }
+
+                // Update database
+                await Supabase.instance.client
+                    .from('users')
+                    .update({
+                      'is_sharing_location': newState,
+                      'current_latitude': newState
+                          ? currentLocation?.latitude
+                          : null,
+                      'current_longitude': newState
+                          ? currentLocation?.longitude
+                          : null,
+                      'last_location_update': newState
+                          ? DateTime.now().toIso8601String()
+                          : null,
+                    })
+                    .eq('id', user.id);
+
+                // Update local state
+                if (mounted) {
+                  setState(() {
+                    _isLocationSharing = newState;
+                    // ✅ FIXED: Use the public setter method
+                    _profileScreen.updateLocationSharingState(newState);
+                  });
+                }
+
+                // Force immediate location update if enabled
+                if (newState) {
+                  _updateLocationInDatabase();
+                }
+              } catch (e) {
+                print('Error toggling location sharing: $e');
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to update location sharing: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
+            },
           );
         }
       } catch (e) {
@@ -2743,13 +2838,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             _isOfficer = response['role'] == 'officer';
             _isTanod = response['role'] == 'tanod';
 
-            // ✅ UPDATE THIS - Pass the callback
             _profileScreen = ProfileScreen(
               _authService,
               _userProfile,
               _isAdmin,
               _hasAdminPermissions,
-              onProfileUpdated: _reloadUserProfileFromMap, // ✅ ADD THIS
+              onProfileUpdated: _reloadUserProfileFromMap,
+              currentLocation: _currentPosition, // ✅ PASS CURRENT LOCATION
             );
             _profileScreen.initControllers();
           });
@@ -2775,42 +2870,48 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   // Add this method in _MapScreenState class
 
-  // ✅ ADD THIS METHOD - Reload profile after updates
-  Future<void> _reloadUserProfileFromMap() async {
-    final user = _authService.currentUser;
-    if (user != null) {
+  Future<void> _forceLocationUpdate() async {
+    if (_currentPosition != null && _userProfile?['id'] != null) {
       try {
-        final response = await Supabase.instance.client
+        final isSharing = await Supabase.instance.client
             .from('users')
-            .select()
-            .eq('id', user.id)
+            .select('is_sharing_location')
+            .eq('id', _userProfile!['id'])
             .single();
 
-        if (mounted) {
-          setState(() {
-            _userProfile = response;
-            _isAdmin = response['role'] == 'admin';
-            _isOfficer = response['role'] == 'officer';
-            _isTanod = response['role'] == 'tanod';
+        if (isSharing['is_sharing_location'] == true) {
+          await Supabase.instance.client
+              .from('users')
+              .update({
+                'current_latitude': _currentPosition!.latitude,
+                'current_longitude': _currentPosition!.longitude,
+                'last_location_update': DateTime.now().toIso8601String(),
+              })
+              .eq('id', _userProfile!['id']);
 
-            // Reinitialize profile screen with updated data and callback
-            _profileScreen = ProfileScreen(
-              _authService,
-              _userProfile,
-              _isAdmin,
-              _hasAdminPermissions,
-              onProfileUpdated:
-                  _reloadUserProfileFromMap, // Pass callback recursively
-            );
-            _profileScreen.initControllers();
-          });
-
-          print('✅ Profile reloaded - UI updated');
+          print('✅ Force location update successful');
         }
       } catch (e) {
-        print('❌ Error reloading profile: $e');
+        print('❌ Error forcing location update: $e');
       }
     }
+  }
+
+  // ✅ Call this when profile is updated (add to _reloadUserProfileFromMap)
+  void _reloadUserProfileFromMap() {
+    setState(() {
+      _profileScreen = ProfileScreen(
+        _authService,
+        _userProfile,
+        _isAdmin,
+        _hasAdminPermissions,
+        onProfileUpdated: _reloadUserProfileFromMap,
+      );
+      _profileScreen.initControllers();
+    });
+
+    // ✅ Force immediate location update when profile changes
+    _forceLocationUpdate();
   }
 
   //REAL TIME HOTSPOT
@@ -4612,35 +4713,48 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   void _setupLocationSharingRealtime() {
+    print('🔄 Setting up location sharing real-time subscription');
+
     _locationSharingSubscription = Supabase.instance.client
         .from('users')
         .stream(primaryKey: ['id'])
-        .inFilter('role', [
-          'officer',
-          'admin',
-        ]) // ✅ Listen to all officers/admins
+        .inFilter('role', ['officer', 'admin']) // Listen to officers/admins
         .listen((List<Map<String, dynamic>> data) {
-          if (mounted) {
-            setState(() {
-              _sharedLocations = data.where((user) {
-                final isOfficerOrAdmin =
-                    user['role'] == 'officer' || user['role'] == 'admin';
-                final isNotCurrentUser = user['id'] != _userProfile?['id'];
-                final hasLocation =
-                    user['current_latitude'] != null &&
-                    user['current_longitude'] != null;
-                final isSharing = user['is_sharing_location'] == true;
+          if (!mounted) return;
 
-                return isOfficerOrAdmin &&
-                    isNotCurrentUser &&
-                    hasLocation &&
-                    isSharing;
-              }).toList();
-            });
-            print(
-              'Location sharing updated: ${_sharedLocations.length} users sharing',
-            );
-          }
+          setState(() {
+            // ✅ CRITICAL FIX: Filter AFTER receiving data
+            _sharedLocations = data.where((user) {
+              final isOfficerOrAdmin =
+                  user['role'] == 'officer' || user['role'] == 'admin';
+              final isNotCurrentUser = user['id'] != _userProfile?['id'];
+              final hasLocation =
+                  user['current_latitude'] != null &&
+                  user['current_longitude'] != null;
+              final isSharing =
+                  user['is_sharing_location'] == true; // ✅ KEY CHECK
+
+              final shouldShow =
+                  isOfficerOrAdmin &&
+                  isNotCurrentUser &&
+                  hasLocation &&
+                  isSharing;
+
+              // Debug logging
+              if (isOfficerOrAdmin && isNotCurrentUser) {
+                print(
+                  '📍 User ${user['first_name']} ${user['last_name']}: '
+                  'sharing=$isSharing, hasLocation=$hasLocation, showing=$shouldShow',
+                );
+              }
+
+              return shouldShow;
+            }).toList();
+          });
+
+          print(
+            '✅ Location sharing updated: ${_sharedLocations.length} users visible',
+          );
         });
   }
 
@@ -4649,7 +4763,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (_currentPosition == null || _userProfile?['id'] == null) return;
 
     try {
-      // Check if user has location sharing enabled
+      // ✅ Check if user has location sharing enabled
       final response = await Supabase.instance.client
           .from('users')
           .select('is_sharing_location')
@@ -4669,15 +4783,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             .eq('id', _userProfile!['id']);
 
         print(
-          'Location updated in database: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}',
+          '📍 Location updated: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}',
         );
       }
     } catch (e) {
-      print('Error updating location in database: $e');
+      print('❌ Error updating location in database: $e');
     }
   }
 
-  // Update _startLiveLocation to include database updates
   void _startLiveLocation() {
     if (mounted) {
       setState(() {
@@ -4700,12 +4813,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   _currentPosition = newPosition;
                   _isLoading = false;
 
-                  // ✅ Update cache with new live location
                   _cachedQuickActionLocation = newPosition;
                   _quickActionLocationTimestamp = DateTime.now();
                 });
 
-                // Update location in database for sharing
+                // ✅ ALWAYS update location in database when position changes
                 _updateLocationInDatabase();
 
                 if (_hasActiveRoute &&
@@ -4733,9 +4845,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
     _startProximityMonitoring();
 
-    // Start periodic location updates (every 30 seconds)
+    // ✅ FASTER periodic updates (every 10 seconds instead of 30)
     _locationUpdateTimer = Timer.periodic(
-      const Duration(seconds: 30),
+      const Duration(seconds: 10), // ✅ FASTER
       (timer) => _updateLocationInDatabase(),
     );
   }
@@ -12164,9 +12276,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _logout() async {
+    print('🚪 Starting logout process...');
     isLoggingOut = true;
 
-    // ✅ Turn off location sharing FIRST before any cleanup
+    // ✅ STEP 1: Turn off location sharing IMMEDIATELY
     if (_userProfile?['id'] != null) {
       try {
         await Supabase.instance.client
@@ -12179,38 +12292,46 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             })
             .eq('id', _userProfile!['id']);
 
-        print('✅ Location sharing disabled on logout');
+        print('✅ Location sharing disabled for user ${_userProfile!['id']}');
+
+        // ✅ STEP 2: Wait a moment for real-time to propagate
+        await Future.delayed(const Duration(milliseconds: 500));
       } catch (e) {
         print('❌ Error disabling location sharing: $e');
       }
     }
 
-    // ✅ Clean up all channels and listeners
+    // ✅ STEP 3: Cancel subscriptions
+    _locationSharingSubscription?.cancel();
+    _locationUpdateTimer?.cancel();
+
+    // ✅ STEP 4: Clean up all channels
     _cleanupChannels();
 
-    // ✅ Cancel all timers
+    // ✅ STEP 5: Cancel all other timers
     _positionStream?.cancel();
     _reconnectionTimer?.cancel();
     _routeUpdateTimer?.cancel();
     _proximityCheckTimer?.cancel();
     _deferredLoadTimer?.cancel();
     _timeUpdateTimer?.cancel();
-    _locationSharingSubscription?.cancel(); // ✅ ADD THIS
-    _locationUpdateTimer?.cancel(); // ✅ ADD THIS
 
     for (final timer in _updateTimers.values) {
       timer.cancel();
     }
     _updateTimers.clear();
 
-    // ✅ Clear user profile to prevent real-time callbacks
+    // ✅ STEP 6: Clear user profile
     setState(() {
       _userProfile = null;
-      _isLocationSharing = false; // ✅ ADD THIS
+      _isLocationSharing = false;
+      _sharedLocations.clear(); // ✅ Clear local list
     });
 
-    // ✅ Now sign out
+    // ✅ STEP 7: Sign out
     await _authService.signOut();
+
+    print('✅ Logout complete');
 
     if (mounted) {
       Navigator.pushReplacement(
@@ -16742,6 +16863,34 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
+  // Add this method in your MapScreen class
+  bool _isUserActive(Map<String, dynamic> user) {
+    final lastUpdate = DateTime.tryParse(user['last_location_update'] ?? '');
+    if (lastUpdate == null) return false;
+
+    final difference = DateTime.now().difference(lastUpdate);
+    // Consider active if updated within last 5 minutes
+    return difference.inMinutes < 5;
+  }
+
+  String _getLastUpdateText(Map<String, dynamic> user) {
+    final lastUpdate = DateTime.tryParse(user['last_location_update'] ?? '');
+    if (lastUpdate == null) return 'Unknown';
+
+    final difference = DateTime.now().difference(lastUpdate);
+    if (difference.inSeconds < 30) {
+      return 'Just now';
+    } else if (difference.inMinutes < 1) {
+      return '${difference.inSeconds}s ago';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else {
+      return '${difference.inDays}d ago';
+    }
+  }
+
   // MAP MAP MAP
 
   Widget _buildMap() {
@@ -17149,10 +17298,25 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     final role = user['role'] ?? 'officer';
                     final policeRank = user['police_rank']?['name'];
 
+                    // ✅ NEW: Check if user is active
+                    final isActive = _isUserActive(user);
+                    final lastUpdateText = _getLastUpdateText(user);
+
+                    // ✅ NEW: Determine colors based on active status
+                    final Color primaryColor = isActive
+                        ? (role == 'admin'
+                              ? Colors.blue.shade600
+                              : Colors.green.shade600)
+                        : Colors.grey.shade400;
+
+                    final Color glowColor = isActive
+                        ? (role == 'admin' ? Colors.blue : Colors.green)
+                        : Colors.grey;
+
                     return Marker(
                       point: point,
                       width: 120,
-                      height: 80,
+                      height: 100, // ✅ Increased height for update time
                       child: GestureDetector(
                         onTap: () => _showSharedLocationDetails(user),
                         child: Transform.rotate(
@@ -17165,17 +17329,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                               Stack(
                                 alignment: Alignment.center,
                                 children: [
-                                  // Outer glow
-                                  Container(
-                                    width: 50,
-                                    height: 50,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: role == 'admin'
-                                          ? Colors.blue.withOpacity(0.2)
-                                          : Colors.green.withOpacity(0.2),
+                                  // Outer glow - only show if active
+                                  if (isActive)
+                                    Container(
+                                      width: 50,
+                                      height: 50,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: glowColor.withOpacity(0.2),
+                                      ),
                                     ),
-                                  ),
                                   // Main circle with profile photo or default icon
                                   Container(
                                     width: 40,
@@ -17184,9 +17347,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                       shape: BoxShape.circle,
                                       color: Colors.white,
                                       border: Border.all(
-                                        color: role == 'admin'
-                                            ? Colors.blue.shade600
-                                            : Colors.green.shade600,
+                                        color: primaryColor,
                                         width: 3,
                                       ),
                                       boxShadow: [
@@ -17201,28 +17362,56 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                       child:
                                           profilePictureUrl != null &&
                                               profilePictureUrl.isNotEmpty
-                                          ? Image.network(
-                                              profilePictureUrl,
-                                              fit: BoxFit.cover,
-                                              errorBuilder:
-                                                  (context, error, stackTrace) {
-                                                    return Icon(
-                                                      Icons.person,
-                                                      size: 20,
-                                                      color: role == 'admin'
-                                                          ? Colors.blue.shade600
-                                                          : Colors
-                                                                .green
-                                                                .shade600,
-                                                    );
-                                                  },
+                                          ? ColorFiltered(
+                                              // ✅ NEW: Apply greyscale if inactive
+                                              colorFilter: isActive
+                                                  ? const ColorFilter.mode(
+                                                      Colors.transparent,
+                                                      BlendMode.multiply,
+                                                    )
+                                                  : const ColorFilter.matrix([
+                                                      0.2126,
+                                                      0.7152,
+                                                      0.0722,
+                                                      0,
+                                                      0,
+                                                      0.2126,
+                                                      0.7152,
+                                                      0.0722,
+                                                      0,
+                                                      0,
+                                                      0.2126,
+                                                      0.7152,
+                                                      0.0722,
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      1,
+                                                      0,
+                                                    ]),
+                                              child: Image.network(
+                                                profilePictureUrl,
+                                                fit: BoxFit.cover,
+                                                errorBuilder:
+                                                    (
+                                                      context,
+                                                      error,
+                                                      stackTrace,
+                                                    ) {
+                                                      return Icon(
+                                                        Icons.person,
+                                                        size: 20,
+                                                        color: primaryColor,
+                                                      );
+                                                    },
+                                              ),
                                             )
                                           : Icon(
                                               Icons.person,
                                               size: 20,
-                                              color: role == 'admin'
-                                                  ? Colors.blue.shade600
-                                                  : Colors.green.shade600,
+                                              color: primaryColor,
                                             ),
                                     ),
                                   ),
@@ -17235,9 +17424,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                       height: 16,
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
-                                        color: role == 'admin'
-                                            ? Colors.blue.shade600
-                                            : Colors.green.shade600,
+                                        color: primaryColor,
                                         border: Border.all(
                                           color: Colors.white,
                                           width: 2,
@@ -17252,6 +17439,24 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                       ),
                                     ),
                                   ),
+                                  // ✅ NEW: Offline indicator
+                                  if (!isActive)
+                                    Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      child: Container(
+                                        width: 12,
+                                        height: 12,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: Colors.grey.shade600,
+                                          border: Border.all(
+                                            color: Colors.white,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
                               const SizedBox(height: 4),
@@ -17265,9 +17470,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                   color: Colors.white.withOpacity(0.95),
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
-                                    color: role == 'admin'
-                                        ? Colors.blue.shade300
-                                        : Colors.green.shade300,
+                                    color: isActive
+                                        ? (role == 'admin'
+                                              ? Colors.blue.shade300
+                                              : Colors.green.shade300)
+                                        : Colors.grey.shade300,
                                     width: 1.5,
                                   ),
                                   boxShadow: [
@@ -17281,18 +17488,22 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    // Name
                                     Text(
                                       '$firstName ${lastName.isNotEmpty ? lastName[0] : ''}.',
                                       style: TextStyle(
                                         fontSize: 10,
                                         fontWeight: FontWeight.bold,
-                                        color: role == 'admin'
-                                            ? Colors.blue.shade700
-                                            : Colors.green.shade700,
+                                        color: isActive
+                                            ? (role == 'admin'
+                                                  ? Colors.blue.shade700
+                                                  : Colors.green.shade700)
+                                            : Colors.grey.shade600,
                                       ),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),
+                                    // Rank or Status
                                     if (policeRank != null)
                                       Text(
                                         policeRank,
@@ -17303,6 +17514,35 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                       ),
+                                    // ✅ NEW: Last update time
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          isActive
+                                              ? Icons.circle
+                                              : Icons.access_time,
+                                          size: 6,
+                                          color: isActive
+                                              ? Colors.green.shade600
+                                              : Colors.grey.shade500,
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          isActive ? 'Active' : lastUpdateText,
+                                          style: TextStyle(
+                                            fontSize: 7,
+                                            color: isActive
+                                                ? Colors.green.shade600
+                                                : Colors.grey.shade500,
+                                            fontWeight: isActive
+                                                ? FontWeight.w600
+                                                : FontWeight.normal,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
                               ),

@@ -46,33 +46,24 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with TickerProviderStateMixin {
-  // Initialize _startDate to the first day of the previous month
+  // Initialize _startDate to 365 days ago (instead of first day of previous month)
   // Initialize _endDate to the current date
-  DateTime _startDate = DateTime(
-    DateTime.now().year,
-    DateTime.now().month - 1,
-    1,
-  );
+  DateTime _startDate = DateTime.now().subtract(const Duration(days: 365));
   DateTime _endDate = DateTime.now();
-  // Separate date ranges for different pages
-  DateTime _dashboardStartDate = DateTime(
-    DateTime.now().year,
-    DateTime.now().month - 1,
-    1,
+
+  // Separate date ranges for different pages - all set to 365 days
+  DateTime _dashboardStartDate = DateTime.now().subtract(
+    const Duration(days: 365),
   );
   DateTime _dashboardEndDate = DateTime.now();
 
-  DateTime _reportsStartDate = DateTime(
-    DateTime.now().year,
-    DateTime.now().month - 1,
-    1,
+  DateTime _reportsStartDate = DateTime.now().subtract(
+    const Duration(days: 365),
   );
   DateTime _reportsEndDate = DateTime.now();
 
-  final DateTime _officersStartDate = DateTime(
-    DateTime.now().year,
-    DateTime.now().month - 1,
-    1,
+  final DateTime _officersStartDate = DateTime.now().subtract(
+    const Duration(days: 365),
   );
   final DateTime _officersEndDate = DateTime.now();
 
@@ -189,27 +180,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   void initState() {
     super.initState();
 
-    // Initialize dates
-    _dashboardStartDate = DateTime(
-      _dashboardStartDate.year,
-      _dashboardStartDate.month,
-      _dashboardStartDate.day,
-    );
-    _dashboardEndDate = DateTime(
-      _dashboardEndDate.year,
-      _dashboardEndDate.month,
-      _dashboardEndDate.day,
-    );
-    _reportsStartDate = DateTime(
-      _reportsStartDate.year,
-      _reportsStartDate.month,
-      _reportsStartDate.day,
-    );
-    _reportsEndDate = DateTime(
-      _reportsEndDate.year,
-      _reportsEndDate.month,
-      _reportsEndDate.day,
-    );
+    // Initialize dates to past 365 days (instead of 30 days)
+    _dashboardStartDate = DateTime.now().subtract(const Duration(days: 365));
+    _dashboardEndDate = DateTime.now();
+
+    _reportsStartDate = _dashboardStartDate;
+    _reportsEndDate = _dashboardEndDate;
+
     _startDate = _dashboardStartDate;
     _endDate = _dashboardEndDate;
 
@@ -1417,10 +1394,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   List<Map<String, dynamic>> _barangayCrimeData = [];
   bool _isLoadingBarangayCrime = false;
 
-  // UPDATED: Load barangay crime data independently without setState
+  // Add these state variables at the top of your State class
+  int _barangayTotalToProcess = 0;
+  int _barangayProcessedCount = 0;
+
+  // UPDATED: Load barangay crime data with progress tracking
   Future<void> _loadBarangayCrimeData() async {
-    // Don't use setState here to avoid full page reload
-    _isLoadingBarangayCrime = true;
+    if (mounted) {
+      setState(() {
+        _isLoadingBarangayCrime = true;
+        _barangayProcessedCount = 0;
+        _barangayTotalToProcess = 0;
+      });
+    }
 
     try {
       String startDateStr = DateFormat(
@@ -1437,9 +1423,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           .lt('time', endDateStr)
           .eq('status', 'approved');
 
+      if (mounted) {
+        setState(() {
+          _barangayTotalToProcess = response.length;
+        });
+      }
+
       Map<String, int> barangayCounts = {};
 
-      for (var report in response) {
+      for (int i = 0; i < response.length; i++) {
+        var report = response[i];
+
         if (report['location'] != null) {
           String cacheKey = _getLocationCoordinates(report['location']);
 
@@ -1456,9 +1450,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             _barangayCache[cacheKey] = barangay;
           }
 
-          if (barangay.isNotEmpty && barangay != 'Unknown') {
-            barangayCounts[barangay] = (barangayCounts[barangay] ?? 0) + 1;
+          // Include all reports, even those without specific barangay match
+          if (barangay.isEmpty || barangay == 'Unknown') {
+            barangay = 'Outside Barangays'; // More user-friendly label
           }
+
+          barangayCounts[barangay] = (barangayCounts[barangay] ?? 0) + 1;
+        }
+
+        // Update progress every item
+        if (mounted) {
+          setState(() {
+            _barangayProcessedCount = i + 1;
+          });
         }
       }
 
@@ -1468,7 +1472,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               .toList()
             ..sort((a, b) => (b['count'] as int).compareTo(a['count'] as int));
 
-      // Only update the specific data, not the whole state
       if (mounted) {
         setState(() {
           _barangayCrimeData = chartData;
@@ -9388,6 +9391,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ? 2.0
             : 1.0;
 
+        // Calculate stats
+        int peak = maxValue;
+        int total = chartData.fold(
+          0,
+          (sum, item) => sum + (item['count'] as int),
+        );
+        int days = chartData.length;
+        double average = days > 0 ? total / days : 0;
+
         return Container(
           width: double.infinity,
           padding: EdgeInsets.all(isSmallScreen ? 16.0 : 24.0),
@@ -9457,7 +9469,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       ),
                     ),
                     child: Text(
-                      'Total: ${chartData.fold(0, (sum, item) => sum + (item['count'] as int))}',
+                      'Total: $total',
                       style: TextStyle(
                         fontSize: fontSize,
                         fontWeight: FontWeight.w600,
@@ -9467,7 +9479,53 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                 ],
               ),
-              SizedBox(height: isSmallScreen ? 16 : 20),
+              SizedBox(height: isSmallScreen ? 12 : 16),
+
+              // NEW INLINE LEGEND - Only show on desktop
+              if (!isSmallScreen) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildInlineLegendItem(
+                        'Peak',
+                        peak,
+                        const Color(0xFFDC2626),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: const Color(0xFFE5E7EB),
+                      ),
+                      _buildInlineAverageLegendItem(
+                        'Average',
+                        average,
+                        const Color(0xFFF59E0B),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: const Color(0xFFE5E7EB),
+                      ),
+                      _buildInlineLegendItem(
+                        'Days',
+                        days,
+                        const Color(0xFF10B981),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
 
               // Chart container with proper constraints
               SizedBox(
@@ -9737,8 +9795,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ),
               ),
 
-              // Legend and stats (responsive layout)
-              if (!isSmallScreen) ...[
+              // Legend and stats - Keep original for mobile, show nothing for desktop (legend moved above)
+              if (isSmallScreen) ...[
                 const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -9750,12 +9808,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     ),
                     _buildStatItem(
                       'Average',
-                      (chartData.fold(
-                                0,
-                                (sum, item) => sum + (item['count'] as int),
-                              ) /
-                              chartData.length)
-                          .toStringAsFixed(1),
+                      average.toStringAsFixed(1),
                       const Color(0xFFF59E0B),
                     ),
                     _buildStatItem(
@@ -9773,7 +9826,65 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // SELECT DATE - Updated for full width in mobile view
+  // HELPER WIDGET FOR INLINE LEGEND ITEMS (Integer values)
+  // Note: Add this if not already present from previous snippets
+  Widget _buildInlineLegendItem(String label, int value, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          value.toString(),
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // HELPER WIDGET FOR INLINE LEGEND ITEMS (Decimal values - for Average)
+  // Note: Add this if not already present from previous snippets
+  Widget _buildInlineAverageLegendItem(
+    String label,
+    double value,
+    Color color,
+  ) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          value.toStringAsFixed(1),
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // SELECT DATE - Updated with navy blue gradient
   Widget _buildDateRangeCard() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -9785,14 +9896,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                colors: [
+                  Color.fromARGB(255, 43, 68, 105),
+                  Color.fromARGB(255, 58, 90, 140),
+                ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF6366F1).withOpacity(0.3),
+                  color: const Color.fromARGB(
+                    255,
+                    43,
+                    68,
+                    105,
+                  ).withOpacity(0.3),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -9820,7 +9939,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   label: const Text('Change Range'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white,
-                    foregroundColor: const Color(0xFF6366F1),
+                    foregroundColor: const Color.fromARGB(255, 43, 68, 105),
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 24,
@@ -9863,7 +9982,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             title: 'Total Reports',
             value: '${_crimeStats['total'] ?? 0}',
             icon: Icons.report_outlined,
-            gradient: const [Color(0xFFEC4899), Color(0xFFBE185D)],
+            accentColor: const Color(0xFFEC4899),
             delay: 0,
             onTap: () => _navigateToPage('reports'),
           ),
@@ -9874,7 +9993,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             title: 'Pending Reports',
             value: '${_reportStats['status']?['pending'] ?? 0}',
             icon: Icons.pending_outlined,
-            gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
+            accentColor: const Color(0xFFF59E0B),
             delay: 100,
             onTap: () => _navigateToPage(
               'reports',
@@ -9888,7 +10007,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             title: 'Total SafeSpots',
             value: '${_safeSpotStats['total'] ?? 0}',
             icon: Icons.place_outlined,
-            gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+            accentColor: const Color(0xFF10B981),
             delay: 200,
             onTap: () => _navigateToPage('safespots'),
           ),
@@ -9899,7 +10018,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             title: 'Pending SafeSpot',
             value: '${_safeSpotStats['status']?['pending'] ?? 0}',
             icon: Icons.pending_outlined,
-            gradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+            accentColor: const Color(0xFF3B82F6),
             delay: 300,
             onTap: () => _navigateToPage(
               'safespots',
@@ -9913,7 +10032,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             title: 'Registered Users',
             value: '${_userStats['total'] ?? 0}',
             icon: Icons.people_alt_outlined,
-            gradient: const [Color(0xFF06B6D4), Color(0xFF0891B2)],
+            accentColor: const Color(0xFF06B6D4),
             delay: 400,
             onTap: () => _navigateToPage('users'),
           ),
@@ -9924,7 +10043,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             title: 'Officers',
             value: '${_userStats['officers'] ?? 0}',
             icon: Icons.security_outlined,
-            gradient: const [Color(0xFF8B5CF6), Color(0xFF6D28D9)],
+            accentColor: const Color(0xFF8B5CF6),
             delay: 500,
             onTap: () => _navigateToPage('officers'),
           ),
@@ -9933,8 +10052,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // UPDATE YOUR MOBILE LAYOUT STATS CARDS
-
+  // MOBILE LAYOUT
   Widget _buildMobileLayout() {
     return Column(
       children: [
@@ -9945,7 +10063,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 title: 'Total Reports',
                 value: '${_crimeStats['total'] ?? 0}',
                 icon: Icons.report_outlined,
-                gradient: const [Color(0xFFEC4899), Color(0xFFBE185D)],
+                accentColor: const Color(0xFFEC4899),
                 delay: 0,
                 onTap: () => _navigateToPage('reports'),
               ),
@@ -9956,7 +10074,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 title: 'Pending Reports',
                 value: '${_reportStats['status']?['pending'] ?? 0}',
                 icon: Icons.pending_outlined,
-                gradient: const [Color(0xFFF59E0B), Color(0xFFD97706)],
+                accentColor: const Color(0xFFF59E0B),
                 delay: 100,
                 onTap: () => _navigateToPage(
                   'reports',
@@ -9974,7 +10092,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 title: 'Total SafeSpots',
                 value: '${_safeSpotStats['total'] ?? 0}',
                 icon: Icons.place_outlined,
-                gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+                accentColor: const Color(0xFF10B981),
                 delay: 200,
                 onTap: () => _navigateToPage('safespots'),
               ),
@@ -9985,7 +10103,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 title: 'Pending SafeSpot',
                 value: '${_safeSpotStats['status']?['pending'] ?? 0}',
                 icon: Icons.pending_outlined,
-                gradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+                accentColor: const Color(0xFF3B82F6),
                 delay: 300,
                 onTap: () => _navigateToPage(
                   'safespots',
@@ -10003,7 +10121,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 title: 'Registered Users',
                 value: '${_userStats['total'] ?? 0}',
                 icon: Icons.people_alt_outlined,
-                gradient: const [Color(0xFF06B6D4), Color(0xFF0891B2)],
+                accentColor: const Color(0xFF06B6D4),
                 delay: 400,
                 onTap: () => _navigateToPage('users'),
               ),
@@ -10014,7 +10132,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 title: 'Officers',
                 value: '${_userStats['officers'] ?? 0}',
                 icon: Icons.security_outlined,
-                gradient: const [Color(0xFF8B5CF6), Color(0xFF6D28D9)],
+                accentColor: const Color(0xFF8B5CF6),
                 delay: 500,
                 onTap: () => _navigateToPage('officers'),
               ),
@@ -10025,12 +10143,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // STATS CARD — now clickable + hover animation
+  // MODERN MINIMALIST STATS CARD - Better spacing & cleaner design
   Widget _buildStatsCard({
     required String title,
     required String value,
     required IconData icon,
-    required List<Color> gradient,
+    required Color accentColor,
     required int delay,
     VoidCallback? onTap,
   }) {
@@ -10045,35 +10163,81 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               transform: _hoveredCard == title
-                  ? (Matrix4.identity()..translate(0, -4)) // subtle lift
+                  ? (Matrix4.identity()..translate(0, -6))
                   : Matrix4.identity(),
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: onTap,
                   borderRadius: BorderRadius.circular(16),
-                  splashColor: Colors.white24,
+                  splashColor: accentColor.withOpacity(0.08),
                   child: Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: gradient,
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: _hoveredCard == title
+                            ? accentColor.withOpacity(0.3)
+                            : Colors.grey.shade200,
+                        width: 1.5,
+                      ),
                       boxShadow: [
                         BoxShadow(
-                          color: gradient[0].withOpacity(0.3),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
+                          color: _hoveredCard == title
+                              ? accentColor.withOpacity(0.15)
+                              : Colors.black.withOpacity(0.04),
+                          blurRadius: _hoveredCard == title ? 20 : 10,
+                          offset: Offset(0, _hoveredCard == title ? 8 : 4),
                         ),
                       ],
                     ),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(icon, size: 32, color: Colors.white),
+                        // Header with icon and small trend indicator
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: accentColor.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(icon, size: 24, color: accentColor),
+                            ),
+                            // Small trend indicator
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: accentColor.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                Icons.trending_up,
+                                size: 16,
+                                color: accentColor,
+                              ),
+                            ),
+                          ],
+                        ),
                         const SizedBox(height: 12),
+                        // Title
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        // Value with animation
                         AnimatedBuilder(
                           animation: _chartAnimation,
                           builder: (context, child) {
@@ -10082,22 +10246,29 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                     .toInt();
                             return Text(
                               '$animatedValue',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                                color: Colors.grey.shade900,
+                                height: 1.1,
+                                letterSpacing: -0.5,
                               ),
                             );
                           },
                         ),
-                        Text(
-                          title,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white70,
-                            fontWeight: FontWeight.w500,
+                        const SizedBox(height: 12),
+                        // Bottom accent line
+                        Container(
+                          height: 3,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                accentColor,
+                                accentColor.withOpacity(0.3),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(2),
                           ),
-                          textAlign: TextAlign.center,
                         ),
                       ],
                     ),
@@ -10128,12 +10299,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               bool isWide = constraints.maxWidth > 800;
               return Column(
                 children: [
-                  // Combined User and Crime Statistics
+                  // Combined User, Crime, and Report Statistics (3 charts in 1 row)
                   _buildUserAndCrimeChartsSection(isWide: isWide),
                   const SizedBox(height: 32),
-                  // Keep Status Charts separate as before
-                  _buildStatusChartsSection(isWide: isWide),
-                  const SizedBox(height: 32),
+                  // REMOVE THIS LINE: _buildStatusChartsSection(isWide: isWide),
+                  // const SizedBox(height: 32),
                   _buildHotspotTrendSection(),
                   const SizedBox(height: 32),
                   _buildSafeSpotChartsSection(isWide: isWide),
@@ -10146,12 +10316,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // COMBINED USER AND CRIME STATISTICS SECTION
+  // UPDATE YOUR DESKTOP LAYOUT TO USE COMBINED CHARTS
   Widget _buildUserAndCrimeChartsSection({bool isWide = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Only show main title on desktop
         if (isWide) ...[
           const Text(
             'User & Crime Statistics',
@@ -10167,33 +10336,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ? Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // LEFT SIDE - User Statistics
-                  Expanded(
-                    flex: 1,
-                    child: Column(
-                      children: [
-                        _buildCompactGenderChartCards(), // Changed to compact version
-                        const SizedBox(height: 20),
-                        _buildCompactRoleChart(), // Changed to compact version
-                      ],
-                    ),
-                  ),
+                  Expanded(child: _buildCombinedUserChart()),
                   const SizedBox(width: 20),
-                  // RIGHT SIDE - Crime Statistics
-                  Expanded(
-                    flex: 1,
-                    child: Column(
-                      children: [
-                        _buildCompactCrimeLevelsChart(), // Changed to compact version
-                        const SizedBox(height: 20),
-                        _buildCompactCrimeCategoriesChart(), // Changed to compact version
-                      ],
-                    ),
-                  ),
+                  Expanded(child: _buildCombinedCrimeChart()),
+                  const SizedBox(width: 20),
+                  Expanded(child: _buildCombinedReportStatusChart()),
                 ],
               )
             : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
                     'User Statistics',
@@ -10220,164 +10370,43 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   _buildCrimeLevelsChart(),
                   const SizedBox(height: 20),
                   _buildCrimeCategoriesChart(),
+                  const SizedBox(height: 32),
+                  const Text(
+                    'Reports Analytics',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1F2937),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildReportStatusChart(),
+                  const SizedBox(height: 20),
+                  _buildActivityStatusChart(),
                 ],
               ),
       ],
     );
   }
 
-  // COMPACT VERSIONS FOR DESKTOP
-
-  Widget _buildCompactGenderChartCards() {
-    // Define all possible genders you want to display
-    List<String> allGenders = ['Male', 'Female', 'Others', 'LGBTQ+'];
-
-    // Initialize genderData with actual data or an empty map
+  // COMBINED USER CHART (Gender + Role) - FIXED HEIGHT & Y-AXIS
+  Widget _buildCombinedUserChart() {
+    Map<String, int> roleData = _userStats['role'] ?? {};
     Map<String, int> genderData = _userStats['gender'] ?? {};
 
-    // Check if genderData is empty
-    if (genderData.isEmpty) {
-      return _buildEmptyCard('No gender data available');
+    if (roleData.isEmpty && genderData.isEmpty) {
+      return _buildEmptyCard('No user data available');
     }
 
-    // Ensure all genders are present in genderData with a default value of 0
-    for (var gender in allGenders) {
-      genderData.putIfAbsent(gender, () => 0);
-    }
+    List<String> roles = ['admin', 'officer', 'tanod', 'user'];
+    List<String> genders = ['Male', 'Female', 'Others', 'LGBTQ+'];
 
-    List<Color> colors = [
-      const Color.fromARGB(255, 99, 137, 241),
-      const Color(0xFFEC4899),
-      const Color(0xFF8B5CF6),
-      const Color(0xFFF59E0B),
-    ];
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          const Text(
-            'Users by Gender',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1F2937),
-            ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 270,
-            child: AnimatedBuilder(
-              animation: _chartAnimation,
-              builder: (context, child) {
-                return PieChart(
-                  PieChartData(
-                    sections: genderData.entries.map((entry) {
-                      int index = allGenders.indexOf(entry.key);
-                      double percentage =
-                          (entry.value / (_userStats['total'] ?? 1)) * 100;
-                      double animatedValue =
-                          entry.value.toDouble() * _chartAnimation.value;
-
-                      return PieChartSectionData(
-                        color: colors[index % colors.length],
-                        value: animatedValue,
-                        title: _chartAnimation.value > 0.8
-                            ? '${percentage.toStringAsFixed(1)}%'
-                            : '',
-                        radius: 45 + (8 * _chartAnimation.value),
-                        titleStyle: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: allGenders.map((gender) {
-              int index = allGenders.indexOf(gender);
-              int value = genderData[gender] ?? 0;
-              final color = colors[index % colors.length];
-
-              return Expanded(
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: color.withOpacity(0.2)),
-                  ),
-                  child: Column(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: color,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        gender.toUpperCase(),
-                        style: const TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF374151),
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                      ),
-                      Text(
-                        value == 0 ? 'None' : '$value',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: color,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // COMPACT USER ROLE (Desktop)
-  Widget _buildCompactRoleChart() {
-    Map<String, int> roleData = _userStats['role'] ?? {};
-
-    if (roleData.isEmpty) {
-      return _buildEmptyCard('No role data available');
-    }
+    Map<String, Color> genderColors = {
+      'Male': const Color(0xFF3B82F6),
+      'Female': const Color(0xFFEC4899),
+      'Others': const Color(0xFF8B5CF6),
+      'LGBTQ+': const Color(0xFFF59E0B),
+    };
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -10395,7 +10424,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       child: Column(
         children: [
           const Text(
-            'Users by Role',
+            'User Distribution (Gender & Role)',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
@@ -10404,106 +10433,137 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           ),
           const SizedBox(height: 16),
           SizedBox(
-            height: 320,
+            height: 320, // Fixed chart height
             child: AnimatedBuilder(
               animation: _chartAnimation,
               builder: (context, child) {
                 return BarChart(
                   BarChartData(
                     alignment: BarChartAlignment.spaceAround,
-                    maxY: roleData.values.isEmpty
-                        ? 10
-                        : roleData.values
-                                  .reduce((a, b) => a > b ? a : b)
-                                  .toDouble() *
-                              1.2,
+                    maxY:
+                        roles
+                            .map((role) => roleData[role] ?? 0)
+                            .reduce((a, b) => a > b ? a : b)
+                            .toDouble() *
+                        1.2,
                     barTouchData: BarTouchData(
                       enabled: true,
                       touchTooltipData: BarTouchTooltipData(
-                        getTooltipColor: (group) =>
-                            Colors.white, // bright background
+                        getTooltipColor: (group) => Colors.white,
                         tooltipPadding: const EdgeInsets.all(8),
-                        tooltipMargin: 8,
                         getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                          String gender = genders[rodIndex];
                           return BarTooltipItem(
-                            rod.toY.toInt().toString(),
+                            '$gender: ${rod.toY.toInt()}',
                             const TextStyle(
-                              color: Colors.black, // readable text
+                              color: Colors.black,
                               fontWeight: FontWeight.bold,
+                              fontSize: 11,
                             ),
                           );
                         },
                       ),
                     ),
+                    barGroups: roles.asMap().entries.map((entry) {
+                      int roleIndex = entry.key;
+                      String role = entry.value;
+                      int totalForRole = roleData[role] ?? 0;
 
-                    barGroups: roleData.entries.map((entry) {
-                      int index = roleData.keys.toList().indexOf(entry.key);
-                      double animatedHeight =
-                          entry.value.toDouble() * _chartAnimation.value;
+                      double maleRatio =
+                          (genderData['Male'] ?? 0) /
+                          (_userStats['total'] ?? 1);
+                      double femaleRatio =
+                          (genderData['Female'] ?? 0) /
+                          (_userStats['total'] ?? 1);
+                      double othersRatio =
+                          (genderData['Others'] ?? 0) /
+                          (_userStats['total'] ?? 1);
+                      double lgbtqRatio =
+                          (genderData['LGBTQ+'] ?? 0) /
+                          (_userStats['total'] ?? 1);
 
                       return BarChartGroupData(
-                        x: index,
+                        x: roleIndex,
+                        barsSpace: 4,
                         barRods: [
                           BarChartRodData(
-                            toY: animatedHeight,
-                            color: entry.key == 'admin'
-                                ? const Color(0xFF6366F1)
-                                : entry.key == 'officer'
-                                ? const Color.fromARGB(255, 60, 162, 245)
-                                : entry.key ==
-                                      'tanod' // ✅ ADD THIS LINE
-                                ? const Color(0xFFEF4444) // ✅ ADD THIS LINE
-                                : const Color(0xFF10B981),
-                            width: 24,
+                            toY:
+                                (totalForRole *
+                                maleRatio *
+                                _chartAnimation.value),
+                            color: genderColors['Male'],
+                            width: 12,
                             borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(6),
+                              top: Radius.circular(4),
                             ),
-                            gradient: LinearGradient(
-                              colors: entry.key == 'admin'
-                                  ? [
-                                      const Color(0xFF6366F1),
-                                      const Color(0xFF8B5CF6),
-                                    ]
-                                  : entry.key == 'officer'
-                                  ? [
-                                      const Color.fromARGB(255, 60, 162, 245),
-                                      const Color.fromARGB(255, 48, 129, 223),
-                                    ]
-                                  : entry.key ==
-                                        'tanod' // ✅ ADD THIS LINE
-                                  ? [
-                                      const Color(0xFFEF4444),
-                                      const Color(0xFFDC2626),
-                                    ]
-                                  : [
-                                      const Color(0xFF10B981),
-                                      const Color(0xFF059669),
-                                    ],
-                              begin: Alignment.bottomCenter,
-                              end: Alignment.topCenter,
+                          ),
+                          BarChartRodData(
+                            toY:
+                                (totalForRole *
+                                femaleRatio *
+                                _chartAnimation.value),
+                            color: genderColors['Female'],
+                            width: 12,
+                            borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(4),
+                            ),
+                          ),
+                          BarChartRodData(
+                            toY:
+                                (totalForRole *
+                                othersRatio *
+                                _chartAnimation.value),
+                            color: genderColors['Others'],
+                            width: 12,
+                            borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(4),
+                            ),
+                          ),
+                          BarChartRodData(
+                            toY:
+                                (totalForRole *
+                                lgbtqRatio *
+                                _chartAnimation.value),
+                            color: genderColors['LGBTQ+'],
+                            width: 12,
+                            borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(4),
                             ),
                           ),
                         ],
                       );
                     }).toList(),
                     titlesData: FlTitlesData(
-                      leftTitles: const AxisTitles(
+                      leftTitles: AxisTitles(
                         sideTitles: SideTitles(
                           showTitles: true,
                           reservedSize: 30,
+                          interval: 1, // Force whole number intervals
+                          getTitlesWidget: (value, meta) {
+                            // Only show whole numbers
+                            if (value % 1 == 0) {
+                              return Text(
+                                value.toInt().toString(),
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: Color(0xFF6B7280),
+                                ),
+                              );
+                            }
+                            return const SizedBox.shrink();
+                          },
                         ),
                       ),
                       bottomTitles: AxisTitles(
                         sideTitles: SideTitles(
                           showTitles: true,
                           getTitlesWidget: (value, meta) {
-                            List<String> keys = roleData.keys.toList();
                             if (value.toInt() >= 0 &&
-                                value.toInt() < keys.length) {
+                                value.toInt() < roles.length) {
                               return Padding(
                                 padding: const EdgeInsets.only(top: 6.0),
                                 child: Text(
-                                  keys[value.toInt()].toUpperCase(),
+                                  roles[value.toInt()].toUpperCase(),
                                   style: const TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w600,
@@ -10526,13 +10586,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     gridData: FlGridData(
                       show: true,
                       drawVerticalLine: false,
-                      horizontalInterval: 1,
-                      getDrawingHorizontalLine: (value) {
-                        return const FlLine(
-                          color: Color(0xFFE5E7EB),
-                          strokeWidth: 1,
-                        );
-                      },
+                      getDrawingHorizontalLine: (value) => const FlLine(
+                        color: Color(0xFFE5E7EB),
+                        strokeWidth: 1,
+                      ),
                     ),
                     borderData: FlBorderData(show: false),
                   ),
@@ -10540,147 +10597,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               },
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  // COMPACT CRIMES BY SEVERITY LEVEL (Desktop)
-  Widget _buildCompactCrimeLevelsChart() {
-    // Define all possible crime severity levels
-    List<String> allLevels = ['critical', 'high', 'medium', 'low'];
-
-    // Initialize levelData with all levels and default value of 0
-    Map<String, int> levelData = {for (var level in allLevels) level: 0};
-
-    // Update levelData with actual data if it exists
-    if (_crimeStats['levels'] != null) {
-      _crimeStats['levels'].forEach((key, value) {
-        if (levelData.containsKey(key)) {
-          levelData[key] = value;
-        }
-      });
-    }
-
-    // Check if there's any actual data (all values are 0 means no data)
-    int totalCrimes = levelData.values.fold(0, (sum, value) => sum + value);
-
-    if (totalCrimes == 0) {
-      return _buildEmptyCard('No crime severity data available');
-    }
-
-    Map<String, Color> levelColors = {
-      'critical': const Color.fromARGB(255, 247, 26, 10),
-      'high': const Color.fromARGB(255, 223, 106, 11),
-      'medium': const Color.fromARGB(155, 202, 130, 49),
-      'low': const Color.fromARGB(255, 216, 187, 23),
-    };
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          const Text(
-            'Crimes by Severity Level',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1F2937),
-            ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 270,
-            child: AnimatedBuilder(
-              animation: _chartAnimation,
-              builder: (context, child) {
-                return PieChart(
-                  PieChartData(
-                    sections: levelData.entries.map((entry) {
-                      double percentage = (entry.value / totalCrimes) * 100;
-                      double animatedValue =
-                          entry.value.toDouble() * _chartAnimation.value;
-                      return PieChartSectionData(
-                        color: levelColors[entry.key] ?? Colors.grey,
-                        value: animatedValue,
-                        title: _chartAnimation.value > 0.8
-                            ? '${percentage.toStringAsFixed(1)}%'
-                            : '',
-                        radius: 45 + (8 * _chartAnimation.value),
-                        titleStyle: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                );
-              },
-            ),
-          ),
           const SizedBox(height: 12),
-          // Horizontal layout for legend cards
-          Row(
-            children: allLevels.map((level) {
-              final color = levelColors[level] ?? Colors.grey;
-              final value = levelData[level] ?? 0;
-              return Expanded(
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 4,
+          // Legend
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: genders.map((gender) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: genderColors[gender],
+                      borderRadius: BorderRadius.circular(3),
+                    ),
                   ),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: color.withOpacity(0.2)),
+                  const SizedBox(width: 4),
+                  Text(
+                    gender,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF6B7280),
+                    ),
                   ),
-                  child: Column(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: color,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        level.toUpperCase(),
-                        style: const TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF374151),
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                      ),
-                      Text(
-                        value == 0 ? 'None' : '$value',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: color,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                ],
               );
             }).toList(),
           ),
@@ -10689,32 +10633,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // COMPACT CRIMES BY CATEGORY (Desktop)
-  Widget _buildCompactCrimeCategoriesChart() {
+  // COMBINED CRIME CHART (Severity + Category)
+  Widget _buildCombinedCrimeChart() {
     Map<String, int> categoryData = _crimeStats['categories'] ?? {};
+    Map<String, int> levelData = _crimeStats['levels'] ?? {};
 
     if (categoryData.isEmpty) {
-      return _buildEmptyCard('No crime category data available');
+      return _buildEmptyCard('No crime data available');
     }
 
-    // Color mapping based on your filter section
-    Map<String, Color> categoryColors = {
-      'Property': Colors.blue,
-      'Violent': Colors.red,
-      'Drug': Colors.purple,
-      'Public Order': Colors.orange,
-      'Financial': Colors.green,
-      'Traffic': Colors.blueGrey,
-      'Alert': Colors.deepPurple,
-      // Fallback colors for any other categories
-      'default1': const Color(0xFF0891B2),
-      'default2': const Color.fromARGB(255, 185, 163, 36),
+    Map<String, Color> severityColors = {
+      'critical': const Color(0xFFEF4444),
+      'high': const Color(0xFFF59E0B),
+      'medium': const Color(0xFFFBBF24),
+      'low': const Color(0xFF10B981),
     };
 
-    // Get max value for scaling
-    int maxValue = categoryData.values.isEmpty
-        ? 1
-        : categoryData.values.reduce((a, b) => a > b ? a : b);
+    List<String> severities = ['critical', 'high', 'medium', 'low'];
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -10730,10 +10665,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Crimes by Category',
+            'Crime Distribution (Category & Severity)',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
@@ -10746,94 +10680,196 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             child: AnimatedBuilder(
               animation: _chartAnimation,
               builder: (context, child) {
-                return SingleChildScrollView(
-                  child: Column(
-                    children: categoryData.entries.map((entry) {
-                      // Get color based on category name, with fallback
-                      Color barColor = categoryColors[entry.key] ?? Colors.grey;
-                      double progress =
-                          (entry.value / maxValue) * _chartAnimation.value;
+                return BarChart(
+                  BarChartData(
+                    alignment: BarChartAlignment.spaceAround,
+                    maxY:
+                        categoryData.values
+                            .reduce((a, b) => a > b ? a : b)
+                            .toDouble() *
+                        1.2,
+                    barTouchData: BarTouchData(
+                      enabled: true,
+                      touchTooltipData: BarTouchTooltipData(
+                        getTooltipColor: (group) => Colors.white,
+                        tooltipPadding: const EdgeInsets.all(8),
+                        getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                          String category = categoryData.keys
+                              .toList()[group.x.toInt()];
+                          return BarTooltipItem(
+                            '$category\n${rod.toY.toInt()} reports',
+                            const TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    barGroups: categoryData.entries
+                        .toList()
+                        .asMap()
+                        .entries
+                        .map((entry) {
+                          int index = entry.key;
+                          String _ = entry.value.key;
+                          int total = entry.value.value;
 
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 14.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    entry.key,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: Color(0xFF374151),
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                          // Distribute by severity (proportionally for demo)
+                          double criticalRatio =
+                              (levelData['critical'] ?? 0) /
+                              (_crimeStats['total'] ?? 1);
+                          double highRatio =
+                              (levelData['high'] ?? 0) /
+                              (_crimeStats['total'] ?? 1);
+                          double mediumRatio =
+                              (levelData['medium'] ?? 0) /
+                              (_crimeStats['total'] ?? 1);
+                          double lowRatio =
+                              (levelData['low'] ?? 0) /
+                              (_crimeStats['total'] ?? 1);
+
+                          double critical =
+                              total * criticalRatio * _chartAnimation.value;
+                          double high =
+                              total * highRatio * _chartAnimation.value;
+                          double medium =
+                              total * mediumRatio * _chartAnimation.value;
+                          double low = total * lowRatio * _chartAnimation.value;
+
+                          return BarChartGroupData(
+                            x: index,
+                            barRods: [
+                              BarChartRodData(
+                                toY: critical + high + medium + low,
+                                color: Colors.transparent,
+                                width: 32,
+                                borderRadius: const BorderRadius.vertical(
+                                  top: Radius.circular(6),
                                 ),
-                                Text(
-                                  entry.value.toString(),
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w500,
-                                    color: barColor,
+                                rodStackItems: [
+                                  BarChartRodStackItem(
+                                    0,
+                                    critical,
+                                    severityColors['critical']!,
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            Container(
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF3F4F6),
-                                borderRadius: BorderRadius.circular(4),
+                                  BarChartRodStackItem(
+                                    critical,
+                                    critical + high,
+                                    severityColors['high']!,
+                                  ),
+                                  BarChartRodStackItem(
+                                    critical + high,
+                                    critical + high + medium,
+                                    severityColors['medium']!,
+                                  ),
+                                  BarChartRodStackItem(
+                                    critical + high + medium,
+                                    critical + high + medium + low,
+                                    severityColors['low']!,
+                                  ),
+                                ],
                               ),
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  return Stack(
-                                    children: [
-                                      AnimatedContainer(
-                                        duration: const Duration(
-                                          milliseconds: 300,
-                                        ),
-                                        width: constraints.maxWidth * progress,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(
-                                            4,
-                                          ),
-                                          gradient: LinearGradient(
-                                            colors: [
-                                              barColor.withOpacity(0.8),
-                                              barColor,
-                                            ],
-                                            begin: Alignment.centerLeft,
-                                            end: Alignment.centerRight,
-                                          ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: barColor.withOpacity(0.3),
-                                              blurRadius: 2,
-                                              offset: const Offset(0, 1),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                },
+                            ],
+                          );
+                        })
+                        .toList(),
+                    titlesData: FlTitlesData(
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 35,
+                          getTitlesWidget: (value, meta) {
+                            return Text(
+                              value.toInt().toString(),
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Color(0xFF6B7280),
                               ),
-                            ),
-                          ],
+                            );
+                          },
                         ),
-                      );
-                    }).toList(),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (value, meta) {
+                            List<String> categories = categoryData.keys
+                                .toList();
+                            if (value.toInt() >= 0 &&
+                                value.toInt() < categories.length) {
+                              String category = categories[value.toInt()];
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 6.0),
+                                child: Text(
+                                  category.length > 8
+                                      ? '${category.substring(0, 7)}.'
+                                      : category,
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF6B7280),
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              );
+                            }
+                            return const Text('');
+                          },
+                        ),
+                      ),
+                      topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                      rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                    ),
+                    gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      getDrawingHorizontalLine: (value) => const FlLine(
+                        color: Color(0xFFE5E7EB),
+                        strokeWidth: 1,
+                      ),
+                    ),
+                    borderData: FlBorderData(show: false),
                   ),
                 );
               },
             ),
+          ),
+          const SizedBox(height: 12),
+          // Legend
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: severities.map((severity) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: severityColors[severity],
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    severity.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
           ),
         ],
       ),
@@ -11170,35 +11206,281 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  Widget _buildStatusChartsSection({bool isWide = false}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Reports Analytics',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF1F2937),
+  // COMBINED REPORT STATUS CHART - SPLIT HALF DONUT DESIGN
+  // COMBINED REPORT STATUS CHART - SPLIT HALF DONUT DESIGN
+  Widget _buildCombinedReportStatusChart() {
+    Map<String, int> statusData = _reportStats['status'] ?? {};
+    Map<String, int> activityData = _activityStats['status'] ?? {};
+
+    // Remove zero values
+    statusData.removeWhere((key, value) => value == 0);
+    activityData.removeWhere((key, value) => value == 0);
+
+    if (statusData.isEmpty && activityData.isEmpty) {
+      return _buildEmptyCard('No report or activity data available');
+    }
+
+    // Status colors (Left half)
+    Map<String, Color> statusColors = {
+      'pending': const Color(0xFFF59E0B),
+      'investigating': const Color(0xFF3B82F6),
+      'resolved': const Color(0xFF10B981),
+      'rejected': const Color(0xFFEF4444),
+      'approved': const Color(0xFF10B981),
+    };
+
+    // Activity colors (Right half)
+    Map<String, Color> activityColors = {
+      'active': const Color(0xFF059669),
+      'inactive': const Color(0xFF6B7280),
+      'archived': const Color(0xFF4B5563),
+    };
+
+    int totalStatus = statusData.values.fold(0, (sum, val) => sum + val);
+    int totalActivity = activityData.values.fold(0, (sum, val) => sum + val);
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
-        ),
-        const SizedBox(height: 20),
-        isWide
-            ? Row(
-                children: [
-                  Expanded(child: _buildReportStatusChart()),
-                  const SizedBox(width: 20),
-                  Expanded(child: _buildActivityStatusChart()),
-                ],
-              )
-            : Column(
-                children: [
-                  _buildReportStatusChart(),
-                  const SizedBox(height: 20),
-                  _buildActivityStatusChart(),
-                ],
-              ),
-      ],
+        ],
+      ),
+      child: Column(
+        children: [
+          const Text(
+            'Report Status & Activity',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1F2937),
+            ),
+          ),
+          const SizedBox(height: 18),
+          SizedBox(
+            height: 320, // Match other charts
+            child: AnimatedBuilder(
+              animation: _chartAnimation,
+              builder: (context, child) {
+                List<PieChartSectionData> sections = [];
+
+                // LEFT HALF - Report Status (180° to 360°/0°)
+                if (statusData.isNotEmpty) {
+                  statusData.entries.forEach((entry) {
+                    double percentage = (entry.value / totalStatus);
+
+                    sections.add(
+                      PieChartSectionData(
+                        color:
+                            statusColors[entry.key.toLowerCase()] ??
+                            Colors.grey,
+                        value: entry.value.toDouble() * _chartAnimation.value,
+                        title: _chartAnimation.value > 0.8
+                            ? '${(percentage * 100).toStringAsFixed(0)}%'
+                            : '',
+                        radius: 55,
+                        titleStyle: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                        titlePositionPercentageOffset: 0.6,
+                      ),
+                    );
+                  });
+                }
+
+                // RIGHT HALF - Activity Status (0° to 180°)
+                if (activityData.isNotEmpty) {
+                  activityData.entries.forEach((entry) {
+                    double percentage = (entry.value / totalActivity);
+
+                    sections.add(
+                      PieChartSectionData(
+                        color:
+                            activityColors[entry.key.toLowerCase()] ??
+                            Colors.grey,
+                        value: entry.value.toDouble() * _chartAnimation.value,
+                        title: _chartAnimation.value > 0.8
+                            ? '${(percentage * 100).toStringAsFixed(0)}%'
+                            : '',
+                        radius: 55,
+                        titleStyle: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                        titlePositionPercentageOffset: 0.6,
+                      ),
+                    );
+                  });
+                }
+
+                return Column(
+                  children: [
+                    // Chart with side labels
+                    Expanded(
+                      child: Row(
+                        children: [
+                          // Left side label
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                const Text(
+                                  'REPORT',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF9CA3AF),
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                const Text(
+                                  'STATUS',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF9CA3AF),
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '$totalStatus',
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF1F2937),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          // Chart
+                          Expanded(
+                            flex: 2,
+                            child: PieChart(
+                              PieChartData(
+                                startDegreeOffset: 180,
+                                sectionsSpace: 2,
+                                centerSpaceRadius: 60,
+                                sections: sections,
+                              ),
+                            ),
+                          ),
+                          // Right side label
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'ACTIVITY',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF9CA3AF),
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                const Text(
+                                  'STATUS',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF9CA3AF),
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '$totalActivity',
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF1F2937),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Combined Legend - Single centered row
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              // Report Status items
+              ...statusData.entries.map((entry) {
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: statusColors[entry.key.toLowerCase()],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${entry.key.toUpperCase()} (${entry.value})',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+              // Activity Status items
+              ...activityData.entries.map((entry) {
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: activityColors[entry.key.toLowerCase()],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${entry.key.toUpperCase()} (${entry.value})',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -12017,28 +12299,68 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
+  // HOTSPOT TREND SECTION - UPDATED FOR 2 COLUMNS
+  Widget _buildHotspotTrendSection() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final screenWidth = MediaQuery.of(context).size.width;
+        final isSmallScreen = screenWidth < 600;
+
+        if (isSmallScreen) {
+          // Mobile view - keep original stacked layout
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [_buildHotspotLineChart()],
+          );
+        }
+
+        // Desktop view - 2 columns
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _buildBarangayCrimeChart()),
+            const SizedBox(width: 20),
+            Expanded(child: _buildHotspotLineChart()),
+          ],
+        );
+      },
+    );
+  }
+
+  // UPDATED BARANGAY CRIME CHART WITH ACCURATE LOADING
   Widget _buildBarangayCrimeChart() {
     return LayoutBuilder(
       builder: (context, constraints) {
         final screenWidth = MediaQuery.of(context).size.width;
         final isSmallScreen = screenWidth < 600;
-        final isMediumScreen = screenWidth >= 600 && screenWidth < 900;
 
         // Return empty SizedBox for mobile devices
         if (isSmallScreen) {
           return const SizedBox.shrink();
         }
 
-        final fontSize = 11.0; // Desktop font size
-        final barWidth = isMediumScreen ? 60.0 : 70.0;
+        final fontSize = 11.0;
+        final barWidth = 60.0;
         final barSpacing = 24.0;
-        final chartHeight = isMediumScreen ? 350.0 : 380.0;
+        final chartHeight = 320.0; // Match line chart height
 
-        // Create a ScrollController for desktop navigation
         final ScrollController scrollController = ScrollController();
 
+        // Calculate stats
+        int highest = 0;
+        int total = 0;
+        int areas = 0;
+
+        if (_barangayCrimeData.isNotEmpty) {
+          highest = _barangayCrimeData.first['count'] as int;
+          total = _barangayCrimeData.fold(
+            0,
+            (sum, item) => sum + (item['count'] as int),
+          );
+          areas = _barangayCrimeData.length;
+        }
+
         return Container(
-          width: double.infinity,
           padding: const EdgeInsets.all(24.0),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -12054,7 +12376,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header with navigation buttons for desktop
+              // Header with navigation buttons
               if (!_isLoadingBarangayCrime &&
                   _barangayCrimeData.isNotEmpty) ...[
                 Row(
@@ -12084,10 +12406,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                               color: Color(0xFF1F2937),
                             ),
                           ),
+                          Text(
+                            'Distribution across areas',
+                            style: TextStyle(
+                              fontSize: fontSize,
+                              color: const Color(0xFF6B7280),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                    // Desktop Navigation Buttons
+                    // Navigation Buttons
                     Row(
                       children: [
                         MouseRegion(
@@ -12100,7 +12430,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 curve: Curves.easeInOut,
                               );
                             },
-                            child: _LeftNavButton(),
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFDC2626).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(
+                                    0xFFDC2626,
+                                  ).withOpacity(0.2),
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.chevron_left,
+                                color: Color(0xFFDC2626),
+                                size: 20,
+                              ),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -12114,52 +12460,83 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 curve: Curves.easeInOut,
                               );
                             },
-                            child: _RightNavButton(),
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFDC2626).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(
+                                    0xFFDC2626,
+                                  ).withOpacity(0.2),
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.chevron_right,
+                                color: Color(0xFFDC2626),
+                                size: 20,
+                              ),
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFDC2626).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: const Color(0xFFDC2626).withOpacity(0.2),
-                        ),
-                      ),
-                      child: Text(
-                        '${_barangayCrimeData.length} Barangays',
-                        style: TextStyle(
-                          fontSize: fontSize,
-                          fontWeight: FontWeight.w600,
-                          color: const Color(0xFFDC2626),
-                        ),
-                      ),
-                    ),
                   ],
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
+
+                // INLINE LEGEND
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildInlineLegendItem(
+                        'Highest',
+                        highest,
+                        const Color(0xFFDC2626),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: const Color(0xFFE5E7EB),
+                      ),
+                      _buildInlineLegendItem(
+                        'Total',
+                        total,
+                        const Color(0xFF6366F1),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: const Color(0xFFE5E7EB),
+                      ),
+                      _buildInlineLegendItem(
+                        'Areas',
+                        areas,
+                        const Color(0xFF10B981),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
               ],
 
-              // Chart with desktop buttons
-              _isLoadingBarangayCrime
-                  ? SizedBox(
-                      height: chartHeight,
-                      child: const Center(
-                        child: CircularProgressIndicator(
-                          color: Color(0xFFDC2626),
-                        ),
-                      ),
-                    )
-                  : _barangayCrimeData.isEmpty
-                  ? SizedBox(
-                      height: 130,
-                      child: Center(
+              // Chart with dynamic height - 445 while loading, 320 when loaded
+              SizedBox(
+                height: _isLoadingBarangayCrime ? 445.0 : chartHeight,
+                child: _isLoadingBarangayCrime
+                    ? _buildLoadingIndicator(445.0)
+                    : _barangayCrimeData.isEmpty
+                    ? Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -12179,72 +12556,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             ),
                           ],
                         ),
-                      ),
-                    )
-                  : SizedBox(
-                      height: chartHeight,
-                      child: Container(
-                        width: double.infinity,
+                      )
+                    : Container(
                         decoration: BoxDecoration(
                           border: Border.all(color: const Color(0xFFE5E7EB)),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(12),
-                          child: NotificationListener<ScrollNotification>(
-                            onNotification: (notification) {
-                              return true;
-                            },
-                            child: SingleChildScrollView(
-                              controller: scrollController,
-                              scrollDirection: Axis.horizontal,
-                              physics: const NeverScrollableScrollPhysics(),
-                              padding: const EdgeInsets.only(
-                                left: 20,
-                                right: 20,
-                                top: 16,
-                                bottom: 20,
-                              ),
-                              child: _buildChartContent(
-                                barWidth,
-                                barSpacing,
-                                chartHeight,
-                                fontSize,
-                                false, // isSmallScreen is false for desktop
-                              ),
+                          child: SingleChildScrollView(
+                            controller: scrollController,
+                            scrollDirection: Axis.horizontal,
+                            physics: const NeverScrollableScrollPhysics(),
+                            padding: const EdgeInsets.only(
+                              left: 20,
+                              right: 20,
+                              top: 16,
+                              bottom: 20,
+                            ),
+                            child: _buildBarangayChartContent(
+                              barWidth,
+                              barSpacing,
+                              chartHeight,
+                              fontSize,
                             ),
                           ),
                         ),
                       ),
-                    ),
-
-              // Summary stats for desktop
-              if (!_isLoadingBarangayCrime &&
-                  _barangayCrimeData.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _buildStatItem(
-                      'Highest',
-                      _barangayCrimeData.first['count'].toString(),
-                      const Color(0xFFDC2626),
-                    ),
-                    _buildStatItem(
-                      'Total Reports',
-                      _barangayCrimeData
-                          .fold(0, (sum, item) => sum + (item['count'] as int))
-                          .toString(),
-                      const Color(0xFF6366F1),
-                    ),
-                    _buildStatItem(
-                      'Areas',
-                      _barangayCrimeData.length.toString(),
-                      const Color(0xFF10B981),
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ],
           ),
         );
@@ -12252,13 +12591,96 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // Extracted chart content widget
-  Widget _buildChartContent(
+  // UPDATED LOADING INDICATOR WITH ACCURATE PROGRESS
+  Widget _buildLoadingIndicator(double height) {
+    // Calculate accurate progress
+    double progress = _barangayTotalToProcess > 0
+        ? _barangayProcessedCount / _barangayTotalToProcess
+        : 0.0;
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Animated icon
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFDC2626).withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.location_city,
+              size: 48,
+              color: Color.lerp(
+                const Color(0xFFDC2626).withOpacity(0.5),
+                const Color(0xFFDC2626),
+                progress,
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Loading text with count
+          Text(
+            _barangayTotalToProcess > 0
+                ? 'Processing $_barangayProcessedCount of $_barangayTotalToProcess locations...'
+                : 'Loading barangay data...',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF6B7280),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Progress bar with accurate progress
+          SizedBox(
+            width: 280,
+            child: Column(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 8,
+                    backgroundColor: const Color(0xFFE5E7EB),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      Color.lerp(
+                        const Color(0xFFDC2626),
+                        const Color(0xFF10B981),
+                        progress,
+                      )!,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${(progress * 100).toInt()}%',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color.lerp(
+                      const Color(0xFFDC2626),
+                      const Color(0xFF10B981),
+                      progress,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // EXTRACTED BARANGAY CHART CONTENT (unchanged)
+  Widget _buildBarangayChartContent(
     double barWidth,
     double barSpacing,
     double chartHeight,
     double fontSize,
-    bool isSmallScreen,
   ) {
     return SizedBox(
       width: _barangayCrimeData.length * (barWidth + barSpacing) + 40,
@@ -12269,35 +12691,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           final maxCount = _barangayCrimeData.first['count'] as int;
           final maxBarHeight = chartHeight - 160;
 
-          // Color based on crime severity/ranking
           Color getColor(int count, int maxCount) {
             final percentage = count / maxCount;
-
-            if (percentage >= 0.8) {
-              // Highest (80-100%) - Red shades
-              return const Color(0xFFDC2626);
-            } else if (percentage >= 0.6) {
-              // High (60-80%) - Orange
-              return const Color(0xFFF97316);
-            } else if (percentage >= 0.4) {
-              // Medium-High (40-60%) - Amber
-              return const Color(0xFFF59E0B);
-            } else if (percentage >= 0.3) {
-              // Medium (30-40%) - Yellow
-              return const Color(0xFFFBBF24);
-            } else if (percentage >= 0.2) {
-              // Medium-Low (20-30%) - Blue
-              return const Color(0xFF3B82F6);
-            } else {
-              // Low (0-20%) - Green
-              return const Color(0xFF10B981);
-            }
+            if (percentage >= 0.8) return const Color(0xFFDC2626);
+            if (percentage >= 0.6) return const Color(0xFFF97316);
+            if (percentage >= 0.4) return const Color(0xFFF59E0B);
+            if (percentage >= 0.3) return const Color(0xFFFBBF24);
+            if (percentage >= 0.2) return const Color(0xFF3B82F6);
+            return const Color(0xFF10B981);
           }
 
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Bars area
               Expanded(
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -12316,7 +12722,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         mainAxisSize: MainAxisSize.min,
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          // Count
                           SizedBox(
                             height: 20,
                             child: Text(
@@ -12329,8 +12734,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             ),
                           ),
                           const SizedBox(height: 4),
-
-                          // Bar
                           Container(
                             width: barWidth,
                             height: barHeight < 8 ? 8 : barHeight,
@@ -12358,35 +12761,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   }).toList(),
                 ),
               ),
-
               const SizedBox(height: 6),
-
-              // Labels
               SizedBox(
                 height: 60,
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: _barangayCrimeData.asMap().entries.map((entry) {
                     final barangay = entry.value['barangay'] as String;
-
                     return SizedBox(
                       width: barWidth + barSpacing,
                       child: Padding(
-                        padding: EdgeInsets.only(
-                          left: isSmallScreen ? 4 : 8,
-                          top: 4,
-                        ),
+                        padding: const EdgeInsets.only(left: 8, top: 4),
                         child: Transform.rotate(
                           angle: -0.5,
                           alignment: Alignment.topLeft,
                           child: SizedBox(
-                            width: isSmallScreen ? 70 : 85,
+                            width: 85,
                             child: Text(
                               barangay,
-                              style: TextStyle(
-                                fontSize: isSmallScreen ? 10 : 11,
+                              style: const TextStyle(
+                                fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: const Color(0xFF374151),
+                                color: Color(0xFF374151),
                                 height: 1.1,
                               ),
                               maxLines: 2,
@@ -12406,64 +12802,51 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // LINE CHART FOR HOTSPOT
-
-  Widget _buildHotspotTrendSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Barangay chart - FULL WIDTH, outside of padding
-        _buildBarangayCrimeChart(),
-        const SizedBox(height: 24),
-        // Line chart - normal padding
-        _buildHotspotLineChart(),
-      ],
-    );
-  }
-
+  // UPDATED LINE CHART WITH INLINE LEGEND
   Widget _buildHotspotLineChart() {
     if (_hotspotData.isEmpty) {
       return _buildEmptyCard('No hotspot trend data available');
     }
 
-    // Calculate chart dimensions based on screen size
     return LayoutBuilder(
       builder: (context, constraints) {
         final screenWidth = MediaQuery.of(context).size.width;
         final isSmallScreen = screenWidth < 600;
-        final isMediumScreen = screenWidth >= 600 && screenWidth < 900;
 
-        // Responsive dimensions
-        final chartHeight = isSmallScreen
-            ? 220.0
-            : isMediumScreen
-            ? 280.0
-            : 320.0;
+        final chartHeight = isSmallScreen ? 220.0 : 320.0;
         final leftReservedSize = isSmallScreen ? 32.0 : 40.0;
         final bottomReservedSize = isSmallScreen ? 25.0 : 35.0;
         final fontSize = isSmallScreen ? 9.0 : 11.0;
 
-        // Calculate max Y value with proper padding
         final maxValue = _hotspotData
             .map((e) => e['count'] as int)
             .reduce((a, b) => a > b ? a : b);
-        final maxY = (maxValue * 1.3).toDouble(); // 30% padding above max value
-
-        // Calculate interval for better grid lines
+        final maxY = (maxValue * 1.3).toDouble();
         final interval = maxY > 20
             ? (maxY / 8).ceil().toDouble()
             : maxY > 10
             ? 2.0
             : 1.0;
 
-        return Container(
-          width: double.infinity,
+        // Calculate stats
+        int peak = maxValue;
+        int total = _hotspotData.fold(
+          0,
+          (sum, item) => sum + (item['count'] as int),
+        );
+        int days = _hotspotData.length;
+        double average = days > 0 ? total / days : 0;
 
+        final ScrollController scrollController = ScrollController();
+        final canScroll =
+            _hotspotData.length >
+            (isSmallScreen ? 7 : 15); // Enable scroll based on screen size
+
+        return Container(
           padding: EdgeInsets.all(isSmallScreen ? 16.0 : 24.0),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
-
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.05),
@@ -12474,7 +12857,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           ),
           child: Column(
             children: [
-              // Header with responsive title
+              // Header with navigation buttons
               Row(
                 children: [
                   Container(
@@ -12495,7 +12878,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Daily Crime Reports',
+                          'Crime Report Trends',
                           style: TextStyle(
                             fontSize: isSmallScreen ? 16 : 18,
                             fontWeight: FontWeight.bold,
@@ -12513,303 +12896,404 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       ],
                     ),
                   ),
-                  // Summary stats
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
+                  // Navigation buttons for BOTH mobile and desktop
+                  if (canScroll) ...[
+                    Row(
+                      children: [
+                        MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: GestureDetector(
+                            onTap: () {
+                              scrollController.animateTo(
+                                scrollController.offset -
+                                    (isSmallScreen ? 150 : 200),
+                                duration: const Duration(milliseconds: 300),
+                                curve: Curves.easeInOut,
+                              );
+                            },
+                            child: Container(
+                              padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF6366F1).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(
+                                    0xFF6366F1,
+                                  ).withOpacity(0.2),
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.chevron_left,
+                                color: const Color(0xFF6366F1),
+                                size: isSmallScreen ? 18 : 20,
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: isSmallScreen ? 6 : 8),
+                        MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: GestureDetector(
+                            onTap: () {
+                              scrollController.animateTo(
+                                scrollController.offset +
+                                    (isSmallScreen ? 150 : 200),
+                                duration: const Duration(milliseconds: 300),
+                                curve: Curves.easeInOut,
+                              );
+                            },
+                            child: Container(
+                              padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF6366F1).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(
+                                    0xFF6366F1,
+                                  ).withOpacity(0.2),
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.chevron_right,
+                                color: const Color(0xFF6366F1),
+                                size: isSmallScreen ? 18 : 20,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF10B981).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: const Color(0xFF10B981).withOpacity(0.2),
-                      ),
-                    ),
-                    child: Text(
-                      'Total: ${_hotspotData.fold(0, (sum, item) => sum + (item['count'] as int))}',
-                      style: TextStyle(
-                        fontSize: fontSize,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF10B981),
-                      ),
-                    ),
-                  ),
+                  ],
                 ],
               ),
-              SizedBox(height: isSmallScreen ? 16 : 20),
+              SizedBox(height: isSmallScreen ? 12 : 16),
 
-              // Chart container with proper constraints
+              // NEW INLINE LEGEND - Only show on desktop
+              if (!isSmallScreen) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildInlineLegendItem(
+                        'Peak',
+                        peak,
+                        const Color(0xFFDC2626),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: const Color(0xFFE5E7EB),
+                      ),
+                      _buildInlineAverageLegendItem(
+                        'Average',
+                        average,
+                        const Color(0xFFF59E0B),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: const Color(0xFFE5E7EB),
+                      ),
+                      _buildInlineLegendItem(
+                        'Days',
+                        days,
+                        const Color(0xFF6366F1),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
+              // Chart with scrollable container
               SizedBox(
                 height: chartHeight,
-                child: AnimatedBuilder(
-                  animation: _chartAnimation,
-                  builder: (context, child) {
-                    return LineChart(
-                      LineChartData(
-                        gridData: FlGridData(
-                          show: true,
-                          drawVerticalLine: false,
-                          drawHorizontalLine: true,
-                          horizontalInterval: interval,
-                          getDrawingHorizontalLine: (value) {
-                            return const FlLine(
-                              color: Color(0xFFE5E7EB),
-                              strokeWidth: 0.8,
-                              dashArray: [5, 5],
-                            );
-                          },
-                        ),
-                        titlesData: FlTitlesData(
-                          leftTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              reservedSize: leftReservedSize,
-                              interval: interval,
-                              getTitlesWidget: (value, meta) {
-                                if (value == 0 || value % interval == 0) {
-                                  return Text(
-                                    value.toInt().toString(),
-                                    style: TextStyle(
-                                      fontSize: fontSize,
-                                      fontWeight: FontWeight.w500,
-                                      color: const Color(0xFF6B7280),
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SingleChildScrollView(
+                      controller: scrollController,
+                      scrollDirection: Axis.horizontal,
+                      physics:
+                          const NeverScrollableScrollPhysics(), // Disable manual scroll
+                      padding: const EdgeInsets.all(16),
+                      child: SizedBox(
+                        width: canScroll
+                            ? _hotspotData.length *
+                                  (isSmallScreen
+                                      ? 35.0
+                                      : 40.0) // Expand width for scrolling
+                            : constraints.maxWidth - (isSmallScreen ? 64 : 80),
+                        height: chartHeight - 32,
+                        child: AnimatedBuilder(
+                          animation: _chartAnimation,
+                          builder: (context, child) {
+                            return LineChart(
+                              LineChartData(
+                                gridData: FlGridData(
+                                  show: true,
+                                  drawVerticalLine: false,
+                                  drawHorizontalLine: true,
+                                  horizontalInterval: interval,
+                                  getDrawingHorizontalLine: (value) {
+                                    return const FlLine(
+                                      color: Color(0xFFE5E7EB),
+                                      strokeWidth: 0.8,
+                                      dashArray: [5, 5],
+                                    );
+                                  },
+                                ),
+                                titlesData: FlTitlesData(
+                                  leftTitles: AxisTitles(
+                                    sideTitles: SideTitles(
+                                      showTitles: true,
+                                      reservedSize: leftReservedSize,
+                                      interval: interval,
+                                      getTitlesWidget: (value, meta) {
+                                        if (value == 0 ||
+                                            value % interval == 0) {
+                                          return Text(
+                                            value.toInt().toString(),
+                                            style: TextStyle(
+                                              fontSize: fontSize,
+                                              fontWeight: FontWeight.w500,
+                                              color: const Color(0xFF6B7280),
+                                            ),
+                                          );
+                                        }
+                                        return const Text('');
+                                      },
                                     ),
-                                  );
-                                }
-                                return const Text('');
-                              },
-                            ),
-                          ),
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              reservedSize: bottomReservedSize,
-                              interval: _calculateBottomInterval(
-                                _hotspotData.length,
-                                screenWidth,
-                              ),
-                              getTitlesWidget: (value, meta) {
-                                int index = value.toInt();
-                                if (index >= 0 && index < _hotspotData.length) {
-                                  // Show fewer labels on small screens
-                                  final showInterval = _calculateBottomInterval(
-                                    _hotspotData.length,
-                                    screenWidth,
-                                  );
-                                  if (index % showInterval.toInt() != 0 &&
-                                      index != _hotspotData.length - 1) {
-                                    return const Text('');
-                                  }
+                                  ),
+                                  bottomTitles: AxisTitles(
+                                    sideTitles: SideTitles(
+                                      showTitles: true,
+                                      reservedSize: bottomReservedSize,
+                                      interval: _calculateBottomInterval(
+                                        _hotspotData.length,
+                                        screenWidth,
+                                      ),
+                                      getTitlesWidget: (value, meta) {
+                                        int index = value.toInt();
+                                        if (index >= 0 &&
+                                            index < _hotspotData.length) {
+                                          final showInterval =
+                                              _calculateBottomInterval(
+                                                _hotspotData.length,
+                                                screenWidth,
+                                              );
+                                          if (index % showInterval.toInt() !=
+                                                  0 &&
+                                              index !=
+                                                  _hotspotData.length - 1) {
+                                            return const Text('');
+                                          }
 
-                                  String date = _hotspotData[index]['date'];
-                                  DateTime dateTime = DateTime.parse(date);
+                                          String date =
+                                              _hotspotData[index]['date'];
+                                          DateTime dateTime = DateTime.parse(
+                                            date,
+                                          );
+                                          String formattedDate = isSmallScreen
+                                              ? DateFormat(
+                                                  'M/d',
+                                                ).format(dateTime)
+                                              : DateFormat(
+                                                  'MMM d',
+                                                ).format(dateTime);
 
-                                  // Responsive date format
-                                  String formattedDate = isSmallScreen
-                                      ? DateFormat('M/d').format(dateTime)
-                                      : DateFormat('MMM d').format(dateTime);
+                                          return Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 4.0,
+                                            ),
+                                            child: Text(
+                                              formattedDate,
+                                              style: TextStyle(
+                                                fontSize: fontSize,
+                                                fontWeight: FontWeight.w500,
+                                                color: const Color(0xFF6B7280),
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                        return const Text('');
+                                      },
+                                    ),
+                                  ),
+                                  topTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false),
+                                  ),
+                                  rightTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false),
+                                  ),
+                                ),
+                                borderData: FlBorderData(
+                                  show: true,
+                                  border: const Border(
+                                    left: BorderSide(
+                                      color: Color(0xFFE5E7EB),
+                                      width: 1,
+                                    ),
+                                    bottom: BorderSide(
+                                      color: Color(0xFFE5E7EB),
+                                      width: 1,
+                                    ),
+                                  ),
+                                ),
+                                minX: 0,
+                                maxX: (_hotspotData.length - 1).toDouble(),
+                                minY: 0,
+                                maxY: maxY,
+                                lineTouchData: LineTouchData(
+                                  enabled: true,
+                                  touchTooltipData: LineTouchTooltipData(
+                                    getTooltipColor: (touchedSpot) =>
+                                        const Color(
+                                          0xFF1F2937,
+                                        ).withOpacity(0.9),
+                                    tooltipBorder: const BorderSide(
+                                      color: Color(0xFF374151),
+                                      width: 1,
+                                    ),
+                                    tooltipPadding: const EdgeInsets.all(8),
+                                    getTooltipItems:
+                                        (List<LineBarSpot> touchedBarSpots) {
+                                          return touchedBarSpots.map((barSpot) {
+                                            final index = barSpot.x.toInt();
+                                            if (index >= 0 &&
+                                                index < _hotspotData.length) {
+                                              final date =
+                                                  _hotspotData[index]['date'];
+                                              final count =
+                                                  _hotspotData[index]['count'];
+                                              final dateTime = DateTime.parse(
+                                                date,
+                                              );
 
-                                  return Padding(
-                                    padding: const EdgeInsets.only(top: 4.0),
-                                    child: Text(
-                                      formattedDate,
-                                      style: TextStyle(
-                                        fontSize: fontSize,
-                                        fontWeight: FontWeight.w500,
-                                        color: const Color(0xFF6B7280),
+                                              return LineTooltipItem(
+                                                '${DateFormat('MMM d, yyyy').format(dateTime)}\n$count reports',
+                                                const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 12,
+                                                ),
+                                              );
+                                            }
+                                            return null;
+                                          }).toList();
+                                        },
+                                  ),
+                                ),
+                                lineBarsData: [
+                                  LineChartBarData(
+                                    spots: _hotspotData.asMap().entries.map((
+                                      entry,
+                                    ) {
+                                      double animatedY =
+                                          entry.value['count'].toDouble() *
+                                          _chartAnimation.value;
+                                      return FlSpot(
+                                        entry.key.toDouble(),
+                                        animatedY,
+                                      );
+                                    }).toList(),
+                                    isCurved: true,
+                                    curveSmoothness: 0.3,
+                                    gradient: const LinearGradient(
+                                      colors: [
+                                        Color(0xFF6366F1),
+                                        Color(0xFF8B5CF6),
+                                      ],
+                                    ),
+                                    barWidth: isSmallScreen ? 3.0 : 4.0,
+                                    isStrokeCapRound: true,
+                                    belowBarData: BarAreaData(
+                                      show: true,
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          const Color(
+                                            0xFF6366F1,
+                                          ).withOpacity(0.2),
+                                          const Color(
+                                            0xFF8B5CF6,
+                                          ).withOpacity(0.05),
+                                        ],
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
                                       ),
                                     ),
-                                  );
-                                }
-                                return const Text('');
-                              },
-                            ),
-                          ),
-                          topTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                          rightTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                        ),
-                        borderData: FlBorderData(
-                          show: true,
-                          border: const Border(
-                            left: BorderSide(
-                              color: Color(0xFFE5E7EB),
-                              width: 1,
-                            ),
-                            bottom: BorderSide(
-                              color: Color(0xFFE5E7EB),
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                        minX: 0,
-                        maxX: (_hotspotData.length - 1).toDouble(),
-                        minY: 0,
-                        maxY: maxY,
-                        lineTouchData: LineTouchData(
-                          enabled: true,
-                          touchTooltipData: LineTouchTooltipData(
-                            getTooltipColor: (touchedSpot) =>
-                                const Color(0xFF1F2937).withOpacity(0.9),
-                            tooltipBorder: const BorderSide(
-                              color: Color(0xFF374151),
-                              width: 1,
-                            ),
-                            tooltipPadding: const EdgeInsets.all(8),
-                            tooltipMargin: 8,
-                            getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
-                              return touchedBarSpots.map((barSpot) {
-                                final index = barSpot.x.toInt();
-                                if (index >= 0 && index < _hotspotData.length) {
-                                  final date = _hotspotData[index]['date'];
-                                  final count = _hotspotData[index]['count'];
-                                  final dateTime = DateTime.parse(date);
-
-                                  return LineTooltipItem(
-                                    '${DateFormat('MMM d, yyyy').format(dateTime)}\n$count reports',
-                                    const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 12,
-                                    ),
-                                  );
-                                }
-                                return null;
-                              }).toList();
-                            },
-                          ),
-                          touchCallback:
-                              (
-                                FlTouchEvent event,
-                                LineTouchResponse? touchResponse,
-                              ) {
-                                // Optional: Add haptic feedback on touch
-                                if (event is FlTapUpEvent &&
-                                    touchResponse != null) {
-                                  // HapticFeedback.lightImpact();
-                                }
-                              },
-                          getTouchedSpotIndicator:
-                              (
-                                LineChartBarData barData,
-                                List<int> spotIndexes,
-                              ) {
-                                return spotIndexes.map((spotIndex) {
-                                  return TouchedSpotIndicatorData(
-                                    FlLine(
-                                      color: const Color(
-                                        0xFF6366F1,
-                                      ).withOpacity(0.5),
-                                      strokeWidth: 2,
-                                      dashArray: [3, 3],
-                                    ),
-                                    FlDotData(
+                                    dotData: FlDotData(
+                                      show: !isSmallScreen,
                                       getDotPainter:
                                           (spot, percent, barData, index) {
+                                            final isHighValue =
+                                                spot.y > maxValue * 0.8;
                                             return FlDotCirclePainter(
-                                              radius: 6,
+                                              radius: isHighValue ? 5 : 4,
                                               color: Colors.white,
-                                              strokeWidth: 3,
-                                              strokeColor: const Color(
-                                                0xFF6366F1,
-                                              ),
+                                              strokeWidth: isHighValue ? 3 : 2,
+                                              strokeColor: isHighValue
+                                                  ? const Color(0xFFDC2626)
+                                                  : const Color(0xFF6366F1),
                                             );
                                           },
                                     ),
-                                  );
-                                }).toList();
-                              },
-                        ),
-                        lineBarsData: [
-                          LineChartBarData(
-                            spots: _hotspotData.asMap().entries.map((entry) {
-                              double animatedY =
-                                  entry.value['count'].toDouble() *
-                                  _chartAnimation.value;
-                              return FlSpot(entry.key.toDouble(), animatedY);
-                            }).toList(),
-                            isCurved: true,
-                            curveSmoothness: 0.3,
-                            preventCurveOverShooting: true,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
-                            ),
-                            barWidth: isSmallScreen ? 3.0 : 4.0,
-                            isStrokeCapRound: true,
-                            belowBarData: BarAreaData(
-                              show: true,
-                              gradient: LinearGradient(
-                                colors: [
-                                  const Color(0xFF6366F1).withOpacity(0.2),
-                                  const Color(0xFF8B5CF6).withOpacity(0.05),
-                                ],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
-                              cutOffY: 0,
-                              applyCutOffY: true,
-                            ),
-                            dotData: FlDotData(
-                              show:
-                                  !isSmallScreen, // Hide dots on small screens for cleaner look
-                              getDotPainter: (spot, percent, barData, index) {
-                                // Highlight peak values with larger dots
-                                final isHighValue = spot.y > maxValue * 0.8;
-                                return FlDotCirclePainter(
-                                  radius: isHighValue ? 5 : 4,
-                                  color: Colors.white,
-                                  strokeWidth: isHighValue ? 3 : 2,
-                                  strokeColor: isHighValue
-                                      ? const Color(0xFFDC2626)
-                                      : const Color(0xFF6366F1),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                        // Add subtle animation curves
-                        extraLinesData: ExtraLinesData(
-                          horizontalLines: [
-                            // Average line
-                            if (_hotspotData.isNotEmpty)
-                              HorizontalLine(
-                                y:
-                                    _hotspotData.fold(
-                                      0,
-                                      (sum, item) =>
-                                          sum + (item['count'] as int),
-                                    ) /
-                                    _hotspotData.length,
-                                color: const Color(0xFFF59E0B).withOpacity(0.6),
-                                strokeWidth: 1.5,
-                                dashArray: [8, 4],
-                                label: HorizontalLineLabel(
-                                  show: !isSmallScreen,
-                                  labelResolver: (line) => 'Avg',
-                                  style: TextStyle(
-                                    color: const Color(0xFFF59E0B),
-                                    fontSize: fontSize - 1,
-                                    fontWeight: FontWeight.w600,
                                   ),
-                                  alignment: Alignment.topRight,
+                                ],
+                                extraLinesData: ExtraLinesData(
+                                  horizontalLines: [
+                                    if (_hotspotData.isNotEmpty)
+                                      HorizontalLine(
+                                        y:
+                                            _hotspotData.fold(
+                                              0,
+                                              (sum, item) =>
+                                                  sum + (item['count'] as int),
+                                            ) /
+                                            _hotspotData.length,
+                                        color: const Color(
+                                          0xFFF59E0B,
+                                        ).withOpacity(0.6),
+                                        strokeWidth: 1.5,
+                                        dashArray: [8, 4],
+                                        label: HorizontalLineLabel(
+                                          show: !isSmallScreen,
+                                          labelResolver: (line) => 'Avg',
+                                          style: TextStyle(
+                                            color: const Color(0xFFF59E0B),
+                                            fontSize: fontSize - 1,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                          alignment: Alignment.topRight,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
-                          ],
+                            );
+                          },
                         ),
                       ),
-                    );
-                  },
+                    ),
+                  ),
                 ),
               ),
 
-              // Legend and stats (responsive layout)
-              if (!isSmallScreen) ...[
+              // Keep original stats for mobile view only
+              if (isSmallScreen) ...[
                 const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -12821,12 +13305,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     ),
                     _buildStatItem(
                       'Average',
-                      (_hotspotData.fold(
-                                0,
-                                (sum, item) => sum + (item['count'] as int),
-                              ) /
-                              _hotspotData.length)
-                          .toStringAsFixed(1),
+                      average.toStringAsFixed(1),
                       const Color(0xFFF59E0B),
                     ),
                     _buildStatItem(
@@ -12844,7 +13323,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  // Helper method to calculate bottom axis interval
+  // Helper method
   double _calculateBottomInterval(int dataLength, double screenWidth) {
     if (screenWidth < 400) {
       return dataLength > 15

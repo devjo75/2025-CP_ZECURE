@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zecure/auth/auth_service.dart';
 import 'package:zecure/auth/login_screen.dart';
@@ -25,6 +26,7 @@ class ProfileScreen {
   final bool isAdmin;
   final bool hasAdminPermissions;
   final VoidCallback? onProfileUpdated; // ✅ ADD THIS
+  final LatLng? currentLocation;
   final ScrollController _scrollController = ScrollController();
   SaveButtonState _saveButtonState = SaveButtonState.normal;
   Timer? _buttonStateTimer;
@@ -36,6 +38,7 @@ class ProfileScreen {
     this.isAdmin,
     this.hasAdminPermissions, {
     this.onProfileUpdated, // ✅ ADD THIS
+    this.currentLocation,
   });
   ProfilePictureState _profilePictureState = ProfilePictureState.normal;
   Timer? _profilePictureStateTimer;
@@ -210,6 +213,13 @@ class ProfileScreen {
   bool _isLocationSharing = false;
   Timer? _locationSharingTimer;
 
+  // ✅ ADD THIS GETTER/SETTER PAIR RIGHT AFTER _isLocationSharing
+  bool get isLocationSharing => _isLocationSharing;
+
+  void updateLocationSharingState(bool value) {
+    _isLocationSharing = value;
+  }
+
   Future<void> _loadLocationSharingState() async {
     if (userProfile?['id'] == null) return;
 
@@ -226,28 +236,46 @@ class ProfileScreen {
     }
   }
 
-  // Add this method to toggle location sharing
+  //TOGGLE LOCATION SHARING
+  bool _isTogglingLocationSharing = false;
   Future<void> _toggleLocationSharing(
     BuildContext context,
     StateSetter setState,
   ) async {
     if (userProfile?['id'] == null) return;
 
+    if (_isTogglingLocationSharing) return;
+
+    setState(() {
+      _isTogglingLocationSharing = true;
+    });
+
     try {
       final newState = !_isLocationSharing;
 
-      // Update in database
+      // ✅ Use the location passed from MapScreen (already available!)
+      final locationToUse = newState ? currentLocation : null;
+
       await Supabase.instance.client
           .from('users')
           .update({
             'is_sharing_location': newState,
-            'last_location_update': DateTime.now().toIso8601String(),
+            'current_latitude': locationToUse?.latitude,
+            'current_longitude': locationToUse?.longitude,
+            'last_location_update': newState
+                ? DateTime.now().toIso8601String()
+                : null,
           })
           .eq('id', userProfile!['id']);
 
       setState(() {
         _isLocationSharing = newState;
+        _isTogglingLocationSharing = false;
       });
+
+      if (onProfileUpdated != null) {
+        onProfileUpdated!();
+      }
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -263,11 +291,14 @@ class ProfileScreen {
         );
       }
     } catch (e) {
-      print('Error toggling location sharing: $e');
+      setState(() {
+        _isTogglingLocationSharing = false;
+      });
+
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to update location sharing: $e'),
+            content: Text('Failed to update: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -275,7 +306,6 @@ class ProfileScreen {
     }
   }
 
-  // Add this widget builder for the location sharing toggle
   Widget _buildLocationSharingToggle(
     BuildContext context,
     StateSetter setStateHeader, {
@@ -298,7 +328,9 @@ class ProfileScreen {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(20),
-          onTap: () => _toggleLocationSharing(context, setStateHeader),
+          onTap: _isTogglingLocationSharing
+              ? null // Disable tap while loading
+              : () => _toggleLocationSharing(context, setStateHeader),
           child: Padding(
             padding: EdgeInsets.symmetric(
               horizontal: isMobile ? 12 : 12,
@@ -307,15 +339,30 @@ class ProfileScreen {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  _isLocationSharing ? Icons.my_location : Icons.location_off,
-                  size: 18,
-                  color: _isLocationSharing ? Colors.green : Colors.white,
-                ),
+                // ✅ Show loading spinner or icon
+                if (_isTogglingLocationSharing)
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        _isLocationSharing ? Colors.green : Colors.white,
+                      ),
+                    ),
+                  )
+                else
+                  Icon(
+                    _isLocationSharing ? Icons.my_location : Icons.location_off,
+                    size: 18,
+                    color: _isLocationSharing ? Colors.green : Colors.white,
+                  ),
                 if (!isMobile) ...[
                   const SizedBox(width: 6),
                   Text(
-                    _isLocationSharing ? 'Sharing' : 'Share Location',
+                    _isTogglingLocationSharing
+                        ? 'Updating...'
+                        : (_isLocationSharing ? 'Sharing' : 'Share Location'),
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -3338,7 +3385,37 @@ class ProfileScreen {
   }
 
   Future<void> _logout(BuildContext context) async {
+    print('🚪 Starting logout process from profile page...');
+
+    // ✅ STEP 1: Get current user ID before signing out
+    final currentUser = Supabase.instance.client.auth.currentUser;
+
+    if (currentUser != null) {
+      try {
+        // ✅ STEP 2: Turn off location sharing IMMEDIATELY
+        await Supabase.instance.client
+            .from('users')
+            .update({
+              'is_sharing_location': false,
+              'current_latitude': null,
+              'current_longitude': null,
+              'last_location_update': null,
+            })
+            .eq('id', currentUser.id);
+
+        print('✅ Location sharing disabled for user ${currentUser.id}');
+
+        // ✅ STEP 3: Wait a moment for real-time to propagate
+        await Future.delayed(const Duration(milliseconds: 500));
+      } catch (e) {
+        print('❌ Error disabling location sharing: $e');
+      }
+    }
+
+    // ✅ STEP 4: Sign out
     await _authService.signOut();
+
+    print('✅ Logout complete from profile page');
 
     if (context.mounted) {
       // Navigate and remove all previous routes

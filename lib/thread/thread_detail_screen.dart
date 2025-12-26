@@ -501,7 +501,7 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
                     Icon(Icons.people, size: 14, color: Colors.grey.shade600),
                     const SizedBox(width: 4),
                     Text(
-                      '${widget.thread.participantCount} participants',
+                      '${widget.thread.participantCount}',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade600,
@@ -511,7 +511,7 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
                     Icon(Icons.message, size: 14, color: Colors.grey.shade600),
                     const SizedBox(width: 4),
                     Text(
-                      '${widget.thread.messageCount} messages',
+                      '${widget.thread.messageCount}',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade600,
