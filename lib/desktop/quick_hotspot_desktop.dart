@@ -22,6 +22,8 @@ class HotspotQuickAccessDesktopWidgets {
     required Function(Map<String, dynamic>) onShowOnMap,
     required VoidCallback onClearFilters,
     required bool isSidebarVisible,
+    DateTime? crimeStartDate, // ✅ ADD THIS
+    DateTime? crimeEndDate, // ✅ ADD THIS
   }) {
     final filteredAndSortedHotspots =
         HotspotQuickAccessUtils.getFilteredAndSortedHotspots(
@@ -32,6 +34,8 @@ class HotspotQuickAccessDesktopWidgets {
           currentPosition: currentPosition,
           userProfile: userProfile,
           isAdmin: isAdmin,
+          crimeStartDate: crimeStartDate, // ✅ PASS THIS
+          crimeEndDate: crimeEndDate, // ✅ PASS THIS
         );
 
     if (filteredAndSortedHotspots.isEmpty) {

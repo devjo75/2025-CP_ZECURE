@@ -3,6 +3,9 @@ import 'dart:math' show sin, cos, sqrt, atan2;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Added for Clipboard
 import 'package:latlong2/latlong.dart';
+import 'package:provider/provider.dart' show Provider;
+import 'package:zecure/services/hotspot_filter_service.dart'
+    show HotspotFilterService;
 import 'quick_hotspot_desktop.dart';
 
 class QuickAccessDesktopScreen extends StatefulWidget {
@@ -303,6 +306,17 @@ class _QuickAccessDesktopScreenState extends State<QuickAccessDesktopScreen> {
                                     });
                                   },
                                   isSidebarVisible: widget.isSidebarVisible,
+                                  // ✅ ADD THESE LINES:
+                                  crimeStartDate:
+                                      Provider.of<HotspotFilterService>(
+                                        context,
+                                        listen: false,
+                                      ).crimeStartDate,
+                                  crimeEndDate:
+                                      Provider.of<HotspotFilterService>(
+                                        context,
+                                        listen: false,
+                                      ).crimeEndDate,
                                 ),
                         ),
                 ),

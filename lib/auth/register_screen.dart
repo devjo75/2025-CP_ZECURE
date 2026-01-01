@@ -55,6 +55,29 @@ class _RegisterScreenState extends State<RegisterScreen>
 
   String _registrationType = 'simple'; // 'simple' or 'verified'
 
+  // =====================================================
+  // WMSU-SPECIFIC STATE VARIABLES
+  // =====================================================
+
+  // User affiliation selection
+  String _userAffiliation =
+      'general_public'; // 'general_public', 'wmsu_student', 'wmsu_parent', 'wmsu_employee'
+
+  // WMSU common fields
+  final _wmsuIdNumberController = TextEditingController();
+
+  // Student-specific fields
+  String?
+  _selectedEducationLevel; // 'primary', 'secondary', 'senior_high', 'college', 'graduate_studies'
+  final _wmsuYearLevelController = TextEditingController();
+  String? _selectedCollege;
+  final _wmsuDepartmentController = TextEditingController();
+  String? _selectedTrackStrand;
+  final _wmsuSectionController = TextEditingController();
+
+  // Parent-specific fields
+  List<String> _linkedStudentIds = [];
+
   @override
   void initState() {
     super.initState();
@@ -340,55 +363,76 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
           const SizedBox(height: 12),
           Row(
             children: [
+              // Simple Registration
               Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _registrationType = 'simple'),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: _registrationType == 'simple'
-                          ? Colors.blue.shade50
-                          : Colors.grey.shade50,
-                      border: Border.all(
+                child: Opacity(
+                  opacity: _userAffiliation != 'general_public' ? 0.5 : 1.0,
+                  child: GestureDetector(
+                    onTap: _userAffiliation == 'general_public'
+                        ? () => setState(() => _registrationType = 'simple')
+                        : null,
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
                         color: _registrationType == 'simple'
-                            ? Colors.blue.shade600
-                            : Colors.grey.shade300,
-                        width: 2,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        Icon(
-                          Icons.speed_rounded,
+                            ? Colors.blue.shade50
+                            : Colors.grey.shade50,
+                        border: Border.all(
                           color: _registrationType == 'simple'
                               ? Colors.blue.shade600
-                              : Colors.grey.shade600,
-                          size: 24,
+                              : Colors.grey.shade300,
+                          width: 2,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Simple',
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.w600,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.speed_rounded,
                             color: _registrationType == 'simple'
                                 ? Colors.blue.shade600
                                 : Colors.grey.shade600,
+                            size: 24,
                           ),
-                        ),
-                        Text(
-                          'Quick signup',
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            color: Colors.grey.shade600,
+                          const SizedBox(height: 8),
+                          Text(
+                            'Simple',
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w600,
+                              color: _registrationType == 'simple'
+                                  ? Colors.blue.shade600
+                                  : Colors.grey.shade600,
+                            ),
                           ),
-                        ),
-                      ],
+                          Text(
+                            'Quick signup',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          if (_userAffiliation != 'general_public')
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                'General Public only',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 10,
+                                  color: Colors.red.shade400,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
               const SizedBox(width: 12),
+
+              // Verified Registration
               Expanded(
                 child: GestureDetector(
                   onTap: () => setState(() => _registrationType = 'verified'),
@@ -432,6 +476,19 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
                             color: Colors.grey.shade600,
                           ),
                         ),
+                        if (_userAffiliation != 'general_public')
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              'Required for WMSU',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                color: Colors.green.shade600,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -489,67 +546,157 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
       return;
     }
 
+    // Validate registration type for WMSU users
+    if (_userAffiliation != 'general_public' &&
+        _registrationType != 'verified') {
+      _showErrorSnackBar('WMSU users must use verified registration');
+      return;
+    }
+
     setState(() => _isLoading = true);
     try {
       final authService = AuthService(Supabase.instance.client);
 
-      if (_registrationType == 'simple') {
-        await authService.signUpWithEmail(
-          email: _emailController.text.trim(),
-          password: _passwordController.text.trim(),
-          username: _usernameController.text.trim(),
-          firstName: _firstNameController.text.trim(),
-          lastName: _lastNameController.text.trim(),
-          middleName: _middleNameController.text.trim().isEmpty
-              ? null
-              : _middleNameController.text.trim(),
-          extName: _extNameController.text.trim().isEmpty
-              ? null
-              : _extNameController.text.trim(),
-          bday: _selectedDate,
-          gender: _selectedGender,
-          contactNumber: _contactNumberController.text.trim(),
-        );
+      // Prepare email - append @wmsu.edu.ph for WMSU students and employees
+      String finalEmail = _emailController.text.trim();
+      if (_userAffiliation == 'wmsu_student' ||
+          _userAffiliation == 'wmsu_employee') {
+        finalEmail = '${_emailController.text.trim()}@wmsu.edu.ph';
+      }
 
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const MapScreen()),
+      // Prepare WMSU-specific data
+      String? wmsuIdNumber;
+      String? wmsuEducationLevel;
+      String? wmsuYearLevel;
+      String? wmsuCollege;
+      String? wmsuDepartment;
+      String? wmsuTrackStrand;
+      String? wmsuSection;
+      List<String>? linkedStudentIds;
+
+      // Populate WMSU fields based on affiliation
+      if (_userAffiliation == 'wmsu_student') {
+        wmsuIdNumber = _wmsuIdNumberController.text.trim();
+        wmsuEducationLevel = _selectedEducationLevel;
+        wmsuYearLevel = _wmsuYearLevelController.text.trim();
+
+        if (_selectedEducationLevel == 'college' ||
+            _selectedEducationLevel == 'graduate_studies') {
+          wmsuCollege = _selectedCollege;
+          wmsuDepartment = _wmsuDepartmentController.text.trim().isEmpty
+              ? null
+              : _wmsuDepartmentController.text.trim();
+        }
+
+        if (_selectedEducationLevel == 'senior_high') {
+          wmsuTrackStrand = _selectedTrackStrand;
+        }
+
+        if (_selectedEducationLevel == 'primary' ||
+            _selectedEducationLevel == 'secondary') {
+          wmsuSection = _wmsuSectionController.text.trim().isEmpty
+              ? null
+              : _wmsuSectionController.text.trim();
+        }
+      } else if (_userAffiliation == 'wmsu_parent') {
+        wmsuIdNumber = _wmsuIdNumberController.text.trim();
+        linkedStudentIds = _linkedStudentIds.isEmpty ? null : _linkedStudentIds;
+      } else if (_userAffiliation == 'wmsu_employee') {
+        wmsuIdNumber = _wmsuIdNumberController.text.trim();
+        wmsuDepartment = _wmsuDepartmentController.text.trim();
+      }
+
+      // Choose registration type (simple or verified)
+      if (_registrationType == 'simple') {
+        // Only for general public
+        if (_userAffiliation == 'general_public') {
+          await authService.signUpWithEmail(
+            email: finalEmail,
+            password: _passwordController.text.trim(),
+            username: _usernameController.text.trim(),
+            firstName: _firstNameController.text.trim(),
+            lastName: _lastNameController.text.trim(),
+            middleName: _middleNameController.text.trim().isEmpty
+                ? null
+                : _middleNameController.text.trim(),
+            extName: _extNameController.text.trim().isEmpty
+                ? null
+                : _extNameController.text.trim(),
+            bday: _selectedDate,
+            gender: _selectedGender,
+            contactNumber: _contactNumberController.text.trim(),
           );
+
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const MapScreen()),
+            );
+          }
+        } else {
+          _showErrorSnackBar('WMSU users must use verified registration');
+          return;
         }
       } else {
-        // Updated verified registration with OTP
-        await authService.signUpWithOTP(
-          email: _emailController.text.trim(),
-          password: _passwordController.text.trim(),
-          username: _usernameController.text.trim(),
-          firstName: _firstNameController.text.trim(),
-          lastName: _lastNameController.text.trim(),
-          middleName: _middleNameController.text.trim().isEmpty
-              ? null
-              : _middleNameController.text.trim(),
-          extName: _extNameController.text.trim().isEmpty
-              ? null
-              : _extNameController.text.trim(),
-          bday: _selectedDate,
-          gender: _selectedGender,
-          contactNumber: _contactNumberController.text.trim(),
-        );
+        // Verified registration
+        if (_userAffiliation == 'general_public') {
+          await authService.signUpWithOTP(
+            email: finalEmail,
+            password: _passwordController.text.trim(),
+            username: _usernameController.text.trim(),
+            firstName: _firstNameController.text.trim(),
+            lastName: _lastNameController.text.trim(),
+            middleName: _middleNameController.text.trim().isEmpty
+                ? null
+                : _middleNameController.text.trim(),
+            extName: _extNameController.text.trim().isEmpty
+                ? null
+                : _extNameController.text.trim(),
+            bday: _selectedDate,
+            gender: _selectedGender,
+            contactNumber: _contactNumberController.text.trim(),
+          );
+        } else {
+          // For WMSU users with verification
+          await authService.signUpWMSUVerified(
+            email: finalEmail,
+            password: _passwordController.text.trim(),
+            username: _usernameController.text.trim(),
+            firstName: _firstNameController.text.trim(),
+            lastName: _lastNameController.text.trim(),
+            middleName: _middleNameController.text.trim().isEmpty
+                ? null
+                : _middleNameController.text.trim(),
+            extName: _extNameController.text.trim().isEmpty
+                ? null
+                : _extNameController.text.trim(),
+            bday: _selectedDate,
+            gender: _selectedGender,
+            contactNumber: _contactNumberController.text.trim(),
+            userType: _userAffiliation,
+            wmsuIdNumber: wmsuIdNumber!,
+            wmsuEducationLevel: wmsuEducationLevel,
+            wmsuYearLevel: wmsuYearLevel,
+            wmsuCollege: wmsuCollege,
+            wmsuDepartment: wmsuDepartment,
+            wmsuTrackStrand: wmsuTrackStrand,
+            wmsuSection: wmsuSection,
+            linkedStudentIds: linkedStudentIds,
+          );
+        }
 
         if (mounted) {
           setState(() {
             _showOTPScreen = true;
-            _pendingEmail = _emailController.text.trim();
+            _pendingEmail = finalEmail;
           });
           _startResendTimer();
         }
       }
     } on AuthException catch (e) {
-      // Handle specific AuthException errors with proper messages
       _showErrorSnackBar(e.message);
     } catch (error) {
-      // Handle any other unexpected errors
-      print('Registration error: $error'); // For debugging
+      print('Registration error: $error');
       _showErrorSnackBar('Registration failed. Please try again.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -801,6 +948,11 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
     _birthdayController.dispose();
     _fadeController.dispose();
     _slideController.dispose();
+    _wmsuIdNumberController.dispose();
+    _wmsuYearLevelController.dispose();
+    _wmsuDepartmentController.dispose();
+    _wmsuSectionController.dispose();
+
     super.dispose();
   }
 
@@ -1236,8 +1388,8 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
     return Container(
       width: double.infinity,
       constraints: isWeb
-          ? BoxConstraints(maxHeight: 600) // Fixed height for web
-          : null, // No height constraint for mobile
+          ? BoxConstraints(maxHeight: 700)
+          : null, // Increased height
       padding: EdgeInsets.all(isWeb ? 28 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1252,14 +1404,24 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
         ],
       ),
       child: SingleChildScrollView(
-        // Make entire form scrollable
         child: Form(
           key: _formKey,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Personal Information Section - Now single column for both web and mobile
+              // Registration Type Selector (existing)
               _buildRegistrationTypeSelector(),
+
+              // USER AFFILIATION SELECTOR (NEW)
+              _buildUserAffiliationSelector(),
+
+              // Show WMSU-specific fields based on affiliation
+              if (_userAffiliation == 'wmsu_student') _buildWMSUStudentFields(),
+              if (_userAffiliation == 'wmsu_parent') _buildWMSUParentFields(),
+              if (_userAffiliation == 'wmsu_employee')
+                _buildWMSUEmployeeFields(),
+
+              // Personal Information Section
               _buildSectionTitle('Personal Information'),
               const SizedBox(height: 14),
 
@@ -1391,22 +1553,62 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
 
               const SizedBox(height: 14),
 
-              _buildInputField(
-                controller: _emailController,
-                label: 'Email Address',
-                icon: Icons.email_outlined,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your email';
-                  }
-                  if (!RegExp(
-                    r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
-                  ).hasMatch(value)) {
-                    return 'Please enter a valid email';
-                  }
-                  return null;
-                },
-              ),
+              // Email field - different for WMSU vs General Public
+              if (_userAffiliation == 'wmsu_student' ||
+                  _userAffiliation == 'wmsu_employee')
+                // WMSU Email with fixed domain
+                _buildWMSUEmailField()
+              else
+                // Regular email for general public
+                _buildInputField(
+                  controller: _emailController,
+                  label: 'Email Address',
+                  icon: Icons.email_outlined,
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter your email';
+                    }
+                    if (!RegExp(
+                      r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
+                    ).hasMatch(value)) {
+                      return 'Please enter a valid email';
+                    }
+                    return null;
+                  },
+                ),
+
+              // Info box for WMSU users
+              if (_userAffiliation == 'wmsu_student' ||
+                  _userAffiliation == 'wmsu_employee') ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline,
+                        color: Colors.blue.shade600,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Enter your WMSU email address. @wmsu.edu.ph will be added automatically.',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.blue.shade700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 14),
 
@@ -1522,6 +1724,187 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
     );
   }
 
+  Widget _buildWMSUEmailField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: _emailController.text.contains('@')
+                  ? Colors.red.shade400
+                  : Colors.grey.shade300,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            color: Colors.grey.shade50,
+          ),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Icon
+                Container(
+                  margin: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.email_outlined,
+                    color: Colors.blue.shade600,
+                    size: 20,
+                  ),
+                ),
+
+                // Expanded input field (username only)
+                Expanded(
+                  child: TextFormField(
+                    controller: _emailController,
+                    decoration: InputDecoration(
+                      hintText: 'sl201101795',
+                      hintStyle: GoogleFonts.poppins(
+                        color: Colors.grey.shade400,
+                        fontSize: 14,
+                      ),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      errorBorder: InputBorder.none,
+                      focusedErrorBorder: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 20,
+                        horizontal: 8,
+                      ),
+                      isDense: true,
+                      errorStyle: const TextStyle(
+                        height: 0,
+                      ), // Hide inline error
+                    ),
+                    style: GoogleFonts.poppins(fontSize: 14),
+                    onChanged: (value) {
+                      setState(() {}); // Trigger rebuild to show error
+                      // Remove @ symbol and anything after it
+                      if (value.contains('@')) {
+                        String cleanValue = value.split('@')[0];
+                        _emailController.value = TextEditingValue(
+                          text: cleanValue,
+                          selection: TextSelection.collapsed(
+                            offset: cleanValue.length,
+                          ),
+                        );
+                      }
+                    },
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Required';
+                      }
+                      if (value.contains('@')) {
+                        return 'Invalid';
+                      }
+                      // Validate email username format
+                      if (!RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(value)) {
+                        return 'Invalid';
+                      }
+                      if (value.length < 3) {
+                        return 'Too short';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
+
+                // Fixed non-editable domain
+                Container(
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.only(right: 16, left: 4),
+                  child: Text(
+                    '@wmsu.edu.ph',
+                    style: GoogleFonts.poppins(
+                      color: Colors.grey.shade600,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Custom error message below the field
+        if (_emailController.text.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          if (_emailController.text.contains('@'))
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    color: Colors.red.shade600,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Do not include @wmsu.edu.ph, it will be added automatically',
+                    style: GoogleFonts.poppins(
+                      color: Colors.red.shade600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (!RegExp(
+            r'^[a-zA-Z0-9._-]+$',
+          ).hasMatch(_emailController.text))
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    color: Colors.red.shade600,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Only letters, numbers, dots, and underscores allowed',
+                    style: GoogleFonts.poppins(
+                      color: Colors.red.shade600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (_emailController.text.length < 3)
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    color: Colors.red.shade600,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Email must be at least 3 characters',
+                    style: GoogleFonts.poppins(
+                      color: Colors.red.shade600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildSectionTitle(String title) {
     return Text(
       title,
@@ -1531,6 +1914,561 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
         color: Colors.grey.shade800,
       ),
     );
+  }
+
+  // =====================================================
+  // USER AFFILIATION SELECTOR
+  // =====================================================
+
+  Widget _buildUserAffiliationSelector() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'User Affiliation',
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey.shade800,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // General Public Option
+          _buildAffiliationOption(
+            value: 'general_public',
+            icon: Icons.people_outline_rounded,
+            title: 'General Public',
+            subtitle: 'Standard user account',
+            color: Colors.blue,
+          ),
+
+          const SizedBox(height: 8),
+
+          // WMSU Student Option
+          _buildAffiliationOption(
+            value: 'wmsu_student',
+            icon: Icons.school_rounded,
+            title: 'WMSU Student',
+            subtitle: 'Primary to Graduate level',
+            color: Colors.green,
+          ),
+
+          const SizedBox(height: 8),
+
+          // WMSU Parent Option
+          _buildAffiliationOption(
+            value: 'wmsu_parent',
+            icon: Icons.family_restroom_rounded,
+            title: 'WMSU Parent',
+            subtitle: 'Track your children',
+            color: Colors.orange,
+          ),
+
+          const SizedBox(height: 8),
+
+          // WMSU Employee Option
+          _buildAffiliationOption(
+            value: 'wmsu_employee',
+            icon: Icons.badge_rounded,
+            title: 'WMSU Employee',
+            subtitle: 'Faculty or staff',
+            color: Colors.purple,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAffiliationOption({
+    required String value,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+  }) {
+    final bool isSelected = _userAffiliation == value;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _userAffiliation = value;
+
+          // Automatically switch to verified registration for WMSU users
+          if (value != 'general_public') {
+            _registrationType = 'verified';
+          }
+
+          // Clear email controller when switching to/from WMSU users
+          _emailController.clear(); // ADD THIS LINE
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withOpacity(0.1) : Colors.grey.shade50,
+          border: Border.all(
+            color: isSelected ? color : Colors.grey.shade300,
+            width: isSelected ? 2 : 1,
+          ),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isSelected ? color : Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                icon,
+                color: isSelected ? Colors.white : Colors.grey.shade600,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      color: isSelected ? color : Colors.grey.shade800,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  // Add verification requirement notice for WMSU users
+                  if (value != 'general_public')
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Requires email verification',
+                        style: GoogleFonts.poppins(
+                          fontSize: 10,
+                          color: Colors.orange.shade600,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              Icon(Icons.check_circle_rounded, color: color, size: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =====================================================
+  // WMSU STUDENT FIELDS
+  // =====================================================
+
+  Widget _buildWMSUStudentFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 20),
+
+        // WMSU ID Number
+        _buildInputField(
+          controller: _wmsuIdNumberController,
+          label: 'WMSU Student ID',
+          icon: Icons.badge_outlined,
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Please enter your student ID';
+            }
+            return null;
+          },
+        ),
+
+        const SizedBox(height: 14),
+
+        // Education Level Dropdown
+        _buildEducationLevelDropdown(),
+
+        const SizedBox(height: 14),
+
+        // Year Level
+        _buildInputField(
+          controller: _wmsuYearLevelController,
+          label: _getYearLevelLabel(),
+          icon: Icons.calendar_today_rounded,
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Please enter your year/grade level';
+            }
+            return null;
+          },
+        ),
+
+        // Show additional fields based on education level
+        if (_selectedEducationLevel == 'senior_high') ...[
+          const SizedBox(height: 14),
+          _buildTrackStrandDropdown(),
+        ],
+
+        if (_selectedEducationLevel == 'college' ||
+            _selectedEducationLevel == 'graduate_studies') ...[
+          const SizedBox(height: 14),
+          _buildCollegeDropdown(),
+          const SizedBox(height: 14),
+          _buildInputField(
+            controller: _wmsuDepartmentController,
+            label: 'Program/Course (Optional)',
+            icon: Icons.school_outlined,
+          ),
+        ],
+
+        if (_selectedEducationLevel == 'primary' ||
+            _selectedEducationLevel == 'secondary') ...[
+          const SizedBox(height: 14),
+          _buildInputField(
+            controller: _wmsuSectionController,
+            label: 'Section (Optional)',
+            icon: Icons.group_outlined,
+          ),
+        ],
+      ],
+    );
+  }
+
+  // =====================================================
+  // WMSU PARENT FIELDS
+  // =====================================================
+
+  Widget _buildWMSUParentFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 20),
+
+        // Parent ID
+        _buildInputField(
+          controller: _wmsuIdNumberController,
+          label: 'Parent ID Number',
+          icon: Icons.badge_outlined,
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Please enter your parent ID';
+            }
+            return null;
+          },
+        ),
+
+        const SizedBox(height: 14),
+
+        // Info box about linking students
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.blue.shade600, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'You can link your children\'s accounts after registration',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.blue.shade700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // =====================================================
+  // WMSU EMPLOYEE FIELDS
+  // =====================================================
+
+  Widget _buildWMSUEmployeeFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 20),
+
+        // Employee ID
+        _buildInputField(
+          controller: _wmsuIdNumberController,
+          label: 'Employee ID Number',
+          icon: Icons.badge_outlined,
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Please enter your employee ID';
+            }
+            return null;
+          },
+        ),
+
+        const SizedBox(height: 14),
+
+        // Department/Office
+        _buildInputField(
+          controller: _wmsuDepartmentController,
+          label: 'Department/Office',
+          icon: Icons.business_outlined,
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Please enter your department';
+            }
+            return null;
+          },
+        ),
+      ],
+    );
+  }
+
+  // =====================================================
+  // DROPDOWN BUILDERS
+  // =====================================================
+
+  Widget _buildEducationLevelDropdown() {
+    return DropdownButtonFormField<String>(
+      decoration: InputDecoration(
+        labelText: 'Education Level',
+        labelStyle: GoogleFonts.poppins(
+          color: Colors.grey.shade600,
+          fontSize: 14,
+        ),
+        prefixIcon: Container(
+          margin: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            Icons.school_outlined,
+            color: Colors.blue.shade600,
+            size: 20,
+          ),
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.red.shade400),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 20,
+          horizontal: 16,
+        ),
+        filled: true,
+        fillColor: Colors.grey.shade50,
+      ),
+      value: _selectedEducationLevel,
+      style: GoogleFonts.poppins(color: Colors.black),
+      items: [
+        DropdownMenuItem(value: 'primary', child: Text('Primary (Elementary)')),
+        DropdownMenuItem(
+          value: 'secondary',
+          child: Text('Secondary (Junior High)'),
+        ),
+        DropdownMenuItem(
+          value: 'senior_high',
+          child: Text('Senior High School'),
+        ),
+        DropdownMenuItem(
+          value: 'college',
+          child: Text('College (Undergraduate)'),
+        ),
+        DropdownMenuItem(
+          value: 'graduate_studies',
+          child: Text('Graduate Studies'),
+        ),
+      ],
+      onChanged: (value) => setState(() {
+        _selectedEducationLevel = value;
+        // Clear dependent fields when education level changes
+        _selectedCollege = null;
+        _selectedTrackStrand = null;
+        _wmsuYearLevelController.clear();
+      }),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please select your education level';
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildCollegeDropdown() {
+    final authService = AuthService(Supabase.instance.client);
+    final colleges = authService.getWMSUColleges();
+
+    return DropdownButtonFormField<String>(
+      decoration: InputDecoration(
+        labelText: 'College/School',
+        labelStyle: GoogleFonts.poppins(
+          color: Colors.grey.shade600,
+          fontSize: 14,
+        ),
+        prefixIcon: Container(
+          margin: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            Icons.account_balance_rounded,
+            color: Colors.blue.shade600,
+            size: 20,
+          ),
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.red.shade400),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 20,
+          horizontal: 16,
+        ),
+        filled: true,
+        fillColor: Colors.grey.shade50,
+      ),
+      value: _selectedCollege,
+      style: GoogleFonts.poppins(color: Colors.black),
+      items: colleges.map((college) {
+        return DropdownMenuItem(value: college, child: Text(college));
+      }).toList(),
+      onChanged: (value) => setState(() => _selectedCollege = value),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please select your college';
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildTrackStrandDropdown() {
+    final authService = AuthService(Supabase.instance.client);
+    final tracks = authService.getSeniorHighTracks();
+
+    return DropdownButtonFormField<String>(
+      decoration: InputDecoration(
+        labelText: 'Track/Strand',
+        labelStyle: GoogleFonts.poppins(
+          color: Colors.grey.shade600,
+          fontSize: 14,
+        ),
+        prefixIcon: Container(
+          margin: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            Icons.route_rounded,
+            color: Colors.blue.shade600,
+            size: 20,
+          ),
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.red.shade400),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 20,
+          horizontal: 16,
+        ),
+        filled: true,
+        fillColor: Colors.grey.shade50,
+      ),
+      value: _selectedTrackStrand,
+      style: GoogleFonts.poppins(color: Colors.black, fontSize: 13),
+      items: tracks.map((track) {
+        return DropdownMenuItem(
+          value: track.split(' - ')[0], // Store just "STEM", "HUMSS", etc.
+          child: Text(track),
+        );
+      }).toList(),
+      onChanged: (value) => setState(() => _selectedTrackStrand = value),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please select your track/strand';
+        }
+        return null;
+      },
+    );
+  }
+
+  // Helper method to get appropriate year level label
+  String _getYearLevelLabel() {
+    switch (_selectedEducationLevel) {
+      case 'primary':
+      case 'secondary':
+        return 'Grade Level (e.g., Grade 5)';
+      case 'senior_high':
+        return 'Grade Level (Grade 11 or 12)';
+      case 'college':
+        return 'Year Level (e.g., 3rd Year)';
+      case 'graduate_studies':
+        return 'Year Level (e.g., Year 2)';
+      default:
+        return 'Year/Grade Level';
+    }
   }
 
   Widget _buildFooter(bool isWeb) {

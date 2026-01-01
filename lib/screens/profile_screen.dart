@@ -1,4 +1,4 @@
-// ignore_for_file: deprecated_member_use
+// ignore_for_file: deprecated_member_use, use_build_context_synchronously
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -107,6 +107,10 @@ class ProfileScreen {
   String? _confirmPasswordError;
   Timer? _passwordButtonStateTimer;
 
+  Future<List<Map<String, dynamic>>>? _studentParentsFuture;
+  Future<List<Map<String, dynamic>>>? _parentStudentsFuture;
+  Future<List<Map<String, dynamic>>>? _pendingRequestsFuture;
+
   void initControllers() {
     _firstNameController = TextEditingController(
       text: userProfile?['first_name'] ?? '',
@@ -140,6 +144,9 @@ class ProfileScreen {
     if (userProfile?['role'] == 'officer' || userProfile?['role'] == 'admin') {
       _loadLocationSharingState();
     }
+
+    // ✅ ADD THIS: Initialize relationship data
+    _initializeRelationshipData();
   }
 
   void disposeControllers() {
@@ -147,7 +154,6 @@ class ProfileScreen {
     _lastNameController.dispose();
     _middleNameController.dispose();
     _extNameController.dispose();
-
     _contactNumberController.dispose();
     _scrollController.dispose();
     _profileViewScrollController.dispose();
@@ -159,6 +165,30 @@ class ProfileScreen {
     _buttonStateTimer?.cancel();
     _emailResendTimer?.cancel();
     _locationSharingTimer?.cancel();
+  }
+
+  /// Initialize relationship data based on user type
+  void _initializeRelationshipData() {
+    if (userProfile == null) return;
+
+    if (userProfile!['user_type'] == 'wmsu_student') {
+      _studentParentsFuture = _loadStudentParents();
+      _pendingRequestsFuture = _loadPendingParentRequests();
+    } else if (userProfile!['user_type'] == 'wmsu_parent') {
+      _parentStudentsFuture = _loadParentStudents();
+    }
+  }
+
+  /// Refresh relationship data (call this after actions like accept/reject/send)
+  void _refreshRelationships() {
+    if (userProfile == null) return;
+
+    if (userProfile!['user_type'] == 'wmsu_student') {
+      _studentParentsFuture = _loadStudentParents();
+      _pendingRequestsFuture = _loadPendingParentRequests();
+    } else if (userProfile!['user_type'] == 'wmsu_parent') {
+      _parentStudentsFuture = _loadParentStudents();
+    }
   }
 
   bool _hasEmailChanges() {
@@ -371,6 +401,57 @@ class ProfileScreen {
                   ),
                 ],
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Icon-only version for desktop (keeping same method name but with iconOnly parameter)
+  Widget _buildLocationSharingIconOnly(
+    BuildContext context,
+    StateSetter setStateHeader,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _isLocationSharing
+            ? Colors.green.withOpacity(0.15)
+            : Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: _isLocationSharing
+              ? Colors.green
+              : Colors.white.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: _isTogglingLocationSharing
+              ? null // Disable tap while loading
+              : () => _toggleLocationSharing(context, setStateHeader),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: _isTogglingLocationSharing
+                  ? CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        _isLocationSharing ? Colors.green : Colors.white,
+                      ),
+                    )
+                  : Icon(
+                      _isLocationSharing
+                          ? Icons.my_location
+                          : Icons.location_off,
+                      size: 18,
+                      color: _isLocationSharing ? Colors.green : Colors.white,
+                    ),
             ),
           ),
         ),
@@ -3002,8 +3083,7 @@ class ProfileScreen {
                     Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.start,
-                        crossAxisAlignment: CrossAxisAlignment
-                            .center, // Ensure horizontal centering
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           const SizedBox(height: 40),
                           // Profile avatar
@@ -3087,7 +3167,7 @@ class ProfileScreen {
                         ],
                       ),
                     ),
-                    // ✅ UPDATED - Top Right Buttons Column (stacked vertically)
+                    // Top Right Buttons Column (stacked vertically)
                     Positioned(
                       top: 20,
                       right: 16,
@@ -3133,16 +3213,18 @@ class ProfileScreen {
               );
             },
           ),
-          // --- Tabs section ---
+
+          // ✅ UPDATED - Tabs section with WMSU user types
           StatefulBuilder(
             builder: (context, setState) {
-              bool showPersonalInfo = _selectedTab == 0;
               return Column(
                 children: [
+                  // Tab Headers
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 20),
                     child: Row(
                       children: [
+                        // Personal Info Tab
                         Expanded(
                           child: GestureDetector(
                             onTap: () => setState(() => _selectedTab = 0),
@@ -3152,10 +3234,10 @@ class ProfileScreen {
                                 color: Colors.white,
                                 border: Border(
                                   bottom: BorderSide(
-                                    color: showPersonalInfo
+                                    color: _selectedTab == 0
                                         ? Theme.of(context).primaryColor
                                         : Colors.grey.shade300,
-                                    width: showPersonalInfo ? 2 : 1,
+                                    width: _selectedTab == 0 ? 2 : 1,
                                   ),
                                 ),
                               ),
@@ -3164,10 +3246,10 @@ class ProfileScreen {
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 16,
-                                  fontWeight: showPersonalInfo
+                                  fontWeight: _selectedTab == 0
                                       ? FontWeight.w600
                                       : FontWeight.w500,
-                                  color: showPersonalInfo
+                                  color: _selectedTab == 0
                                       ? Colors.black87
                                       : Colors.grey.shade600,
                                 ),
@@ -3175,6 +3257,8 @@ class ProfileScreen {
                             ),
                           ),
                         ),
+
+                        // Police Info Tab (Officers only)
                         if (userProfile?['role'] == 'officer')
                           Expanded(
                             child: GestureDetector(
@@ -3187,10 +3271,10 @@ class ProfileScreen {
                                   color: Colors.white,
                                   border: Border(
                                     bottom: BorderSide(
-                                      color: !showPersonalInfo
+                                      color: _selectedTab == 1
                                           ? Theme.of(context).primaryColor
                                           : Colors.grey.shade300,
-                                      width: !showPersonalInfo ? 2 : 1,
+                                      width: _selectedTab == 1 ? 2 : 1,
                                     ),
                                   ),
                                 ),
@@ -3199,10 +3283,121 @@ class ProfileScreen {
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 16,
-                                    fontWeight: !showPersonalInfo
+                                    fontWeight: _selectedTab == 1
                                         ? FontWeight.w600
                                         : FontWeight.w500,
-                                    color: !showPersonalInfo
+                                    color: _selectedTab == 1
+                                        ? Colors.black87
+                                        : Colors.grey.shade600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        // ✅ Student Info Tab
+                        if (userProfile?['user_type'] == 'wmsu_student')
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => setState(() => _selectedTab = 1),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: _selectedTab == 1
+                                          ? Theme.of(context).primaryColor
+                                          : Colors.grey.shade300,
+                                      width: _selectedTab == 1 ? 2 : 1,
+                                    ),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Student Info',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: _selectedTab == 1
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
+                                    color: _selectedTab == 1
+                                        ? Colors.black87
+                                        : Colors.grey.shade600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        // ✅ Parent Info Tab
+                        if (userProfile?['user_type'] == 'wmsu_parent')
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => setState(() => _selectedTab = 1),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: _selectedTab == 1
+                                          ? Theme.of(context).primaryColor
+                                          : Colors.grey.shade300,
+                                      width: _selectedTab == 1 ? 2 : 1,
+                                    ),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Parent Info',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: _selectedTab == 1
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
+                                    color: _selectedTab == 1
+                                        ? Colors.black87
+                                        : Colors.grey.shade600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        // ✅ Employee Info Tab
+                        if (userProfile?['user_type'] == 'wmsu_employee')
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => setState(() => _selectedTab = 1),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: _selectedTab == 1
+                                          ? Theme.of(context).primaryColor
+                                          : Colors.grey.shade300,
+                                      width: _selectedTab == 1 ? 2 : 1,
+                                    ),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Employee Info',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: _selectedTab == 1
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
+                                    color: _selectedTab == 1
                                         ? Colors.black87
                                         : Colors.grey.shade600,
                                   ),
@@ -3214,7 +3409,8 @@ class ProfileScreen {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  // Tab content
+
+                  // Tab Content
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 20),
                     decoration: BoxDecoration(
@@ -3230,17 +3426,30 @@ class ProfileScreen {
                       ],
                     ),
                     child: Column(
-                      children: showPersonalInfo
+                      children: _selectedTab == 0
                           ? _buildPersonalInfoItems(context)
-                          : _buildPoliceInfoItems(context),
+                          : (userProfile?['role'] == 'officer'
+                                ? _buildPoliceInfoItems(context)
+                                : (userProfile?['user_type'] == 'wmsu_student'
+                                      ? _buildMobileStudentInfoItems(context)
+                                      : (userProfile?['user_type'] ==
+                                                'wmsu_parent'
+                                            ? _buildMobileParentInfoItems(
+                                                context,
+                                              )
+                                            : _buildMobileEmployeeInfoItems(
+                                                context,
+                                              )))),
                     ),
                   ),
                 ],
               );
             },
           ),
+
           const SizedBox(height: 30),
-          // Admin dashboard button (moved above Change Password)
+
+          // Admin dashboard button
           if (hasAdminPermissions) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -3275,7 +3484,8 @@ class ProfileScreen {
             ),
             const SizedBox(height: 12),
           ],
-          // Change Password Button (grey filled button)
+
+          // Change Password Button
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: SizedBox(
@@ -3297,10 +3507,8 @@ class ProfileScreen {
                   ),
                 ),
                 style: OutlinedButton.styleFrom(
-                  backgroundColor: Colors.white, // White background
-                  side: BorderSide(
-                    color: Colors.grey.shade800,
-                  ), // Dark grey border
+                  backgroundColor: Colors.white,
+                  side: BorderSide(color: Colors.grey.shade800),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -3308,7 +3516,8 @@ class ProfileScreen {
               ),
             ),
           ),
-          // Logout Button (blue-grey background with white text/icon)
+
+          // Logout Button
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -3327,12 +3536,7 @@ class ProfileScreen {
                   ),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color.fromARGB(
-                    255,
-                    43,
-                    68,
-                    105,
-                  ), // Blue-grey background
+                  backgroundColor: const Color.fromARGB(255, 43, 68, 105),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -3342,6 +3546,1042 @@ class ProfileScreen {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ✅ STEP 2: ADD MOBILE STUDENT INFO ITEMS
+  List<Widget> _buildMobileStudentInfoItems(BuildContext context) {
+    return [
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.badge_outlined,
+        label: 'WMSU ID Number',
+        value: userProfile?['wmsu_id_number'] ?? 'Not assigned',
+        hasValue: userProfile?['wmsu_id_number'] != null,
+      ),
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.school_outlined,
+        label: 'Education Level',
+        value: userProfile?['wmsu_education_level'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_education_level'] != null,
+      ),
+      if (userProfile?['wmsu_education_level'] != 'elementary')
+        _buildCleanInfoItem(
+          context,
+          icon: Icons.calendar_today_outlined,
+          label: 'Year Level',
+          value: userProfile?['wmsu_year_level'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_year_level'] != null,
+        ),
+      if (userProfile?['wmsu_education_level'] == 'college')
+        _buildCleanInfoItem(
+          context,
+          icon: Icons.business_outlined,
+          label: 'College',
+          value: userProfile?['wmsu_college'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_college'] != null,
+        ),
+      if (userProfile?['wmsu_education_level'] == 'college')
+        _buildCleanInfoItem(
+          context,
+          icon: Icons.work_outline,
+          label: 'Department',
+          value: userProfile?['wmsu_department'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_department'] != null,
+        ),
+      if (userProfile?['wmsu_education_level'] == 'senior_high')
+        _buildCleanInfoItem(
+          context,
+          icon: Icons.route_outlined,
+          label: 'Track/Strand',
+          value: userProfile?['wmsu_track_strand'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_track_strand'] != null,
+        ),
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.class_outlined,
+        label: 'Section',
+        value: userProfile?['wmsu_section'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_section'] != null,
+      ),
+
+      // ✅ Connected Parents Section
+      _buildMobileConnectedParentsSection(context),
+
+      // ✅ Pending Requests Section
+      _buildMobilePendingRequestsSection(context),
+    ];
+  }
+
+  // ✅ STEP 3: ADD MOBILE PARENT INFO ITEMS
+  List<Widget> _buildMobileParentInfoItems(BuildContext context) {
+    return [
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.badge_outlined,
+        label: 'WMSU ID Number',
+        value: userProfile?['wmsu_id_number'] ?? 'Not assigned',
+        hasValue: userProfile?['wmsu_id_number'] != null,
+      ),
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.person_outline,
+        label: 'User Type',
+        value: 'WMSU Parent',
+        hasValue: true,
+      ),
+
+      // ✅ Connected Students Section
+      _buildMobileConnectedStudentsSection(context),
+
+      // ✅ Send Request Button
+      _buildMobileSendRequestButton(context),
+    ];
+  }
+
+  // ✅ STEP 4: ADD MOBILE EMPLOYEE INFO ITEMS
+  List<Widget> _buildMobileEmployeeInfoItems(BuildContext context) {
+    return [
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.badge_outlined,
+        label: 'WMSU ID Number',
+        value: userProfile?['wmsu_id_number'] ?? 'Not assigned',
+        hasValue: userProfile?['wmsu_id_number'] != null,
+      ),
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.business_outlined,
+        label: 'College/Office',
+        value: userProfile?['wmsu_college'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_college'] != null,
+      ),
+      _buildCleanInfoItem(
+        context,
+        icon: Icons.work_outline,
+        label: 'Department',
+        value: userProfile?['wmsu_department'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_department'] != null,
+        isLast: true,
+      ),
+    ];
+  }
+
+  // ==========================================
+  // MOBILE PROFILE VIEW - PART 2
+  // Widget Implementations for Connections
+  // ==========================================
+
+  // ✅ STEP 5: MOBILE CONNECTED PARENTS SECTION (FOR STUDENTS)
+  Widget _buildMobileConnectedParentsSection(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _studentParentsFuture, // ✅ Use cached Future
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _buildCleanInfoItem(
+            context,
+            icon: Icons.hourglass_empty,
+            label: 'My Parents/Guardians',
+            value: 'Loading...',
+            hasValue: false,
+          );
+        }
+
+        final parents = snapshot.data ?? [];
+
+        if (parents.isEmpty) {
+          return _buildCleanInfoItem(
+            context,
+            icon: Icons.family_restroom_outlined,
+            label: 'My Parents/Guardians',
+            value: 'No connections yet',
+            hasValue: false,
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.family_restroom_outlined,
+                      size: 20,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Text(
+                    'My Parents/Guardians',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...parents.map(
+                (parent) => Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.person, color: Colors.blue.shade700, size: 20),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              parent['parent_name'] ?? 'Unknown',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            Text(
+                              '${parent['relationship_type']?.toString().toUpperCase()} • ${parent['wmsu_id'] ?? 'No ID'}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ✅ STEP 6: MOBILE PENDING REQUESTS SECTION (FOR STUDENTS)
+  Widget _buildMobilePendingRequestsSection(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _pendingRequestsFuture, // ✅ Use cached Future
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _buildCleanInfoItem(
+            context,
+            icon: Icons.pending_outlined,
+            label: 'Pending Requests',
+            value: 'Loading...',
+            hasValue: false,
+            isLast: true,
+          );
+        }
+
+        final requests = snapshot.data ?? [];
+
+        if (requests.isEmpty) {
+          return _buildCleanInfoItem(
+            context,
+            icon: Icons.check_circle_outline,
+            label: 'Pending Requests',
+            value: 'No pending requests',
+            hasValue: false,
+            isLast: true,
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.pending_outlined,
+                      size: 20,
+                      color: Colors.orange.shade700,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Pending Requests (${requests.length})',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...requests.map(
+                (request) => Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.shade300),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade50,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.person,
+                              color: Colors.orange.shade700,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  request['parent_name'] ?? 'Unknown',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                Text(
+                                  'Wants to connect as ${request['relationship_type']?.toString().toUpperCase()}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                if (request['notes'] != null &&
+                                    request['notes'].toString().isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      'Note: ${request['notes']}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey.shade500,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ),
+                                Text(
+                                  'Sent: ${_formatRequestTime(request['requested_at'])}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey.shade500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () => _respondToRequest(
+                                context,
+                                request['request_id'],
+                                true,
+                              ),
+                              icon: const Icon(
+                                Icons.check,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                              label: const Text(
+                                'Accept',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _respondToRequest(
+                                context,
+                                request['request_id'],
+                                false,
+                              ),
+                              icon: Icon(
+                                Icons.close,
+                                size: 16,
+                                color: Colors.red.shade700,
+                              ),
+                              label: Text(
+                                'Reject',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                  color: Colors.red.shade700,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                side: BorderSide(color: Colors.red.shade700),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ✅ STEP 7: MOBILE CONNECTED STUDENTS SECTION (FOR PARENTS)
+  Widget _buildMobileConnectedStudentsSection(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _parentStudentsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _buildCleanInfoItem(
+            context,
+            icon: Icons.hourglass_empty,
+            label: 'My Children',
+            value: 'Loading...',
+            hasValue: false,
+          );
+        }
+
+        final students = snapshot.data ?? [];
+
+        if (students.isEmpty) {
+          return _buildCleanInfoItem(
+            context,
+            icon: Icons.family_restroom_outlined,
+            label: 'My Children',
+            value: 'No children connected yet',
+            hasValue: false,
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.family_restroom,
+                      size: 20,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Text(
+                    'My Children',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...students.map(
+                (student) => Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.person,
+                        color: Colors.green.shade700,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // ✅ Show custom label if exists, otherwise student name
+                            Text(
+                              student['custom_label']?.toString().isNotEmpty ==
+                                      true
+                                  ? student['custom_label']
+                                  : student['student_name'] ?? 'Unknown',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            // ✅ Show student name below if custom label is set
+                            if (student['custom_label']
+                                    ?.toString()
+                                    .isNotEmpty ==
+                                true)
+                              Text(
+                                student['student_name'] ?? 'Unknown',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey.shade500,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            // Show relationship type and WMSU ID
+                            Text(
+                              '${student['relationship_type']?.toString().toUpperCase()} • ${student['student_wmsu_id'] ?? 'No ID'}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // ✅ Add edit icon button
+                      IconButton(
+                        icon: Icon(
+                          Icons.edit,
+                          size: 18,
+                          color: Colors.grey.shade600,
+                        ),
+                        onPressed: () => _showEditLabelDialogMobile(
+                          context,
+                          student['student_id'],
+                          student['student_name'],
+                          student['custom_label'],
+                        ),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        tooltip: 'Edit label',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ✅ STEP 8: MOBILE SEND REQUEST BUTTON (FOR PARENTS)
+  Widget _buildMobileSendRequestButton(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: ElevatedButton.icon(
+          onPressed: () => _showMobileSendRequestDialog(context),
+          icon: const Icon(Icons.favorite, size: 20, color: Colors.white),
+          label: const Text(
+            'Connect with My Child',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              color: Colors.white,
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color.fromARGB(255, 43, 68, 105),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            elevation: 2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ✅ STEP 9: MOBILE SEND REQUEST DIALOG
+  void _showMobileSendRequestDialog(BuildContext context) {
+    final TextEditingController wmsuIdController = TextEditingController();
+    String? selectedRelationship = 'mother';
+    final TextEditingController notesController = TextEditingController();
+    String? wmsuIdError;
+    bool isSubmitting = false;
+    bool isSuccess = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: !isSubmitting,
+      enableDrag: !isSubmitting,
+      backgroundColor: Colors.transparent,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.85,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
+              ),
+            ),
+            child: Column(
+              children: [
+                // Header
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2B4469),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(20),
+                      topRight: Radius.circular(20),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.favorite, color: Colors.white, size: 24),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Connect with Your Child',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        onPressed: isSubmitting
+                            ? null
+                            : () => Navigator.pop(context),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Content
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Info Banner
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.green.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.info_outline,
+                                color: Colors.green.shade600,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'Your child will need to accept the connection',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.green.shade800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Student WMSU ID Field
+                        Text(
+                          'Student WMSU ID',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: wmsuIdController,
+                          enabled: !isSubmitting,
+                          decoration: InputDecoration(
+                            hintText: 'Enter student ID number',
+                            prefixIcon: Icon(
+                              Icons.badge_outlined,
+                              color: wmsuIdError != null
+                                  ? Colors.red
+                                  : Colors.grey.shade600,
+                            ),
+                            filled: true,
+                            fillColor: isSubmitting
+                                ? Colors.grey.shade100
+                                : Colors.grey.shade50,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            errorText: wmsuIdError,
+                          ),
+                          onChanged: (value) {
+                            if (wmsuIdError != null) {
+                              setModalState(() => wmsuIdError = null);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Relationship Dropdown
+                        Text(
+                          'Relationship Type',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: selectedRelationship,
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: isSubmitting
+                                ? Colors.grey.shade100
+                                : Colors.grey.shade50,
+                            prefixIcon: Icon(
+                              Icons.family_restroom_outlined,
+                              color: Colors.grey.shade600,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          items: [
+                            DropdownMenuItem(
+                              value: 'mother',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.woman,
+                                    size: 18,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text('Mother'),
+                                ],
+                              ),
+                            ),
+                            DropdownMenuItem(
+                              value: 'father',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.man,
+                                    size: 18,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text('Father'),
+                                ],
+                              ),
+                            ),
+                            DropdownMenuItem(
+                              value: 'guardian',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.shield_outlined,
+                                    size: 18,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text('Guardian'),
+                                ],
+                              ),
+                            ),
+                            DropdownMenuItem(
+                              value: 'other',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.more_horiz,
+                                    size: 18,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text('Other'),
+                                ],
+                              ),
+                            ),
+                          ],
+                          onChanged: isSubmitting
+                              ? null
+                              : (value) {
+                                  setModalState(
+                                    () => selectedRelationship = value,
+                                  );
+                                },
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Notes Field
+                        Text(
+                          'Notes (Optional)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: notesController,
+                          enabled: !isSubmitting,
+                          maxLines: 3,
+                          maxLength: 200,
+                          decoration: InputDecoration(
+                            hintText:
+                                'Add any additional information (optional)',
+                            filled: true,
+                            fillColor: isSubmitting
+                                ? Colors.grey.shade100
+                                : Colors.grey.shade50,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 30),
+
+                        // Send Request Button
+                        SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: ElevatedButton(
+                            onPressed: isSubmitting || isSuccess
+                                ? null
+                                : () async {
+                                    final wmsuId = wmsuIdController.text.trim();
+                                    if (wmsuId.isEmpty) {
+                                      setModalState(() {
+                                        wmsuIdError = 'Please enter student ID';
+                                      });
+                                      return;
+                                    }
+
+                                    setModalState(() => isSubmitting = true);
+
+                                    await _sendParentRequest(
+                                      context,
+                                      wmsuId,
+                                      selectedRelationship!,
+                                      notesController.text.trim(),
+                                    );
+
+                                    if (context.mounted) {
+                                      setModalState(() {
+                                        isSubmitting = false;
+                                        isSuccess = true;
+                                      });
+
+                                      await Future.delayed(
+                                        const Duration(milliseconds: 800),
+                                      );
+                                      if (context.mounted) {
+                                        Navigator.pop(context);
+                                      }
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isSuccess
+                                  ? Colors.green
+                                  : const Color(0xFF2B4469),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              disabledBackgroundColor: isSuccess
+                                  ? Colors.green
+                                  : const Color(0xFF2B4469),
+                            ),
+                            child: isSubmitting
+                                ? Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white,
+                                          strokeWidth: 2.5,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        'SENDING REQUEST...',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white.withOpacity(0.9),
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : isSuccess
+                                ? const Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        Icons.check_circle,
+                                        color: Colors.white,
+                                      ),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'REQUEST SENT!',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : const Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.send, color: Colors.white),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'SEND REQUEST',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+
+                        // Cancel Button
+                        SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: OutlinedButton(
+                            onPressed: isSubmitting
+                                ? null
+                                : () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide(
+                                color: isSubmitting
+                                    ? Colors.grey.shade400
+                                    : const Color(0xFF2B4469),
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: Text(
+                              'CANCEL',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: isSubmitting
+                                    ? Colors.grey.shade400
+                                    : const Color(0xFF2B4469),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -4708,24 +5948,13 @@ class ProfileScreen {
                               ),
                             ),
                           ),
-                          // Top Right Buttons Row
+                          // Top Right Buttons - Column layout for vertical stacking on desktop
                           Positioned(
                             top: 16,
                             right: 16,
-                            child: Row(
+                            child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                // Location Sharing Toggle (only for officer/admin)
-                                if (userProfile?['role'] == 'officer' ||
-                                    userProfile?['role'] == 'admin')
-                                  _buildLocationSharingToggle(
-                                    context,
-                                    setStateHeader,
-                                    isMobile: false,
-                                  ),
-
-                                const SizedBox(width: 8),
-
                                 // Edit Profile Button
                                 Container(
                                   decoration: BoxDecoration(
@@ -4751,6 +5980,17 @@ class ProfileScreen {
                                     tooltip: 'Edit Profile',
                                   ),
                                 ),
+
+                                const SizedBox(height: 8),
+
+                                // Location Sharing Toggle (only for officer/admin)
+                                // Using icon-only version for desktop
+                                if (userProfile?['role'] == 'officer' ||
+                                    userProfile?['role'] == 'admin')
+                                  _buildLocationSharingIconOnly(
+                                    context,
+                                    setStateHeader,
+                                  ),
                               ],
                             ),
                           ),
@@ -4851,18 +6091,20 @@ class ProfileScreen {
                 ),
                 Expanded(
                   child: StatefulBuilder(
-                    builder: (context, setState) {
-                      bool showPersonalInfo = _selectedTab == 0;
+                    builder: (context, setStateLocal) {
+                      // ← Renamed to make it clearer
                       return Column(
                         children: [
+                          // Tab Headers
                           Container(
                             margin: const EdgeInsets.symmetric(horizontal: 20),
                             child: Row(
                               children: [
+                                // Personal Info Tab
                                 Expanded(
                                   child: GestureDetector(
                                     onTap: () =>
-                                        setState(() => _selectedTab = 0),
+                                        setStateLocal(() => _selectedTab = 0),
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(
                                         vertical: 12,
@@ -4871,10 +6113,10 @@ class ProfileScreen {
                                         color: Colors.white,
                                         border: Border(
                                           bottom: BorderSide(
-                                            color: showPersonalInfo
+                                            color: _selectedTab == 0
                                                 ? Theme.of(context).primaryColor
                                                 : Colors.grey.shade300,
-                                            width: showPersonalInfo ? 2 : 1,
+                                            width: _selectedTab == 0 ? 2 : 1,
                                           ),
                                         ),
                                       ),
@@ -4883,10 +6125,10 @@ class ProfileScreen {
                                         textAlign: TextAlign.center,
                                         style: TextStyle(
                                           fontSize: 16,
-                                          fontWeight: showPersonalInfo
+                                          fontWeight: _selectedTab == 0
                                               ? FontWeight.w600
                                               : FontWeight.w500,
-                                          color: showPersonalInfo
+                                          color: _selectedTab == 0
                                               ? Colors.black87
                                               : Colors.grey.shade600,
                                         ),
@@ -4894,11 +6136,13 @@ class ProfileScreen {
                                     ),
                                   ),
                                 ),
+
+                                // Police Info Tab (Officers only)
                                 if (userProfile?['role'] == 'officer')
                                   Expanded(
                                     child: GestureDetector(
                                       onTap: () =>
-                                          setState(() => _selectedTab = 1),
+                                          setStateLocal(() => _selectedTab = 1),
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(
                                           vertical: 12,
@@ -4907,12 +6151,12 @@ class ProfileScreen {
                                           color: Colors.white,
                                           border: Border(
                                             bottom: BorderSide(
-                                              color: !showPersonalInfo
+                                              color: _selectedTab == 1
                                                   ? Theme.of(
                                                       context,
                                                     ).primaryColor
                                                   : Colors.grey.shade300,
-                                              width: !showPersonalInfo ? 2 : 1,
+                                              width: _selectedTab == 1 ? 2 : 1,
                                             ),
                                           ),
                                         ),
@@ -4921,10 +6165,131 @@ class ProfileScreen {
                                           textAlign: TextAlign.center,
                                           style: TextStyle(
                                             fontSize: 16,
-                                            fontWeight: !showPersonalInfo
+                                            fontWeight: _selectedTab == 1
                                                 ? FontWeight.w600
                                                 : FontWeight.w500,
-                                            color: !showPersonalInfo
+                                            color: _selectedTab == 1
+                                                ? Colors.black87
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+
+                                // ✅ Student Info Tab
+                                if (userProfile?['user_type'] == 'wmsu_student')
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onTap: () =>
+                                          setStateLocal(() => _selectedTab = 1),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 12,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          border: Border(
+                                            bottom: BorderSide(
+                                              color: _selectedTab == 1
+                                                  ? Theme.of(
+                                                      context,
+                                                    ).primaryColor
+                                                  : Colors.grey.shade300,
+                                              width: _selectedTab == 1 ? 2 : 1,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          'Student Info',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: _selectedTab == 1
+                                                ? FontWeight.w600
+                                                : FontWeight.w500,
+                                            color: _selectedTab == 1
+                                                ? Colors.black87
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+
+                                // ✅ Parent Info Tab
+                                if (userProfile?['user_type'] == 'wmsu_parent')
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onTap: () =>
+                                          setStateLocal(() => _selectedTab = 1),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 12,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          border: Border(
+                                            bottom: BorderSide(
+                                              color: _selectedTab == 1
+                                                  ? Theme.of(
+                                                      context,
+                                                    ).primaryColor
+                                                  : Colors.grey.shade300,
+                                              width: _selectedTab == 1 ? 2 : 1,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          'Parent Info',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: _selectedTab == 1
+                                                ? FontWeight.w600
+                                                : FontWeight.w500,
+                                            color: _selectedTab == 1
+                                                ? Colors.black87
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+
+                                // ✅ Employee Info Tab
+                                if (userProfile?['user_type'] ==
+                                    'wmsu_employee')
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onTap: () =>
+                                          setStateLocal(() => _selectedTab = 1),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 12,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          border: Border(
+                                            bottom: BorderSide(
+                                              color: _selectedTab == 1
+                                                  ? Theme.of(
+                                                      context,
+                                                    ).primaryColor
+                                                  : Colors.grey.shade300,
+                                              width: _selectedTab == 1 ? 2 : 1,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          'Employee Info',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: _selectedTab == 1
+                                                ? FontWeight.w600
+                                                : FontWeight.w500,
+                                            color: _selectedTab == 1
                                                 ? Colors.black87
                                                 : Colors.grey.shade600,
                                           ),
@@ -4935,6 +6300,7 @@ class ProfileScreen {
                               ],
                             ),
                           ),
+
                           const SizedBox(height: 20),
                           Expanded(
                             child: SingleChildScrollView(
@@ -4961,13 +6327,28 @@ class ProfileScreen {
                                       ],
                                     ),
                                     child: Column(
-                                      children: showPersonalInfo
+                                      children: _selectedTab == 0
                                           ? _buildDesktopPersonalInfoItems(
                                               context,
                                             )
-                                          : _buildDesktopPoliceInfoItems(
-                                              context,
-                                            ),
+                                          : (userProfile?['role'] == 'officer'
+                                                ? _buildDesktopPoliceInfoItems(
+                                                    context,
+                                                  )
+                                                : (userProfile?['user_type'] ==
+                                                          'wmsu_student'
+                                                      ? _buildDesktopStudentInfoItems(
+                                                          context,
+                                                        )
+                                                      : (userProfile?['user_type'] ==
+                                                                'wmsu_parent'
+                                                            ? _buildDesktopParentInfoItems(
+                                                                context,
+                                                                isSidebarVisible,
+                                                              )
+                                                            : _buildDesktopEmployeeInfoItems(
+                                                                context,
+                                                              )))),
                                     ),
                                   ),
                                   const SizedBox(height: 30),
@@ -7150,6 +8531,2206 @@ class ProfileScreen {
         },
       ),
     );
+  }
+
+  // ✅ 2. UPDATE _buildDesktopStudentInfoItems to include pending requests section
+  List<Widget> _buildDesktopStudentInfoItems(BuildContext context) {
+    return [
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.badge_outlined,
+        label: 'WMSU ID Number',
+        value: userProfile?['wmsu_id_number'] ?? 'Not assigned',
+        hasValue: userProfile?['wmsu_id_number'] != null,
+      ),
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.school_outlined,
+        label: 'Education Level',
+        value: userProfile?['wmsu_education_level'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_education_level'] != null,
+      ),
+      if (userProfile?['wmsu_education_level'] != 'elementary')
+        _buildDesktopCleanInfoItem(
+          context,
+          icon: Icons.calendar_today_outlined,
+          label: 'Year Level',
+          value: userProfile?['wmsu_year_level'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_year_level'] != null,
+        ),
+      if (userProfile?['wmsu_education_level'] == 'college')
+        _buildDesktopCleanInfoItem(
+          context,
+          icon: Icons.business_outlined,
+          label: 'College',
+          value: userProfile?['wmsu_college'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_college'] != null,
+        ),
+      if (userProfile?['wmsu_education_level'] == 'college')
+        _buildDesktopCleanInfoItem(
+          context,
+          icon: Icons.work_outline,
+          label: 'Department',
+          value: userProfile?['wmsu_department'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_department'] != null,
+        ),
+      if (userProfile?['wmsu_education_level'] == 'senior_high')
+        _buildDesktopCleanInfoItem(
+          context,
+          icon: Icons.route_outlined,
+          label: 'Track/Strand',
+          value: userProfile?['wmsu_track_strand'] ?? 'Not set',
+          hasValue: userProfile?['wmsu_track_strand'] != null,
+        ),
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.class_outlined,
+        label: 'Section',
+        value: userProfile?['wmsu_section'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_section'] != null,
+      ),
+
+      // ✅ NEW: Connected Parents Section
+      _buildConnectedParentsSection(context),
+
+      // ✅ NEW: Pending Parent Requests Section
+      _buildPendingRequestsSection(context),
+    ];
+  }
+
+  // ✅ 3. ADD CONNECTED PARENTS SECTION FOR STUDENTS
+  Widget _buildConnectedParentsSection(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _studentParentsFuture, // ✅ Use cached Future
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _buildDesktopCleanInfoItem(
+            context,
+            icon: Icons.hourglass_empty,
+            label: 'Connected Parents',
+            value: 'Loading...',
+            hasValue: false,
+          );
+        }
+
+        final parents = snapshot.data ?? [];
+
+        if (parents.isEmpty) {
+          return _buildDesktopCleanInfoItem(
+            context,
+            icon: Icons.family_restroom_outlined,
+            label: 'Connected Parents',
+            value: 'No connections yet',
+            hasValue: false,
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.family_restroom_outlined,
+                      size: 20,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Text(
+                    'Connected Parents',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...parents.map(
+                (parent) => Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.person, color: Colors.blue.shade700, size: 20),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              parent['parent_name'] ?? 'Unknown',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            Text(
+                              '${parent['relationship_type']?.toString().toUpperCase()} • ${parent['wmsu_id'] ?? 'No ID'}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ✅ 4. ADD PENDING REQUESTS SECTION FOR STUDENTS
+  Widget _buildPendingRequestsSection(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _pendingRequestsFuture, // ✅ Use cached Future
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _buildDesktopCleanInfoItem(
+            context,
+            icon: Icons.pending_outlined,
+            label: 'Pending Requests',
+            value: 'Loading...',
+            hasValue: false,
+            isLast: true,
+          );
+        }
+
+        final requests = snapshot.data ?? [];
+
+        if (requests.isEmpty) {
+          return _buildDesktopCleanInfoItem(
+            context,
+            icon: Icons.check_circle_outline,
+            label: 'Pending Requests',
+            value: 'No pending requests',
+            hasValue: false,
+            isLast: true,
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.pending_outlined,
+                      size: 20,
+                      color: Colors.orange.shade700,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Text(
+                    'Pending Requests (${requests.length})',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...requests.map(
+                (request) => Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.shade300),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade50,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.person,
+                              color: Colors.orange.shade700,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  request['parent_name'] ?? 'Unknown',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                Text(
+                                  'Wants to connect as ${request['relationship_type']?.toString().toUpperCase()}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                if (request['notes'] != null &&
+                                    request['notes'].toString().isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      'Note: ${request['notes']}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey.shade500,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ),
+                                Text(
+                                  'Sent: ${_formatRequestTime(request['requested_at'])}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey.shade500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () => _respondToRequest(
+                                context,
+                                request['request_id'],
+                                true,
+                              ),
+                              icon: const Icon(
+                                Icons.check,
+                                size: 18,
+                                color: Colors.white,
+                              ),
+                              label: const Text(
+                                'Accept',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _respondToRequest(
+                                context,
+                                request['request_id'],
+                                false,
+                              ),
+                              icon: Icon(
+                                Icons.close,
+                                size: 18,
+                                color: Colors.red.shade700,
+                              ),
+                              label: Text(
+                                'Reject',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.red.shade700,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: Colors.red.shade700),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _loadStudentParents() async {
+    if (userProfile?['id'] == null) return [];
+
+    try {
+      final response = await Supabase.instance.client.rpc(
+        'get_student_parents',
+        params: {'student_uuid': userProfile!['id']},
+      );
+
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error loading student parents: $e');
+      }
+      return [];
+    }
+  }
+
+  // Load pending parent requests for student
+  Future<List<Map<String, dynamic>>> _loadPendingParentRequests() async {
+    if (userProfile?['id'] == null) return [];
+
+    try {
+      final response = await Supabase.instance.client.rpc(
+        'get_pending_parent_requests',
+        params: {'student_uuid': userProfile!['id']},
+      );
+
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error loading pending requests: $e');
+      }
+      return [];
+    }
+  }
+
+  // Format request timestamp
+  String _formatRequestTime(dynamic timestamp) {
+    if (timestamp == null) return 'Unknown';
+
+    try {
+      final DateTime dateTime = DateTime.parse(timestamp.toString());
+      final Duration difference = DateTime.now().difference(dateTime);
+
+      if (difference.inDays > 7) {
+        return DateFormat('MMM d, y').format(dateTime);
+      } else if (difference.inDays > 0) {
+        return '${difference.inDays} day${difference.inDays > 1 ? 's' : ''} ago';
+      } else if (difference.inHours > 0) {
+        return '${difference.inHours} hour${difference.inHours > 1 ? 's' : ''} ago';
+      } else if (difference.inMinutes > 0) {
+        return '${difference.inMinutes} minute${difference.inMinutes > 1 ? 's' : ''} ago';
+      } else {
+        return 'Just now';
+      }
+    } catch (e) {
+      return 'Unknown';
+    }
+  }
+
+  // Respond to parent request
+  Future<void> _respondToRequest(
+    BuildContext context,
+    String requestId,
+    bool accept,
+  ) async {
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'respond_to_parent_request',
+        params: {
+          'p_request_id': requestId,
+          'p_student_id': userProfile!['id'],
+          'p_accept': accept,
+        },
+      );
+
+      final response = result as Map<String, dynamic>;
+
+      if (response['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              accept ? 'Parent connection accepted!' : 'Request rejected',
+            ),
+            backgroundColor: accept ? Colors.green : Colors.orange,
+          ),
+        );
+
+        // ✅ Refresh the data
+        _refreshRelationships();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response['error'] ?? 'Failed to respond'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  List<Widget> _buildDesktopParentInfoItems(
+    BuildContext context,
+    bool isSidebarVisible,
+  ) {
+    return [
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.badge_outlined,
+        label: 'WMSU ID Number',
+        value: userProfile?['wmsu_id_number'] ?? 'Not assigned',
+        hasValue: userProfile?['wmsu_id_number'] != null,
+      ),
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.person_outline,
+        label: 'User Type',
+        value: 'WMSU Parent',
+        hasValue: true,
+      ),
+
+      // Connected Students Section
+      _buildConnectedStudentsSection(context, isSidebarVisible),
+
+      // Fixed Send Request Button
+      _buildSendRequestButton(
+        context,
+        isSidebarVisible,
+      ), // ✅ Pass isSidebarVisible
+    ];
+  }
+
+  // ✅ Add this class variable at the top of ProfileScreen class
+
+  Widget _buildConnectedStudentsSection(
+    BuildContext context,
+    bool isSidebarVisible,
+  ) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _parentStudentsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _buildDesktopCleanInfoItem(
+            context,
+            icon: Icons.hourglass_empty,
+            label: 'My Children',
+            value: 'Loading...',
+            hasValue: false,
+          );
+        }
+
+        final students = snapshot.data ?? [];
+
+        if (students.isEmpty) {
+          return _buildDesktopCleanInfoItem(
+            context,
+            icon: Icons.family_restroom_outlined,
+            label: 'My Children',
+            value: 'No children connected yet',
+            hasValue: false,
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.family_restroom,
+                      size: 20,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Text(
+                    'My Children',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...students.map(
+                (student) => Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.person,
+                        color: Colors.green.shade700,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // ✅ Show custom label if exists, otherwise student name
+                            Text(
+                              student['custom_label']?.toString().isNotEmpty ==
+                                      true
+                                  ? student['custom_label']
+                                  : student['student_name'] ?? 'Unknown',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            // ✅ Show student name below if custom label is set
+                            if (student['custom_label']
+                                    ?.toString()
+                                    .isNotEmpty ==
+                                true)
+                              Text(
+                                student['student_name'] ?? 'Unknown',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey.shade500,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            // ✅ Show relationship type and WMSU ID (removed from main display)
+                            Text(
+                              '${student['relationship_type']?.toString().toUpperCase()} • ${student['student_wmsu_id'] ?? 'No ID'}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // ✅ Add edit icon button
+                      IconButton(
+                        icon: Icon(
+                          Icons.edit,
+                          size: 18,
+                          color: Colors.grey.shade600,
+                        ),
+                        onPressed: () => _showEditLabelDialogDesktop(
+                          context,
+                          student['student_id'],
+                          student['student_name'],
+                          student['custom_label'],
+                          isSidebarVisible: isSidebarVisible,
+                        ),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        tooltip: 'Edit label',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSendRequestButton(BuildContext context, bool isSidebarVisible) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: ElevatedButton.icon(
+          onPressed: () => _showSendRequestDialog(
+            context,
+            isSidebarVisible: isSidebarVisible,
+          ),
+          icon: const Icon(Icons.person_add, size: 20, color: Colors.white),
+          label: const Text(
+            'Connect with Your Child',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              color: Colors.white,
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color.fromARGB(255, 43, 68, 105),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            elevation: 2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Load parent's connected students
+  Future<List<Map<String, dynamic>>> _loadParentStudents() async {
+    if (userProfile?['id'] == null) return [];
+
+    try {
+      final response = await Supabase.instance.client.rpc(
+        'get_parent_students',
+        params: {'parent_uuid': userProfile!['id']},
+      );
+
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error loading parent students: $e');
+      }
+      return [];
+    }
+  }
+
+  void _showSendRequestDialog(
+    BuildContext context, {
+    required bool isSidebarVisible,
+  }) {
+    final TextEditingController wmsuIdController = TextEditingController();
+    String? selectedRelationship = 'mother';
+    final TextEditingController notesController = TextEditingController();
+
+    // Add validation error states
+    String? wmsuIdError;
+    bool isSubmitting = false;
+    bool isSuccess = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: !isSubmitting,
+      barrierColor: Colors.black.withOpacity(0.3),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          // Calculate position based on profile view location (same as change password)
+          final profileLeft = isSidebarVisible ? 284.0 : 84.0;
+          final profileWidth = 450.0;
+          final modalWidth = 420.0;
+          final centeredLeft = profileLeft + (profileWidth - modalWidth) / 2;
+
+          return Stack(
+            children: [
+              Positioned(
+                left: centeredLeft,
+                top: 170,
+                child: Material(
+                  elevation: 16,
+                  borderRadius: BorderRadius.circular(16),
+                  shadowColor: Colors.black.withOpacity(0.3),
+                  child: Container(
+                    width: 420,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.grey[200]!),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Header
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF2B4469),
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(16),
+                              topRight: Radius.circular(16),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.person_add,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Text(
+                                  'Connect with Your Child',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: Colors.white,
+                                ),
+                                onPressed: isSubmitting
+                                    ? null
+                                    : () => Navigator.pop(context),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Content
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 600),
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Info Card
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade50,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.green.shade200,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.info_outline,
+                                        color: Colors.green.shade600,
+                                        size: 24,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          'Your child will need to accept the connection',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.green.shade800,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+
+                                // Student WMSU ID Field
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Student WMSU ID',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.grey.shade800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: wmsuIdController,
+                                      enabled: !isSubmitting,
+                                      decoration: InputDecoration(
+                                        hintText: 'Enter student ID number',
+                                        hintStyle: TextStyle(
+                                          color: Colors.grey.shade400,
+                                        ),
+                                        prefixIcon: Icon(
+                                          Icons.badge_outlined,
+                                          color: wmsuIdError != null
+                                              ? Colors.red
+                                              : Colors.grey.shade600,
+                                        ),
+                                        filled: true,
+                                        fillColor: isSubmitting
+                                            ? Colors.grey.shade100
+                                            : Colors.grey.shade50,
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.grey.shade300,
+                                          ),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: wmsuIdError != null
+                                                ? Colors.red
+                                                : Colors.grey.shade300,
+                                          ),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: wmsuIdError != null
+                                                ? Colors.red
+                                                : const Color(0xFF2B4469),
+                                            width: 2,
+                                          ),
+                                        ),
+                                        errorText: wmsuIdError,
+                                        errorStyle: const TextStyle(
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      onChanged: (value) {
+                                        if (wmsuIdError != null) {
+                                          setModalState(() {
+                                            wmsuIdError = null;
+                                          });
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 20),
+
+                                // Relationship Dropdown
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Relationship Type',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.grey.shade800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    DropdownButtonFormField<String>(
+                                      value: selectedRelationship,
+                                      decoration: InputDecoration(
+                                        filled: true,
+                                        fillColor: isSubmitting
+                                            ? Colors.grey.shade100
+                                            : Colors.grey.shade50,
+                                        prefixIcon: Icon(
+                                          Icons.family_restroom_outlined,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.grey.shade300,
+                                          ),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.grey.shade300,
+                                          ),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: const BorderSide(
+                                            color: Color(0xFF2B4469),
+                                            width: 2,
+                                          ),
+                                        ),
+                                      ),
+                                      items: [
+                                        DropdownMenuItem(
+                                          value: 'mother',
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.woman,
+                                                size: 18,
+                                                color: Colors.grey.shade700,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              const Text('Mother'),
+                                            ],
+                                          ),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: 'father',
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.man,
+                                                size: 18,
+                                                color: Colors.grey.shade700,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              const Text('Father'),
+                                            ],
+                                          ),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: 'guardian',
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.shield_outlined,
+                                                size: 18,
+                                                color: Colors.grey.shade700,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              const Text('Guardian'),
+                                            ],
+                                          ),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: 'other',
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.more_horiz,
+                                                size: 18,
+                                                color: Colors.grey.shade700,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              const Text('Other'),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                      onChanged: isSubmitting
+                                          ? null
+                                          : (value) {
+                                              setModalState(() {
+                                                selectedRelationship = value;
+                                              });
+                                            },
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 20),
+
+                                // Notes Field
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Notes (Optional)',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.grey.shade800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: notesController,
+                                      enabled: !isSubmitting,
+                                      maxLines: 3,
+                                      maxLength: 200,
+                                      decoration: InputDecoration(
+                                        hintText:
+                                            'Add any additional information (optional)',
+                                        hintStyle: TextStyle(
+                                          color: Colors.grey.shade400,
+                                        ),
+                                        filled: true,
+                                        fillColor: isSubmitting
+                                            ? Colors.grey.shade100
+                                            : Colors.grey.shade50,
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.grey.shade300,
+                                          ),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.grey.shade300,
+                                          ),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: const BorderSide(
+                                            color: Color(0xFF2B4469),
+                                            width: 2,
+                                          ),
+                                        ),
+                                        counterStyle: TextStyle(
+                                          color: Colors.grey.shade600,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 30),
+
+                                // Send Request Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: ElevatedButton(
+                                    onPressed: isSubmitting || isSuccess
+                                        ? null
+                                        : () async {
+                                            final wmsuId = wmsuIdController.text
+                                                .trim();
+                                            if (wmsuId.isEmpty) {
+                                              setModalState(() {
+                                                wmsuIdError =
+                                                    'Please enter student ID';
+                                              });
+                                              return;
+                                            }
+
+                                            // Start submitting
+                                            setModalState(() {
+                                              isSubmitting = true;
+                                              wmsuIdError = null;
+                                            });
+
+                                            // Send request
+                                            await _sendParentRequest(
+                                              context,
+                                              wmsuId,
+                                              selectedRelationship!,
+                                              notesController.text.trim(),
+                                            );
+
+                                            // Show success state briefly
+                                            if (context.mounted) {
+                                              setModalState(() {
+                                                isSubmitting = false;
+                                                isSuccess = true;
+                                              });
+
+                                              // Auto-close after showing success
+                                              await Future.delayed(
+                                                const Duration(
+                                                  milliseconds: 800,
+                                                ),
+                                              );
+                                              if (context.mounted) {
+                                                Navigator.pop(context);
+                                              }
+                                            }
+                                          },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: isSuccess
+                                          ? Colors.green
+                                          : const Color(0xFF2B4469),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      elevation: 2,
+                                      disabledBackgroundColor: isSuccess
+                                          ? Colors.green
+                                          : const Color(0xFF2B4469),
+                                    ),
+                                    child: isSubmitting
+                                        ? Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              const SizedBox(
+                                                width: 20,
+                                                height: 20,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      color: Colors.white,
+                                                      strokeWidth: 2.5,
+                                                    ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Text(
+                                                'SENDING REQUEST...',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 16,
+                                                  color: Colors.white
+                                                      .withOpacity(0.9),
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                        : isSuccess
+                                        ? const Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Icon(
+                                                Icons.check_circle,
+                                                color: Colors.white,
+                                                size: 20,
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'REQUEST SENT!',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                        : const Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Icon(
+                                                Icons.send,
+                                                color: Colors.white,
+                                                size: 20,
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'SEND REQUEST',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+
+                                // Cancel Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: OutlinedButton(
+                                    onPressed: isSubmitting
+                                        ? null
+                                        : () => Navigator.pop(context),
+                                    style: OutlinedButton.styleFrom(
+                                      side: BorderSide(
+                                        color: isSubmitting
+                                            ? Colors.grey.shade400
+                                            : const Color(0xFF2B4469),
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      'CANCEL',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 16,
+                                        color: isSubmitting
+                                            ? Colors.grey.shade400
+                                            : const Color(0xFF2B4469),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ✅ Update _sendParentRequest to increment the notifier
+  Future<void> _sendParentRequest(
+    BuildContext context,
+    String studentWmsuId,
+    String relationship,
+    String notes,
+  ) async {
+    try {
+      final studentResponse = await Supabase.instance.client
+          .from('users')
+          .select('id')
+          .eq('wmsu_id_number', studentWmsuId)
+          .eq('user_type', 'wmsu_student')
+          .maybeSingle();
+
+      if (studentResponse == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Student not found with that WMSU ID'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      final result = await Supabase.instance.client.rpc(
+        'send_parent_request',
+        params: {
+          'p_parent_id': userProfile!['id'],
+          'p_student_id': studentResponse['id'],
+          'p_relationship_type': relationship,
+          'p_notes': notes.isEmpty ? null : notes,
+        },
+      );
+
+      final response = result as Map<String, dynamic>;
+
+      if (response['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Connection request sent successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        // ✅ Refresh the data
+        _refreshRelationships();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response['error'] ?? 'Failed to send request'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  List<Widget> _buildDesktopEmployeeInfoItems(BuildContext context) {
+    return [
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.badge_outlined,
+        label: 'WMSU ID Number',
+        value: userProfile?['wmsu_id_number'] ?? 'Not assigned',
+        hasValue: userProfile?['wmsu_id_number'] != null,
+      ),
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.business_outlined,
+        label: 'College/Office',
+        value: userProfile?['wmsu_college'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_college'] != null,
+      ),
+      _buildDesktopCleanInfoItem(
+        context,
+        icon: Icons.work_outline,
+        label: 'Department',
+        value: userProfile?['wmsu_department'] ?? 'Not set',
+        hasValue: userProfile?['wmsu_department'] != null,
+        isLast: true,
+      ),
+    ];
+  }
+
+  void _showEditLabelDialogDesktop(
+    BuildContext context,
+    String studentId,
+    String studentName,
+    String? currentLabel, {
+    required bool isSidebarVisible,
+  }) {
+    final TextEditingController labelController = TextEditingController(
+      text: currentLabel ?? '',
+    );
+    bool isSaving = false;
+    bool isSuccess = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: !isSaving,
+      barrierColor: Colors.black.withOpacity(0.3),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          // Calculate position (same as send request modal)
+          final profileLeft = isSidebarVisible ? 284.0 : 84.0;
+          final profileWidth = 450.0;
+          final modalWidth = 420.0;
+          final centeredLeft = profileLeft + (profileWidth - modalWidth) / 2;
+
+          return Stack(
+            children: [
+              Positioned(
+                left: centeredLeft,
+                top: 200,
+                child: Material(
+                  elevation: 16,
+                  borderRadius: BorderRadius.circular(16),
+                  shadowColor: Colors.black.withOpacity(0.3),
+                  child: Container(
+                    width: 420,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.grey[200]!),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Header
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF2B4469),
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(16),
+                              topRight: Radius.circular(16),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.label_outlined,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Text(
+                                  'Set Custom Label',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: Colors.white,
+                                ),
+                                onPressed: isSaving
+                                    ? null
+                                    : () => Navigator.pop(context),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Content
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 500),
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Info Banner
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue.shade50,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.blue.shade200,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.info_outline,
+                                        color: Colors.blue.shade600,
+                                        size: 24,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Setting label for:',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.blue.shade700,
+                                              ),
+                                            ),
+                                            Text(
+                                              studentName,
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                                color: Colors.blue.shade900,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+
+                                // Custom Label Field
+                                Text(
+                                  'Custom Label',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey.shade800,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                TextField(
+                                  controller: labelController,
+                                  enabled: !isSaving,
+                                  maxLength: 50,
+                                  decoration: InputDecoration(
+                                    hintText:
+                                        'e.g., My Son, My Daughter, My Eldest',
+                                    hintStyle: TextStyle(
+                                      color: Colors.grey.shade400,
+                                    ),
+                                    prefixIcon: Icon(
+                                      Icons.label,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                    filled: true,
+                                    fillColor: isSaving
+                                        ? Colors.grey.shade100
+                                        : Colors.grey.shade50,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide(
+                                        color: Colors.grey.shade300,
+                                      ),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(
+                                        color: Color(0xFF2B4469),
+                                        width: 2,
+                                      ),
+                                    ),
+                                    helperText:
+                                        'Leave empty to use student\'s name',
+                                    helperStyle: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                // Quick Suggestions
+                                Text(
+                                  'Quick Suggestions',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey.shade800,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children:
+                                      [
+                                        'My Son',
+                                        'My Daughter',
+                                        'My Eldest',
+                                        'My Youngest',
+                                        'My Child',
+                                      ].map((suggestion) {
+                                        return InkWell(
+                                          onTap: isSaving
+                                              ? null
+                                              : () {
+                                                  setModalState(() {
+                                                    labelController.text =
+                                                        suggestion;
+                                                  });
+                                                },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 16,
+                                              vertical: 8,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.blue.shade50,
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                              border: Border.all(
+                                                color: Colors.blue.shade200,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              suggestion,
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: Colors.blue.shade700,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      }).toList(),
+                                ),
+                                const SizedBox(height: 30),
+
+                                // Save Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: ElevatedButton(
+                                    onPressed: isSaving || isSuccess
+                                        ? null
+                                        : () async {
+                                            setModalState(
+                                              () => isSaving = true,
+                                            );
+
+                                            await _updateStudentLabel(
+                                              context,
+                                              studentId,
+                                              labelController.text.trim(),
+                                            );
+
+                                            if (context.mounted) {
+                                              setModalState(() {
+                                                isSaving = false;
+                                                isSuccess = true;
+                                              });
+
+                                              await Future.delayed(
+                                                const Duration(
+                                                  milliseconds: 500,
+                                                ),
+                                              );
+                                              if (context.mounted) {
+                                                Navigator.pop(context);
+                                              }
+                                            }
+                                          },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: isSuccess
+                                          ? Colors.green
+                                          : const Color(0xFF2B4469),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      elevation: 2,
+                                      disabledBackgroundColor: isSuccess
+                                          ? Colors.green
+                                          : const Color(0xFF2B4469),
+                                    ),
+                                    child: isSaving
+                                        ? Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              const SizedBox(
+                                                width: 20,
+                                                height: 20,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      color: Colors.white,
+                                                      strokeWidth: 2.5,
+                                                    ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Text(
+                                                'SAVING...',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 16,
+                                                  color: Colors.white
+                                                      .withOpacity(0.9),
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                        : isSuccess
+                                        ? const Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Icon(
+                                                Icons.check_circle,
+                                                color: Colors.white,
+                                                size: 20,
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'SAVED!',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                        : const Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Icon(
+                                                Icons.save,
+                                                color: Colors.white,
+                                                size: 20,
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'SAVE LABEL',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+
+                                // Cancel Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: OutlinedButton(
+                                    onPressed: isSaving
+                                        ? null
+                                        : () => Navigator.pop(context),
+                                    style: OutlinedButton.styleFrom(
+                                      side: BorderSide(
+                                        color: isSaving
+                                            ? Colors.grey.shade400
+                                            : const Color(0xFF2B4469),
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      'CANCEL',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 16,
+                                        color: isSaving
+                                            ? Colors.grey.shade400
+                                            : const Color(0xFF2B4469),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ✅ MOBILE VERSION - Bottom Sheet with 90-95% width
+  void _showEditLabelDialogMobile(
+    BuildContext context,
+    String studentId,
+    String studentName,
+    String? currentLabel,
+  ) {
+    final TextEditingController labelController = TextEditingController(
+      text: currentLabel ?? '',
+    );
+    bool isSaving = false;
+    bool isSuccess = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: !isSaving,
+      enableDrag: !isSaving,
+      backgroundColor: Colors.transparent,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          // Get screen width
+          final screenWidth = MediaQuery.of(context).size.width;
+          final containerWidth = screenWidth * 0.95; // 95% of screen width
+
+          return Center(
+            child: Container(
+              width: containerWidth,
+              height: MediaQuery.of(context).size.height * 0.75,
+              margin: const EdgeInsets.symmetric(vertical: 40),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.all(Radius.circular(20)),
+              ),
+              child: Column(
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF2B4469),
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.label_outlined,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Set Custom Label',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: isSaving
+                              ? null
+                              : () => Navigator.pop(context),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Info Banner
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Colors.blue.shade600,
+                                  size: 24,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Setting label for:',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.blue.shade700,
+                                        ),
+                                      ),
+                                      Text(
+                                        studentName,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.blue.shade900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+
+                          // Custom Label Field
+                          Text(
+                            'Custom Label',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey.shade800,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: labelController,
+                            enabled: !isSaving,
+                            maxLength: 50,
+                            decoration: InputDecoration(
+                              hintText: 'e.g., My Son, My Daughter, My Eldest',
+                              prefixIcon: Icon(
+                                Icons.label,
+                                color: Colors.grey.shade600,
+                              ),
+                              filled: true,
+                              fillColor: isSaving
+                                  ? Colors.grey.shade100
+                                  : Colors.grey.shade50,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              helperText: 'Leave empty to use student\'s name',
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Quick Suggestions
+                          Text(
+                            'Quick Suggestions',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey.shade800,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children:
+                                [
+                                  'My Son',
+                                  'My Daughter',
+                                  'My Eldest',
+                                  'My Youngest',
+                                  'My Child',
+                                ].map((suggestion) {
+                                  return InkWell(
+                                    onTap: isSaving
+                                        ? null
+                                        : () {
+                                            setModalState(() {
+                                              labelController.text = suggestion;
+                                            });
+                                          },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.shade50,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: Colors.blue.shade200,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        suggestion,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: Colors.blue.shade700,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                          ),
+                          const SizedBox(height: 30),
+
+                          // Save Button
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: ElevatedButton(
+                              onPressed: isSaving || isSuccess
+                                  ? null
+                                  : () async {
+                                      setModalState(() => isSaving = true);
+
+                                      await _updateStudentLabel(
+                                        context,
+                                        studentId,
+                                        labelController.text.trim(),
+                                      );
+
+                                      if (context.mounted) {
+                                        setModalState(() {
+                                          isSaving = false;
+                                          isSuccess = true;
+                                        });
+
+                                        await Future.delayed(
+                                          const Duration(milliseconds: 500),
+                                        );
+                                        if (context.mounted) {
+                                          Navigator.pop(context);
+                                        }
+                                      }
+                                    },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isSuccess
+                                    ? Colors.green
+                                    : const Color(0xFF2B4469),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                disabledBackgroundColor: isSuccess
+                                    ? Colors.green
+                                    : const Color(0xFF2B4469),
+                              ),
+                              child: isSaving
+                                  ? Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            color: Colors.white,
+                                            strokeWidth: 2.5,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Text(
+                                          'SAVING...',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white.withOpacity(
+                                              0.9,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : isSuccess
+                                  ? const Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.check_circle,
+                                          color: Colors.white,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'SAVED!',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : const Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.save, color: Colors.white),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'SAVE LABEL',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+
+                          // Cancel Button
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: OutlinedButton(
+                              onPressed: isSaving
+                                  ? null
+                                  : () => Navigator.pop(context),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(
+                                  color: isSaving
+                                      ? Colors.grey.shade400
+                                      : const Color(0xFF2B4469),
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child: Text(
+                                'CANCEL',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: isSaving
+                                      ? Colors.grey.shade400
+                                      : const Color(0xFF2B4469),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ✅ UPDATE: Modified _updateStudentLabel to trigger setState for real-time update
+  Future<void> _updateStudentLabel(
+    BuildContext context,
+    String studentId,
+    String customLabel,
+  ) async {
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'update_student_custom_label',
+        params: {
+          'p_parent_id': userProfile!['id'],
+          'p_student_id': studentId,
+          'p_custom_label': customLabel,
+        },
+      );
+
+      final response = result as Map<String, dynamic>;
+
+      if (response['success'] == true) {
+        // ✅ Refresh relationships immediately for real-time update
+        _refreshRelationships();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              customLabel.isEmpty
+                  ? 'Label removed'
+                  : 'Label updated to "$customLabel"',
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response['error'] ?? 'Failed to update label'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 }
 

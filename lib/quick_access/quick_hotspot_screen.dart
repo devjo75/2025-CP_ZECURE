@@ -23,6 +23,8 @@ class HotspotQuickAccessWidgets {
     required Function(Map<String, dynamic>) onNavigateToHotspot,
     required Function(Map<String, dynamic>) onShowOnMap,
     required VoidCallback onClearFilters,
+    DateTime? crimeStartDate,
+    DateTime? crimeEndDate,
   }) {
     final filteredAndSortedHotspots =
         HotspotQuickAccessUtils.getFilteredAndSortedHotspots(

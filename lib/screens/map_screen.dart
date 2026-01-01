@@ -170,6 +170,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   StreamSubscription? _locationSharingSubscription;
   Timer? _locationUpdateTimer;
 
+  // Add these with your existing location sharing variables
+  List<Map<String, dynamic>> _sharedFamilyLocations = []; // ✅ NEW
+  Timer?
+  _familyLocationTimer; // ✅ NEW (using Timer instead of StreamSubscription)
+
   // ADD: ROUTE TRACKING
   List<LatLng> _routePoints = []; // Only for directions/safe routes
   bool _hasActiveRoute = false;
@@ -706,13 +711,20 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       }
     });
 
-    // ✅ ADD THIS: Start marker update timer
+    // ✅ Marker update timer
     _markerUpdateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
       if (mounted && _sharedLocations.isNotEmpty) {
         setState(() {
           // This triggers a rebuild to update "time ago" text
         });
         print('🔄 Marker timestamps updated');
+      }
+    });
+
+    // ✅ NEW: Initialize family location sharing after profile loads
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_userProfile != null) {
+        _initializeFamilyLocationSharing();
       }
     });
   }
@@ -1009,6 +1021,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _locationSharingSubscription?.cancel();
     _locationSharingSubscription = null;
 
+    _familyLocationTimer
+        ?.cancel(); // ✅ CHANGED from _familyLocationSubscription
+    _familyLocationTimer = null; // ✅ CHANGED from _familyLocationSubscription
+
     _locationUpdateTimer?.cancel();
     _locationUpdateTimer = null;
 
@@ -1262,6 +1278,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
     // ✅ Cancel location subscriptions FIRST
     _locationSharingSubscription?.cancel();
+    _familyLocationTimer?.cancel();
     _locationUpdateTimer?.cancel();
 
     // ✅ Unsubscribe from all channels
@@ -4715,15 +4732,15 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   void _setupLocationSharingRealtime() {
     print('🔄 Setting up location sharing real-time subscription');
 
+    // ✅ EXISTING: Officers/Admins location sharing
     _locationSharingSubscription = Supabase.instance.client
         .from('users')
         .stream(primaryKey: ['id'])
-        .inFilter('role', ['officer', 'admin']) // Listen to officers/admins
+        .inFilter('role', ['officer', 'admin'])
         .listen((List<Map<String, dynamic>> data) {
           if (!mounted) return;
 
           setState(() {
-            // ✅ CRITICAL FIX: Filter AFTER receiving data
             _sharedLocations = data.where((user) {
               final isOfficerOrAdmin =
                   user['role'] == 'officer' || user['role'] == 'admin';
@@ -4731,31 +4748,108 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               final hasLocation =
                   user['current_latitude'] != null &&
                   user['current_longitude'] != null;
-              final isSharing =
-                  user['is_sharing_location'] == true; // ✅ KEY CHECK
+              final isSharing = user['is_sharing_location'] == true;
 
-              final shouldShow =
-                  isOfficerOrAdmin &&
+              return isOfficerOrAdmin &&
                   isNotCurrentUser &&
                   hasLocation &&
                   isSharing;
-
-              // Debug logging
-              if (isOfficerOrAdmin && isNotCurrentUser) {
-                print(
-                  '📍 User ${user['first_name']} ${user['last_name']}: '
-                  'sharing=$isSharing, hasLocation=$hasLocation, showing=$shouldShow',
-                );
-              }
-
-              return shouldShow;
             }).toList();
           });
 
           print(
-            '✅ Location sharing updated: ${_sharedLocations.length} users visible',
+            '✅ Officer/Admin locations updated: ${_sharedLocations.length} users',
           );
         });
+
+    // ✅ NEW: Family location sharing (parents see children, children see parents)
+    _setupFamilyLocationSharing();
+  }
+
+  void _setupFamilyLocationSharing() {
+    if (_userProfile == null) return;
+
+    final userType = _userProfile!['user_type'];
+
+    if (userType != 'wmsu_parent' && userType != 'wmsu_student') {
+      return;
+    }
+
+    print('🔄 Setting up family location polling for $userType');
+
+    // Initial fetch
+    _fetchFamilyLocations();
+
+    // Poll every 5 seconds
+    _familyLocationTimer?.cancel();
+    _familyLocationTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      _fetchFamilyLocations();
+    });
+  }
+
+  // ✅ NEW: Fetch family locations
+  Future<void> _fetchFamilyLocations() async {
+    if (_userProfile == null || !mounted) return;
+
+    try {
+      final userType = _userProfile!['user_type'];
+      final userId = _userProfile!['id'];
+
+      print('🔍 Fetching family locations for $userType (ID: $userId)');
+
+      List<dynamic> familyMembers = [];
+
+      if (userType == 'wmsu_parent') {
+        print('📞 Calling get_parent_students RPC...');
+        familyMembers = await Supabase.instance.client.rpc(
+          'get_parent_students',
+          params: {'parent_uuid': userId},
+        );
+        print('📥 Received ${familyMembers.length} students');
+      } else if (userType == 'wmsu_student') {
+        print('📞 Calling get_student_parents RPC...');
+        familyMembers = await Supabase.instance.client.rpc(
+          'get_student_parents',
+          params: {'student_uuid': userId},
+        );
+        print('📥 Received ${familyMembers.length} parents');
+      }
+
+      if (!mounted) return;
+
+      final filtered = familyMembers.where((user) {
+        final hasLocation =
+            user['current_latitude'] != null &&
+            user['current_longitude'] != null;
+        final isSharing = user['is_sharing_location'] == true;
+
+        // ✅ Log the custom_label and relationship_type for debugging
+        print('👤 User: ${user['student_name'] ?? user['parent_name']}');
+        print('   - Custom Label: ${user['custom_label']}');
+        print('   - Relationship: ${user['relationship_type']}');
+        print('   - Has location: $hasLocation');
+        print('   - Is sharing: $isSharing');
+
+        return hasLocation && isSharing;
+      }).toList();
+
+      setState(() {
+        _sharedFamilyLocations = filtered
+            .map((user) => user as Map<String, dynamic>)
+            .toList();
+      });
+
+      print(
+        '✅ Family locations updated: ${_sharedFamilyLocations.length} members visible',
+      );
+    } catch (e, stackTrace) {
+      print('❌ Error fetching family locations: $e');
+      print('Stack trace: $stackTrace');
+    }
   }
 
   // Add this method to update your own location in the database
@@ -12303,6 +12397,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
     // ✅ STEP 3: Cancel subscriptions
     _locationSharingSubscription?.cancel();
+    _familyLocationTimer?.cancel();
     _locationUpdateTimer?.cancel();
 
     // ✅ STEP 4: Clean up all channels
@@ -17543,6 +17638,206 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                         ),
                                       ],
                                     ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+
+                // ✅ Family location markers with custom labels and relationship types
+                MarkerLayer(
+                  markers: _sharedFamilyLocations.map((user) {
+                    final latitude = user['current_latitude'] as double;
+                    final longitude = user['current_longitude'] as double;
+                    final point = LatLng(latitude, longitude);
+                    final profilePictureUrl = user['profile_picture_url'];
+                    final firstName = user['first_name'] ?? 'User';
+                    final lastName = user['last_name'] ?? '';
+                    final userType = user['user_type'] ?? 'wmsu_student';
+
+                    // ✅ Get custom label and relationship type
+                    final customLabel = user['custom_label'];
+                    final relationshipType = user['relationship_type'];
+
+                    // Determine if it's a parent or student
+                    final isParent = userType == 'wmsu_parent';
+                    final isActive = _isUserActive(user);
+
+                    // ✅ Determine what label to show
+                    String displayLabel;
+                    String roleLabel;
+
+                    if (isParent) {
+                      // For parents: Show relationship type (Father, Mother, Guardian)
+                      displayLabel = relationshipType != null
+                          ? relationshipType
+                                    .toString()
+                                    .substring(0, 1)
+                                    .toUpperCase() +
+                                relationshipType.toString().substring(1)
+                          : 'Parent';
+                      roleLabel = displayLabel;
+                    } else {
+                      // For students: Show custom label if exists, otherwise first name
+                      displayLabel = customLabel?.toString().isNotEmpty == true
+                          ? customLabel
+                          : '$firstName ${lastName.isNotEmpty ? lastName[0] : ''}.';
+                      roleLabel = 'Student';
+                    }
+
+                    // Different colors for parents vs students
+                    final Color primaryColor = isActive
+                        ? (isParent
+                              ? Colors.purple.shade600
+                              : Colors.orange.shade600)
+                        : Colors.grey.shade400;
+
+                    final Color glowColor = isActive
+                        ? (isParent ? Colors.purple : Colors.orange)
+                        : Colors.grey;
+
+                    return Marker(
+                      point: point,
+                      width: 100,
+                      height: 100,
+                      child: GestureDetector(
+                        onTap: () => _showFamilyLocationDetails(user),
+                        child: Transform.rotate(
+                          angle: -_currentMapRotation * pi / 180,
+                          alignment: Alignment.center,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Profile circle
+                              Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  if (isActive)
+                                    Container(
+                                      width: 46,
+                                      height: 46,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: glowColor.withOpacity(0.2),
+                                      ),
+                                    ),
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.white,
+                                      border: Border.all(
+                                        color: primaryColor,
+                                        width: 2.5,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.25),
+                                          blurRadius: 4,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: ClipOval(
+                                      child:
+                                          profilePictureUrl != null &&
+                                              profilePictureUrl.isNotEmpty
+                                          ? Image.network(
+                                              profilePictureUrl,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (_, __, ___) =>
+                                                  Icon(
+                                                    Icons.person,
+                                                    size: 18,
+                                                    color: primaryColor,
+                                                  ),
+                                            )
+                                          : Icon(
+                                              Icons.person,
+                                              size: 18,
+                                              color: primaryColor,
+                                            ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: Container(
+                                      width: 14,
+                                      height: 14,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: primaryColor,
+                                        border: Border.all(
+                                          color: Colors.white,
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        isParent
+                                            ? Icons.family_restroom
+                                            : Icons.school,
+                                        size: 8,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              // ✅ Updated label showing custom label or relationship
+                              Container(
+                                constraints: const BoxConstraints(maxWidth: 90),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: isActive
+                                        ? (isParent
+                                              ? Colors.purple.shade300
+                                              : Colors.orange.shade300)
+                                        : Colors.grey.shade300,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Main display label
+                                    Text(
+                                      displayLabel,
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                        color: isActive
+                                            ? (isParent
+                                                  ? Colors.purple.shade700
+                                                  : Colors.orange.shade700)
+                                            : Colors.grey.shade600,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                    ),
+                                    // Role label (Student/Father/Mother/etc)
+                                    if (!isParent) // Only show "Student" for students
+                                      Text(
+                                        roleLabel,
+                                        style: TextStyle(
+                                          fontSize: 7,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -27484,6 +27779,193 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
+  void _showFamilyLocationDetails(Map<String, dynamic> user) {
+    final firstName = user['first_name'] ?? 'User';
+    final lastName = user['last_name'] ?? '';
+    final middleName = user['middle_name'] ?? '';
+    final userType = user['user_type'] ?? 'wmsu_student';
+    final wmsuId = user['student_wmsu_id'] ?? user['wmsu_id_number'];
+    final lastUpdate = DateTime.tryParse(user['last_location_update'] ?? '');
+
+    // ✅ Get custom label and relationship type
+    final customLabel = user['custom_label'];
+    final relationshipType = user['relationship_type'];
+
+    final isParent = userType == 'wmsu_parent';
+
+    // ✅ Determine role label to display
+    String roleLabel;
+    if (isParent) {
+      // For parents: Show relationship type
+      roleLabel = relationshipType != null
+          ? relationshipType.toString().substring(0, 1).toUpperCase() +
+                relationshipType.toString().substring(1)
+          : 'Parent';
+    } else {
+      // For students: Always show "Student"
+      roleLabel = 'Student';
+    }
+
+    final roleColor = isParent ? Colors.purple : Colors.orange;
+
+    String timeAgo = 'Unknown';
+    if (lastUpdate != null) {
+      final difference = DateTime.now().difference(lastUpdate);
+      if (difference.inMinutes < 1) {
+        timeAgo = 'Just now';
+      } else if (difference.inMinutes < 60) {
+        timeAgo = '${difference.inMinutes}m ago';
+      } else if (difference.inHours < 24) {
+        timeAgo = '${difference.inHours}h ago';
+      } else {
+        timeAgo = '${difference.inDays}d ago';
+      }
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Profile photo
+            if (user['profile_picture_url'] != null)
+              CircleAvatar(
+                radius: 40,
+                backgroundImage: NetworkImage(user['profile_picture_url']),
+              )
+            else
+              CircleAvatar(
+                radius: 40,
+                backgroundColor: roleColor.shade100,
+                child: Icon(
+                  isParent ? Icons.family_restroom : Icons.school,
+                  size: 40,
+                  color: roleColor.shade600,
+                ),
+              ),
+
+            const SizedBox(height: 12),
+
+            // ✅ Name with custom label if student
+            Column(
+              children: [
+                Text(
+                  '$firstName ${middleName.isNotEmpty ? '$middleName ' : ''}$lastName',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                // ✅ Show custom label below name for students
+                if (!isParent && customLabel?.toString().isNotEmpty == true)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      '"$customLabel"',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontStyle: FontStyle.italic,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            // ✅ Role badge showing relationship type or "Student"
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: roleColor.shade50,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: roleColor.shade300),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isParent ? Icons.family_restroom : Icons.school,
+                    size: 16,
+                    color: roleColor.shade700,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    roleLabel.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: roleColor.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // WMSU ID
+            if (wmsuId != null)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.badge, size: 16, color: Colors.grey[600]),
+                  const SizedBox(width: 4),
+                  Text(
+                    'WMSU ID: $wmsuId',
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+
+            const SizedBox(height: 12),
+
+            // Last update time
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
+                const SizedBox(width: 4),
+                Text(
+                  'Updated $timeAgo',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildInfoRow(IconData icon, String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -27592,6 +28074,68 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
 
     return items;
+  }
+
+  Future<void> _initializeFamilyLocationSharing() async {
+    if (_userProfile == null) return;
+
+    final userType = _userProfile!['user_type'];
+
+    // Only for parents and students
+    if (userType != 'wmsu_parent' && userType != 'wmsu_student') {
+      print(
+        'ℹ️ User is not parent or student, skipping family location sharing',
+      );
+      return;
+    }
+
+    print('🔄 Initializing family location sharing for $userType');
+
+    // Check if user has accepted relationships
+    final hasRelationships = await _checkHasAcceptedRelationships();
+
+    if (hasRelationships) {
+      // Auto-enable location sharing for family
+      await Supabase.instance.client
+          .from('users')
+          .update({'is_sharing_location': true})
+          .eq('id', _userProfile!['id']);
+
+      print('✅ Location sharing auto-enabled for family');
+
+      // Update ProfileScreen state if it exists
+      _profileScreen.updateLocationSharingState(true);
+    }
+
+    // Start fetching family locations
+    _setupFamilyLocationSharing();
+  }
+
+  // ✅ NEW: Check if user has accepted relationships
+  Future<bool> _checkHasAcceptedRelationships() async {
+    if (_userProfile == null) return false;
+
+    try {
+      final userType = _userProfile!['user_type'];
+      List<dynamic> relationships = [];
+
+      if (userType == 'wmsu_parent') {
+        relationships = await Supabase.instance.client.rpc(
+          'get_parent_students',
+          params: {'parent_uuid': _userProfile!['id']},
+        );
+      } else if (userType == 'wmsu_student') {
+        relationships = await Supabase.instance.client.rpc(
+          'get_student_parents',
+          params: {'student_uuid': _userProfile!['id']},
+        );
+      }
+
+      return relationships.isNotEmpty;
+    } catch (e) {
+      print('❌ Error checking relationships: $e');
+      return false;
+    }
   }
 }
 

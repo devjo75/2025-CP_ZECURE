@@ -34,34 +34,131 @@ class HotspotQuickAccessUtils {
     required LatLng? currentPosition,
     required Map<String, dynamic>? userProfile,
     required bool isAdmin,
+    DateTime? crimeStartDate,
+    DateTime? crimeEndDate,
   }) {
+    final currentUserId = userProfile?['id'];
+    final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
+    final hasCustomDateRange = crimeStartDate != null && crimeEndDate != null;
+
     List<Map<String, dynamic>> filtered = hotspots.where((hotspot) {
       final status = hotspot['status'] ?? 'pending';
       final activeStatus = hotspot['active_status'] ?? 'active';
-      final currentUserId = userProfile?['id'];
       final createdBy = hotspot['created_by'];
       final reportedBy = hotspot['reported_by'];
       final isOwnHotspot =
           currentUserId != null &&
           (currentUserId == createdBy || currentUserId == reportedBy);
       final crimeTypeName = hotspot['crime_type']?['name'];
+      final userHasSupported = hotspot['user_has_supported'] ?? false;
 
-      // Base visibility rules (same as map)
-      if (isAdmin) {
-        // Admin sees everything, apply filter on top
-      } else {
-        if (status == 'approved' && activeStatus == 'active') {
-          // Show approved to everyone
-        } else if (status == 'pending' && currentUserId != null) {
-          // Show pending to authenticated users for voting
-        } else if (isOwnHotspot && currentUserId != null) {
-          // Show own hotspots regardless of status
-        } else {
-          return false; // Hide everything else
+      // ✅ Use incident time (not creation time) for 30-day rule
+      final incidentTime = DateTime.tryParse(hotspot['time'] ?? '');
+      final isRecent =
+          incidentTime != null && incidentTime.isAfter(thirtyDaysAgo);
+
+      // ✅ STEP 1: Apply custom date range filter (if active)
+      if (hasCustomDateRange) {
+        final hotspotDateStr = hotspot['time'] ?? hotspot['created_at'];
+        if (hotspotDateStr != null) {
+          final hotspotDate = DateTime.tryParse(hotspotDateStr);
+          if (hotspotDate != null) {
+            final hotspotDateOnly = DateTime(
+              hotspotDate.year,
+              hotspotDate.month,
+              hotspotDate.day,
+            );
+
+            final startDateOnly = DateTime(
+              crimeStartDate.year,
+              crimeStartDate.month,
+              crimeStartDate.day,
+            );
+
+            final endDateOnly = DateTime(
+              crimeEndDate.year,
+              crimeEndDate.month,
+              crimeEndDate.day,
+            );
+            final endOfDay = endDateOnly.add(const Duration(days: 1));
+
+            // Outside the date range - hide unless pending to authorized user
+            if (hotspotDateOnly.isBefore(startDateOnly) ||
+                hotspotDateOnly.isAfter(endOfDay) ||
+                hotspotDateOnly.isAtSameMomentAs(endOfDay)) {
+              // Exception: pending hotspots visible to owner/supporter regardless of date
+              if (status == 'pending' && (isOwnHotspot || userHasSupported)) {
+                // Continue to other checks
+              } else {
+                return false; // Outside date range
+              }
+            }
+          }
         }
       }
 
-      // Apply status filters
+      // ✅ STEP 2: Base visibility rules (same as map marker layer)
+      if (isAdmin) {
+        // Admin visibility rules
+        if (!hasCustomDateRange) {
+          // Pending: Always show to admin
+          if (status == 'pending') {
+            // Continue to other checks
+          }
+          // Rejected: Apply 30-day rule even for admin
+          else if (status == 'rejected') {
+            if (!isRecent) {
+              return false;
+            }
+          }
+          // Approved Active: ✅ ALWAYS visible (no 30-day rule)
+          else if (status == 'approved' && activeStatus == 'active') {
+            // Always show - no restriction
+          }
+          // Approved Inactive: Apply 30-day rule
+          else if (status == 'approved' && activeStatus == 'inactive') {
+            if (!isRecent) {
+              return false;
+            }
+          }
+        }
+        // If custom date range is active, admin sees everything within range
+      } else {
+        // Regular users (non-admin)
+
+        // Pending: Show to owner or supporter only
+        if (status == 'pending') {
+          if (!(isOwnHotspot || userHasSupported)) {
+            return false;
+          }
+        }
+        // Rejected: Only show to owner + apply 30-day rule (unless custom date range)
+        else if (status == 'rejected') {
+          if (!isOwnHotspot) {
+            return false;
+          }
+          // ✅ Apply 30-day rule for rejected (unless custom date range)
+          if (!hasCustomDateRange && !isRecent) {
+            return false;
+          }
+        }
+        // Approved Active: ✅ ALWAYS visible to all users (no 30-day rule)
+        else if (status == 'approved' && activeStatus == 'active') {
+          // Always show - no restriction
+        }
+        // Approved Inactive: Apply 30-day rule (unless custom date range)
+        else if (status == 'approved' && activeStatus == 'inactive') {
+          if (!hasCustomDateRange && !isRecent) {
+            return false;
+          }
+        }
+        // Other statuses: hide
+        else {
+          return false;
+        }
+      }
+
+      // ✅ STEP 3: Apply status filters (from UI filter dropdown)
       switch (filter) {
         case 'pending':
           if (status != 'pending') return false;
@@ -92,7 +189,7 @@ class HotspotQuickAccessUtils {
           break;
       }
 
-      // Apply crime type filter
+      // ✅ STEP 4: Apply crime type filter
       if (selectedCrimeType != null && crimeTypeName != selectedCrimeType) {
         return false;
       }
@@ -100,7 +197,7 @@ class HotspotQuickAccessUtils {
       return true;
     }).toList();
 
-    // Sort the filtered results
+    // ✅ STEP 5: Sort the filtered results
     filtered.sort((a, b) {
       switch (sortBy) {
         case 'distance':
@@ -152,9 +249,11 @@ class HotspotQuickAccessUtils {
 
         case 'date':
           final dateA =
-              DateTime.tryParse(a['created_at'] ?? '') ?? DateTime(1970);
+              DateTime.tryParse(a['time'] ?? a['created_at'] ?? '') ??
+              DateTime(1970);
           final dateB =
-              DateTime.tryParse(b['created_at'] ?? '') ?? DateTime(1970);
+              DateTime.tryParse(b['time'] ?? b['created_at'] ?? '') ??
+              DateTime(1970);
           return dateB.compareTo(dateA); // Newest first
 
         default:
