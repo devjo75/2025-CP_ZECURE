@@ -142,10 +142,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       builder: (BuildContext context) {
         return Dialog(
           insetPadding: EdgeInsets.symmetric(
-            horizontal: isWeb
-                ? MediaQuery.of(context).size.width * 0.25
-                : // 50% width on web
-                  20, // Keep mobile padding
+            horizontal: isWeb ? MediaQuery.of(context).size.width * 0.25 : 20,
             vertical: 40,
           ),
           shape: RoundedRectangleBorder(
@@ -154,14 +151,12 @@ class _RegisterScreenState extends State<RegisterScreen>
           child: Container(
             constraints: BoxConstraints(
               maxHeight: 600,
-              maxWidth: isWeb
-                  ? 600
-                  : double.infinity, // Max width constraint for web
+              maxWidth: isWeb ? 600 : double.infinity,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Header - keep existing code
+                // Header
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
@@ -200,80 +195,117 @@ class _RegisterScreenState extends State<RegisterScreen>
                   ),
                 ),
 
-                // Content - keep existing scrollable content
+                // Content
                 Expanded(
                   child: SingleChildScrollView(
-                    padding: EdgeInsets.all(
-                      isWeb ? 24 : 20,
-                    ), // Slightly more padding on web
+                    padding: EdgeInsets.all(isWeb ? 24 : 20),
                     child: Text(
                       '''Welcome to Zecure
 
 By creating an account and using Zecure, you agree to the following terms and conditions:
 
 1. SERVICE DESCRIPTION
-Zecure is an AI-powered crime monitoring platform designed to enhance public safety in Zamboanga City by:
-- Collecting and analyzing crime-related data from public sources
-- Identifying crime hotspots and patterns in real-time
-- Providing safety alerts and recommendations to users
-- Enabling community reporting of incidents and safe locations
-- Offering route recommendations based on safety data
+Zecure is a cross-platform crime reporting and mapping system designed to enhance public safety in Zamboanga City by:
+- Providing a centralized platform for submitting geo-located crime and incident reports
+- Enabling police verification of submitted reports before public display
+- Displaying verified crime incidents and safe spots on an interactive map
+- Offering discussion threads attached to verified reports for community engagement
+- Providing safe route recommendations that avoid high-risk areas
+- Delivering real-time push notifications about verified incidents near your location
+- Allowing citizens to mark and share safe spot locations
 
 2. USER RESPONSIBILITIES
 You agree to:
-- Provide accurate and truthful information during registration
-- Use the platform responsibly and in accordance with local laws
+- Provide accurate and truthful information during registration and when submitting reports
+- Use standardized crime classification and severity selection when reporting incidents
 - Report incidents truthfully and in good faith
+- Use the platform responsibly and in accordance with local laws
 - Respect the privacy and safety of other users
-- Not misuse the platform for illegal activities or false reporting
+- Not misuse the platform for illegal activities, false reporting, or harassment
+- Participate constructively in discussion threads attached to verified reports
+- Not submit duplicate reports for the same incident
 
 3. DATA COLLECTION AND PRIVACY
 - We collect personal information necessary for account creation and service provision
-- Crime-related data is gathered from publicly available sources
-- Your location data may be used to provide relevant safety information
+- Crime and incident data is collected from user reports and historical crime data
+- Your location data is used to provide geo-located reporting, safe route planning, and proximity-based alerts
 - We implement security measures to protect your personal information
-- User-reported data may be shared with relevant authorities when necessary
+- User-reported data undergoes police verification before public display
+- Verified reports and related discussions may be visible to all users
+- Relevant information may be shared with law enforcement agencies when necessary
 
-4. PLATFORM LIMITATIONS
+4. REPORTING AND VERIFICATION PROCESS
+- All submitted crime reports require police verification before appearing on the public map
+- Police officers have the authority to approve, reject, or modify submitted reports
+- The system includes duplicate detection to prevent multiple reports of the same incident
+- Only police-verified incidents will be displayed on the public crime map
+- Report accuracy depends on the quality of citizen submissions and police verification
+
+5. PLATFORM LIMITATIONS
 Please understand that Zecure:
-- Provides predictive analysis but cannot prevent crimes
-- Relies on publicly available data which may have limitations
-- Requires internet connectivity for full functionality
-- May not capture all criminal activities or safety concerns
-- Accuracy depends on data quality and user participation
+- Does not predict future crimes or prevent criminal activities
+- Relies on user reports and police verification, which may have delays
+- Requires internet connectivity for real-time features and notifications
+- Map accuracy depends entirely on police verification and citizen report accuracy
+- May not capture all criminal activities or safety concerns in Zamboanga City
+- Effectiveness depends on active citizen participation in reporting and safe spot marking
+- Is currently available on Web and Android only (iOS not supported)
 
-5. COMMUNITY PARTICIPATION
-By using Zecure, you may:
-- Report incidents and safety concerns
-- Mark and verify safe locations
-- Contribute to community safety awareness
-- Receive alerts about potential safety risks in your area
+6. COMMUNITY PARTICIPATION FEATURES
+By using Zecure, you can:
+- Submit geo-located crime and incident reports with standardized classifications
+- Participate in structured discussion threads attached to verified reports
+- Share contextual information, additional details, and related experiences
+- Mark and verify safe spot locations for community benefit
+- Receive real-time notifications about verified incidents near your location
+- Access safe route recommendations based on verified crime data
+- View an interactive map of police-verified incidents and safe spots
 
-6. COOPERATION WITH AUTHORITIES
-- Relevant information may be shared with law enforcement agencies
-- Users are encouraged to report serious crimes directly to police
+7. COOPERATION WITH AUTHORITIES
+- All reports are reviewed and verified by police officers before public display
+- Relevant information will be shared with law enforcement agencies
+- Users are encouraged to report serious crimes directly to police through official channels (911)
 - The platform supplements but does not replace traditional emergency services
+- Emergency situations should always be reported to proper authorities immediately
 
-7. LIABILITY AND DISCLAIMERS
+8. SAFE ROUTE FEATURE
+- Safe route recommendations avoid areas with high crime rates and active incidents
+- Route suggestions are based on verified crime data and may change in real-time
+- Users are responsible for their own safety decisions when following route recommendations
+- The system cannot guarantee complete safety along any suggested route
+
+9. DISCUSSION THREADS AND COMMUNITY ENGAGEMENT
+- Discussion threads are tied to verified reports for focused, relevant conversations
+- Users must maintain respectful and constructive discourse in all discussions
+- False information, harassment, or inappropriate content in discussions may result in account suspension
+- Police and community members can provide official updates through discussion threads
+
+10. LIABILITY AND DISCLAIMERS
 - Zecure is provided "as is" without warranties
 - We are not liable for decisions made based on platform information
 - Users are responsible for their own safety and security
 - Emergency situations should always be reported to proper authorities
+- The platform does not guarantee crime prevention or personal safety
 
-8. TERMS MODIFICATIONS
-We reserve the right to modify these terms. Users will be notified of significant changes and continued use implies acceptance.
+11. TERMS MODIFICATIONS
+We reserve the right to modify these terms. Users will be notified of significant changes and continued use implies acceptance of the updated terms.
 
-9. ACCOUNT TERMINATION
-We may suspend or terminate accounts that violate these terms or engage in harmful activities.
+12. ACCOUNT TERMINATION
+We may suspend or terminate accounts that:
+- Submit false or misleading reports
+- Violate these terms and conditions
+- Engage in harmful activities or harassment
+- Misuse the platform for illegal purposes
 
-10. CONTACT INFORMATION
-For questions about these terms or the platform, please contact our support team.
+13. CONTACT INFORMATION
+For questions about these terms or the platform, please contact our support team through the application.
 
-By clicking "I Agree," you acknowledge that you have read, understood, and agree to be bound by these Terms and Conditions.''',
+14. GEOGRAPHIC COVERAGE
+This service is specifically designed for Zamboanga City. Crime data, safe routes, and incident reporting are focused on this coverage area.
+
+By clicking "I Agree," you acknowledge that you have read, understood, and agree to be bound by these Terms and Conditions. You understand that Zecure is a community-driven platform that relies on police verification and citizen participation to enhance public safety in Zamboanga City.''',
                       style: GoogleFonts.poppins(
-                        fontSize: isWeb
-                            ? 14
-                            : 13, // Slightly larger text on web
+                        fontSize: isWeb ? 14 : 13,
                         height: 1.5,
                         color: Colors.grey.shade700,
                       ),
@@ -281,7 +313,7 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
                   ),
                 ),
 
-                // Footer buttons - keep existing
+                // Footer buttons
                 Container(
                   padding: EdgeInsets.all(isWeb ? 24 : 20),
                   decoration: BoxDecoration(
@@ -1069,7 +1101,7 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
         DropdownMenuItem(value: 'Male', child: Text('Male')),
         DropdownMenuItem(value: 'Female', child: Text('Female')),
         DropdownMenuItem(value: 'LGBTQ+', child: Text('LGBTQ+')),
-        DropdownMenuItem(value: 'Others', child: Text('Others')),
+        DropdownMenuItem(value: 'Others', child: Text('Prefer not to say')),
       ],
       onChanged: (value) => setState(() => _selectedGender = value),
       validator: (value) {
@@ -1085,8 +1117,6 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
   Widget build(BuildContext context) {
     final bool isWeb = MediaQuery.of(context).size.width > 600;
     final screenWidth = MediaQuery.of(context).size.width;
-
-    // Expanded max width for better screen utilization
     final double maxWidth = isWeb ? 550 : screenWidth * 0.92;
 
     return Scaffold(
@@ -1098,7 +1128,6 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
           ),
         ),
         child: Container(
-          // Blue tinted overlay to match your theme
           decoration: BoxDecoration(
             color: Colors.blue.shade50.withOpacity(0.2),
           ),
@@ -1106,40 +1135,29 @@ By clicking "I Agree," you acknowledge that you have read, understood, and agree
             child: LayoutBuilder(
               builder: (context, constraints) {
                 return SingleChildScrollView(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isWeb ? 32.0 : 16.0,
+                      vertical: 16.0,
                     ),
-                    child: IntrinsicHeight(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: isWeb ? 32.0 : 16.0,
-                          vertical: 16.0,
-                        ),
-                        child: Center(
-                          child: FadeTransition(
-                            opacity: _fadeAnimation,
-                            child: SlideTransition(
-                              position: _slideAnimation,
-                              child: Container(
-                                constraints: BoxConstraints(maxWidth: maxWidth),
-                                child: Column(
-                                  children: [
-                                    _buildHeader(isWeb),
-                                    SizedBox(height: isWeb ? 28 : 24),
-                                    // Show email verification screen or registration form
-                                    _showOTPScreen
-                                        ? _buildOTPScreen(isWeb)
-                                        : _buildRegistrationForm(isWeb),
-                                    SizedBox(height: isWeb ? 20 : 16),
-                                    // Only show footer when not showing email verification
-                                    if (!_showOTPScreen) _buildFooter(isWeb),
-                                    const SizedBox(
-                                      height: 16,
-                                    ), // Extra bottom padding
-                                  ],
-                                ),
-                              ),
+                    child: Center(
+                      child: FadeTransition(
+                        opacity: _fadeAnimation,
+                        child: SlideTransition(
+                          position: _slideAnimation,
+                          child: Container(
+                            constraints: BoxConstraints(maxWidth: maxWidth),
+                            child: Column(
+                              children: [
+                                _buildHeader(isWeb),
+                                SizedBox(height: isWeb ? 28 : 24),
+                                _showOTPScreen
+                                    ? _buildOTPScreen(isWeb)
+                                    : _buildRegistrationForm(isWeb),
+                                SizedBox(height: isWeb ? 20 : 16),
+                                if (!_showOTPScreen) _buildFooter(isWeb),
+                                const SizedBox(height: 16),
+                              ],
                             ),
                           ),
                         ),

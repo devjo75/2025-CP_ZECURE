@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use, duplicate_ignore
+
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -28,7 +30,9 @@ class _LandingScreenState extends State<LandingScreen>
   late PageController _pageController;
   int _currentPage = 0;
   Timer? _autoPlayTimer;
-
+  bool _showDevelopersModal = false;
+  PageController? _modalPageController; // ADD THIS
+  int _currentDeveloperIndex = 0; // ADD THIS
   @override
   void initState() {
     super.initState();
@@ -71,7 +75,7 @@ class _LandingScreenState extends State<LandingScreen>
     Future.delayed(const Duration(milliseconds: 600), () {
       if (mounted) _featureController.forward();
     });
-
+    _modalPageController = PageController();
     // Start auto-play
     _startAutoPlay();
   }
@@ -100,6 +104,7 @@ class _LandingScreenState extends State<LandingScreen>
     _featureController.dispose();
     _pageController.dispose();
     _stopAutoPlay();
+    _modalPageController?.dispose();
     super.dispose();
   }
 
@@ -163,62 +168,69 @@ class _LandingScreenState extends State<LandingScreen>
 
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      body: Container(
-        decoration: BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/images/LIGHT.jpg'),
-            fit: BoxFit.cover,
-            alignment: Alignment.center,
-          ),
-        ),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.blue.shade50.withOpacity(0.2),
-          ),
-          child: SafeArea(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isWeb ? 40.0 : 16.0,
-                  vertical: 12.0,
-                ),
-                child: Column(
-                  children: [
-                    // Hero Section
-                    FadeTransition(
-                      opacity: _fadeAnimation,
-                      child: SlideTransition(
-                        position: _slideAnimation,
-                        child: _buildHeroSection(isWeb, screenWidth),
-                      ),
+      body: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              image: DecorationImage(
+                image: AssetImage('assets/images/LIGHT.jpg'),
+                fit: BoxFit.cover,
+                alignment: Alignment.center,
+              ),
+            ),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50.withOpacity(0.2),
+              ),
+              child: SafeArea(
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isWeb ? 40.0 : 16.0,
+                      vertical: 12.0,
                     ),
-                    SizedBox(height: isWeb ? 60 : 40),
-                    // Enhanced Features Section with Carousel
-                    ScaleTransition(
-                      scale: _featureScaleAnimation,
-                      child: FadeTransition(
-                        opacity: _fadeAnimation,
-                        child: _buildEnhancedFeaturesSection(
-                          isWeb,
-                          screenWidth,
+                    child: Column(
+                      children: [
+                        // Hero Section
+                        FadeTransition(
+                          opacity: _fadeAnimation,
+                          child: SlideTransition(
+                            position: _slideAnimation,
+                            child: _buildHeroSection(isWeb, screenWidth),
+                          ),
                         ),
-                      ),
+                        SizedBox(height: isWeb ? 60 : 40),
+                        // Enhanced Features Section with Carousel
+                        ScaleTransition(
+                          scale: _featureScaleAnimation,
+                          child: FadeTransition(
+                            opacity: _fadeAnimation,
+                            child: _buildEnhancedFeaturesSection(
+                              isWeb,
+                              screenWidth,
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: isWeb ? 60 : 40),
+                        // Call to Action
+                        FadeTransition(
+                          opacity: _fadeAnimation,
+                          child: _buildCallToAction(isWeb, screenWidth),
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(height: isWeb ? 60 : 50),
+                        _buildFooter(isWeb, screenWidth, this),
+                      ],
                     ),
-                    SizedBox(height: isWeb ? 60 : 40),
-                    // Call to Action
-                    FadeTransition(
-                      opacity: _fadeAnimation,
-                      child: _buildCallToAction(isWeb, screenWidth),
-                    ),
-                    const SizedBox(height: 20),
-                    SizedBox(height: isWeb ? 60 : 50),
-                    _buildFooter(isWeb, screenWidth),
-                  ],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
+
+          // Developers Modal
+          if (_showDevelopersModal) _buildDevelopersModal(isWeb),
+        ],
       ),
     );
   }
@@ -715,9 +727,393 @@ class _LandingScreenState extends State<LandingScreen>
       ),
     );
   }
+
+  Widget _buildDevelopersModal(bool isWeb) {
+    final developers = [
+      {
+        'name': 'Venard Jhon C. Salido',
+        'role': 'Full Stack Developer',
+        'image': 'assets/images/venard.jpg',
+        'portfolio': 'https://venardjhoncsalido.free.nf/',
+      },
+      {
+        'name': 'Alekxiz T. Solis',
+        'role': 'Frontend Developer & Documentation',
+        'image': 'assets/images/alekxiz.jpg',
+        'portfolio': 'https://alekxizsolis.netlify.app/',
+      },
+      {
+        'name': 'Jo Louis B. Sardani',
+        'role': 'Frontend Developer & Documentation',
+        'image': 'assets/images/jo.jpg',
+        'portfolio': 'https://jolouis-portfolio.netlify.app/',
+      },
+    ];
+
+    // Initialize a fresh controller if needed
+    if (_modalPageController == null) {
+      _modalPageController = PageController(initialPage: 0);
+    }
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _showDevelopersModal = false;
+          _currentDeveloperIndex = 0;
+        });
+      },
+      child: Container(
+        color: Colors.black.withOpacity(0.7),
+        child: Center(
+          child: GestureDetector(
+            onTap: () {},
+            child: Container(
+              margin: EdgeInsets.symmetric(
+                horizontal: isWeb ? 60 : 20,
+                vertical: 20, // Add vertical margin
+              ),
+              constraints: BoxConstraints(
+                maxWidth: isWeb ? 500 : double.infinity,
+                maxHeight:
+                    MediaQuery.of(context).size.height *
+                    0.85, // Limit to 85% of screen height
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Header
+                  Container(
+                    padding: EdgeInsets.all(isWeb ? 20 : 16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.blue.shade600, Colors.purple.shade600],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(24),
+                        topRight: Radius.circular(24),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(isWeb ? 10 : 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.code_rounded,
+                            color: Colors.white,
+                            size: isWeb ? 24 : 20,
+                          ),
+                        ),
+                        SizedBox(width: isWeb ? 12 : 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Meet the Developers',
+                                style: GoogleFonts.poppins(
+                                  fontSize: isWeb ? 18 : 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              SizedBox(height: isWeb ? 2 : 1),
+                              Text(
+                                '${_currentDeveloperIndex + 1} of ${developers.length}',
+                                style: GoogleFonts.poppins(
+                                  fontSize: isWeb ? 12 : 11,
+                                  color: Colors.white.withOpacity(0.9),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () {
+                            setState(() {
+                              _showDevelopersModal = false;
+                              _currentDeveloperIndex = 0;
+                            });
+                          },
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                          ),
+                          iconSize: isWeb ? 24 : 22,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Developer Card with PageView - Make it flexible
+                  Flexible(
+                    fit: FlexFit.loose,
+                    child: PageView.builder(
+                      controller: _modalPageController,
+                      onPageChanged: (index) {
+                        setState(() {
+                          _currentDeveloperIndex = index;
+                        });
+                      },
+                      itemCount: developers.length,
+                      itemBuilder: (context, index) {
+                        return Padding(
+                          padding: EdgeInsets.all(isWeb ? 20 : 16),
+                          child: _buildDeveloperCard(developers[index], isWeb),
+                        );
+                      },
+                    ),
+                  ),
+
+                  // Navigation Controls
+                  Padding(
+                    padding: EdgeInsets.only(
+                      left: isWeb ? 20 : 16,
+                      right: isWeb ? 20 : 16,
+                      bottom: isWeb ? 20 : 16,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // Previous Button
+                        IconButton(
+                          onPressed: _currentDeveloperIndex > 0
+                              ? () {
+                                  if (_modalPageController != null &&
+                                      _modalPageController!.hasClients) {
+                                    _modalPageController!.previousPage(
+                                      duration: const Duration(
+                                        milliseconds: 300,
+                                      ),
+                                      curve: Curves.easeInOut,
+                                    );
+                                  }
+                                }
+                              : null,
+                          icon: Icon(
+                            Icons.chevron_left_rounded,
+                            color: _currentDeveloperIndex > 0
+                                ? Colors.blue.shade600
+                                : Colors.grey.shade300,
+                          ),
+                          iconSize: 32,
+                        ),
+
+                        // Page Indicators
+                        Row(
+                          children: List.generate(developers.length, (index) {
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 300),
+                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                              width: _currentDeveloperIndex == index ? 24 : 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _currentDeveloperIndex == index
+                                    ? Colors.blue.shade600
+                                    : Colors.grey.shade300,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            );
+                          }),
+                        ),
+
+                        // Next Button
+                        IconButton(
+                          onPressed:
+                              _currentDeveloperIndex < developers.length - 1
+                              ? () {
+                                  if (_modalPageController != null &&
+                                      _modalPageController!.hasClients) {
+                                    _modalPageController!.nextPage(
+                                      duration: const Duration(
+                                        milliseconds: 300,
+                                      ),
+                                      curve: Curves.easeInOut,
+                                    );
+                                  }
+                                }
+                              : null,
+                          icon: Icon(
+                            Icons.chevron_right_rounded,
+                            color:
+                                _currentDeveloperIndex < developers.length - 1
+                                ? Colors.blue.shade600
+                                : Colors.grey.shade300,
+                          ),
+                          iconSize: 32,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeveloperCard(Map<String, dynamic> developer, bool isWeb) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Calculate responsive image height based on available space
+        final availableHeight = constraints.maxHeight;
+        final imageHeight = (availableHeight * 0.7).clamp(
+          250.0,
+          450.0,
+        ); // Increased from 0.65 to 0.7
+
+        return SingleChildScrollView(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.grey.shade200, width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min, // Add this
+              children: [
+                // Photo
+                Container(
+                  height: imageHeight,
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(14),
+                      topRight: Radius.circular(14),
+                    ),
+                    child: Image.asset(
+                      developer['image'],
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      errorBuilder: (context, error, stackTrace) => Center(
+                        child: Icon(
+                          Icons.person_rounded,
+                          size: isWeb ? 70 : 60,
+                          color: Colors.white.withOpacity(0.7),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Info
+                Padding(
+                  padding: EdgeInsets.all(isWeb ? 18 : 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min, // Add this
+                    children: [
+                      Text(
+                        developer['name'],
+                        style: GoogleFonts.poppins(
+                          fontSize: isWeb ? 15 : 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade900,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      SizedBox(height: isWeb ? 6 : 4),
+                      Text(
+                        developer['role'],
+                        style: GoogleFonts.poppins(
+                          fontSize: isWeb ? 12 : 11,
+                          color: Colors.grey.shade600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      SizedBox(height: isWeb ? 14 : 10),
+
+                      // Portfolio Button - Full width on mobile
+                      SizedBox(
+                        width: double.infinity,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                Colors.blue.shade500,
+                                Colors.purple.shade500,
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () async {
+                                final uri = Uri.parse(developer['portfolio']);
+                                if (await canLaunchUrl(uri)) {
+                                  await launchUrl(
+                                    uri,
+                                    mode: LaunchMode.externalApplication,
+                                  );
+                                }
+                              },
+                              borderRadius: BorderRadius.circular(10),
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: isWeb ? 20 : 16,
+                                  vertical: isWeb ? 10 : 9,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.language_rounded,
+                                      color: Colors.white,
+                                      size: isWeb ? 16 : 15,
+                                    ),
+                                    SizedBox(width: isWeb ? 8 : 6),
+                                    Text(
+                                      'View Portfolio',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: isWeb ? 13 : 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
-Widget _buildFooter(bool isWeb, double screenWidth) {
+Widget _buildFooter(bool isWeb, double screenWidth, _LandingScreenState state) {
   final double maxWidth = isWeb ? 600 : screenWidth * 0.95;
 
   return Container(
@@ -746,14 +1142,49 @@ Widget _buildFooter(bool isWeb, double screenWidth) {
             ),
             const SizedBox(height: 12),
             // Team info
-            Text(
-              'Salido, Sardani, Solis',
-              style: GoogleFonts.poppins(
-                fontSize: isWeb ? 13 : 11,
-                color: Colors.grey.shade700,
-                fontWeight: FontWeight.w500,
+            GestureDetector(
+              onTap: () {
+                // ignore: invalid_use_of_protected_member
+                state.setState(() {
+                  state._showDevelopersModal = true;
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade600, width: 1),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.people_rounded,
+                      size: 14,
+                      color: Colors.grey.shade500,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Salido, Sardani, Solis',
+                      style: GoogleFonts.poppins(
+                        fontSize: isWeb ? 13 : 11,
+                        color: Colors.grey.shade500,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.arrow_forward_rounded,
+                      size: 12,
+                      color: Colors.grey.shade500,
+                    ),
+                  ],
+                ),
               ),
-              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 4),
             Text(

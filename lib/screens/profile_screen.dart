@@ -3762,7 +3762,7 @@ class ProfileScreen {
                               ),
                             ),
                             Text(
-                              '${parent['relationship_type']?.toString().toUpperCase()} • ${parent['wmsu_id'] ?? 'No ID'}',
+                              '${parent['relationship_type']?.toString().toUpperCase()} ',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Colors.grey.shade600,
@@ -8686,7 +8686,7 @@ class ProfileScreen {
                               ),
                             ),
                             Text(
-                              '${parent['relationship_type']?.toString().toUpperCase()} • ${parent['wmsu_id'] ?? 'No ID'}',
+                              '${parent['relationship_type']?.toString().toUpperCase()} ',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Colors.grey.shade600,

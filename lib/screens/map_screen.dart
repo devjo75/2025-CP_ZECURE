@@ -21,6 +21,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:zecure/auth/responsive_register_screen.dart';
 import 'package:zecure/chatbox/chat_channels_screen.dart';
 import 'package:zecure/chatbox/chat_service.dart';
 import 'package:zecure/chatbox/chat_desktop_screen.dart';
@@ -30,7 +31,6 @@ import 'package:zecure/desktop/hotspot_drawing_desktop.dart';
 import 'package:zecure/desktop/quick_access_desktop.dart';
 import 'package:zecure/main.dart';
 import 'package:zecure/savepoint/add_save_point.dart';
-import 'package:zecure/auth/register_screen.dart';
 import 'package:zecure/quick_access/quick_access_screen.dart';
 import 'package:zecure/savepoint/save_point.dart';
 import 'package:zecure/savepoint/save_point_details.dart';
@@ -2078,7 +2078,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         onCreateAccount: () {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (context) => const RegisterScreen()),
+            MaterialPageRoute(
+              builder: (context) => const ResponsiveRegisterScreen(),
+            ),
           );
         },
         isSidebarVisible: _isSidebarVisible,
@@ -2514,13 +2516,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       ),
     );
   }
+
   // NOTIFICATION REALTIME METHOD
 
   void _setupNotificationsRealtime() {
     _notificationsChannel?.unsubscribe();
     _notificationsChannelConnected = false;
 
-    // Only set up if user is logged in
     if (_userProfile == null || _userProfile!['id'] == null) {
       print('Cannot setup notifications - no user profile');
       return;
@@ -2529,30 +2531,29 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final userId = _userProfile!['id'];
     print('Setting up notifications channel for user: $userId');
 
-    // FIXED: Use unfiltered subscription like your working code
     _notificationsChannel = Supabase.instance.client
         .channel(
           'notifications_realtime_${DateTime.now().millisecondsSinceEpoch}',
-        ) // Unique channel name
+        )
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'notifications',
-          // REMOVED: filter parameter - let all notifications come through
+
           callback: _handleNotificationInsert,
         )
         .onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'notifications',
-          // REMOVED: filter parameter - let all notifications come through
+
           callback: _handleNotificationUpdate,
         )
         .onPostgresChanges(
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'notifications',
-          // REMOVED: filter parameter - let all notifications come through
+
           callback: _handleNotificationDelete,
         )
         .subscribe((status, error) {

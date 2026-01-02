@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:async';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -38,6 +40,8 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
   Timer? _autoPlayTimer; // Add this
   bool _isAutoPlaying = false; // Add this
   double _carouselOffset = 0.0;
+
+  bool _showDevelopersModal = false;
 
   @override
   void initState() {
@@ -324,6 +328,9 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
               ),
             ),
           ),
+
+          // Developers Modal - ADD THIS HERE
+          if (_showDevelopersModal) _buildDevelopersModal(),
         ],
       ),
     );
@@ -2512,12 +2519,66 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Text(
-                      'Salido, Sardani, Solis',
-                      style: GoogleFonts.poppins(
-                        fontSize: 13,
-                        color: Colors.grey.shade500,
-                        height: 1.5,
+                    MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: () =>
+                            setState(() => _showDevelopersModal = true),
+                        child: HoverBuilder(
+                          builder: (isHovered) {
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isHovered
+                                    ? Colors.blue.shade600.withOpacity(0.1)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isHovered
+                                      ? Colors.blue.shade400
+                                      : Colors.grey.shade600,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.people_rounded,
+                                    size: 14,
+                                    color: isHovered
+                                        ? Colors.blue.shade400
+                                        : Colors.grey.shade500,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Salido, Sardani, Solis',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 13,
+                                      color: isHovered
+                                          ? Colors.blue.shade400
+                                          : Colors.grey.shade500,
+                                      height: 1.5,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.arrow_forward_rounded,
+                                    size: 12,
+                                    color: isHovered
+                                        ? Colors.blue.shade400
+                                        : Colors.grey.shade500,
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
                     Text(
@@ -3031,6 +3092,296 @@ class _DesktopLandingScreenState extends State<DesktopLandingScreen>
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDevelopersModal() {
+    final developers = [
+      {
+        'name': 'Venard Jhon C. Salido',
+        'role': 'Full Stack Developer',
+        'image': 'assets/images/venard.jpg',
+        'portfolio': 'https://venardjhoncsalido.free.nf/',
+      },
+      {
+        'name': 'Alekxiz T. Solis',
+        'role': 'Assistant Developer & Documentation',
+        'image': 'assets/images/alekxiz.jpg',
+        'portfolio': 'https://alekxizsolis.netlify.app/',
+      },
+      {
+        'name': 'Jo Louis B. Sardani',
+        'role': 'Assistant Developer & Documentation',
+        'image': 'assets/images/jo.jpg',
+        'portfolio': 'https://jolouis-portfolio.netlify.app/',
+      },
+    ];
+
+    return GestureDetector(
+      onTap: () => setState(() => _showDevelopersModal = false),
+      child: Container(
+        color: Colors.black.withOpacity(0.7),
+        child: Center(
+          child: GestureDetector(
+            onTap: () {}, // Prevent closing when clicking inside modal
+            child: Container(
+              width: 900,
+              constraints: const BoxConstraints(maxHeight: 600),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.all(32),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.blue.shade600, Colors.purple.shade600],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(24),
+                        topRight: Radius.circular(24),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.code_rounded,
+                            color: Colors.white,
+                            size: 28,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Meet the Developers',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'The team behind Zecure',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  color: Colors.white.withOpacity(0.9),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () =>
+                              setState(() => _showDevelopersModal = false),
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                          ),
+                          iconSize: 28,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Developers Grid
+                  Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Row(
+                      children: developers.map((dev) {
+                        final index = developers.indexOf(dev);
+                        return Expanded(
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              left: index == 0 ? 0 : 12,
+                              right: index == developers.length - 1 ? 0 : 12,
+                            ),
+                            child: _buildDeveloperCard(dev),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeveloperCard(Map<String, dynamic> developer) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: HoverBuilder(
+        builder: (isHovered) {
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            transform: Matrix4.identity()
+              ..translate(0.0, isHovered ? -8.0 : 0.0),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: isHovered ? Colors.blue.shade300 : Colors.grey.shade200,
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: isHovered
+                      ? Colors.blue.withOpacity(0.2)
+                      : Colors.black.withOpacity(0.05),
+                  blurRadius: isHovered ? 20 : 10,
+                  offset: Offset(0, isHovered ? 10 : 4),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // Photo
+                Container(
+                  margin: const EdgeInsets.only(top: 12), // ADD THIS LINE
+                  height: 200,
+
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(18),
+                      topRight: Radius.circular(18),
+                    ),
+                    child: Image.asset(
+                      developer['image'],
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Center(
+                        child: Icon(
+                          Icons.person_rounded,
+                          size: 80,
+                          color: Colors.white.withOpacity(0.7),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Info
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      Text(
+                        developer['name'],
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade900,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        developer['role'],
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Portfolio Button
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: isHovered
+                                ? [Colors.blue.shade600, Colors.purple.shade600]
+                                : [
+                                    Colors.blue.shade500,
+                                    Colors.purple.shade500,
+                                  ],
+                          ),
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: isHovered
+                              ? [
+                                  BoxShadow(
+                                    color: Colors.blue.withOpacity(0.4),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ]
+                              : [],
+                        ),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () async {
+                              final uri = Uri.parse(developer['portfolio']);
+                              if (await canLaunchUrl(uri)) {
+                                await launchUrl(
+                                  uri,
+                                  mode: LaunchMode.externalApplication,
+                                );
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(10),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 10,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.language_rounded,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'View Portfolio',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
